@@ -98,6 +98,7 @@
   .oreAdd{display:flex; gap:8px; padding:9px 0 5px;}
   .oreAdd button{font-size:12px; padding:4px 11px;}
   #oreChartWrap{width:100%; overflow-x:auto; position:relative; border:0.5px solid var(--border); border-radius:12px; background:var(--surf); padding:6px 0; margin-top:4px;}
+  #oreChart svg{max-width:100%; height:auto;}
   #oreTip{position:absolute; display:none; pointer-events:none; background:var(--surf); border:0.5px solid var(--border2); border-radius:var(--radius); padding:8px 10px; font-size:12px; line-height:1.5; max-width:250px; z-index:5; box-shadow:0 2px 10px rgba(0,0,0,.15);}
   #oreLegend{display:flex; flex-wrap:wrap; gap:12px 18px; margin-top:12px; font-size:12px; color:var(--text2); align-items:center;}
 </style>
@@ -6742,9 +6743,9 @@ function derefTerrain(json) {
 }
 
 // ---- shared ore constants (used by editor + chart) ----
-const ORE_MATS = [['CrushedIronOreBlock','iron'],['IronOreBlock','iron'],['CrushedCopperOreBlock','copper'],['CopperOreBlock','copper'],['CrushedGoldOreBlock','gold'],['GoldOreBlock','gold'],['CrushedCoalBlock','coal'],['CoalBlock','coal'],['CrushedSulfurBlock','sulfur'],['SulfurBlock','sulfur'],['PeatBlock','peat'],['ClayBlock','clay']];
-const ORE_COL = { iron:'#b0342f', copper:'#cf6a2c', gold:'#d7a521', coal:'#4b4b48', sulfur:'#c9cf3a', peat:'#5a4327', clay:'#8a5a30' };
-const ORE_NAME = { iron:'Iron', copper:'Copper', gold:'Gold', coal:'Coal', sulfur:'Sulfur', peat:'Peat', clay:'Clay' };
+const ORE_MATS = [['CrushedIronOreBlock','iron'],['IronOreBlock','iron'],['CrushedCopperOreBlock','copper'],['CopperOreBlock','copper'],['CrushedGoldOreBlock','gold'],['GoldOreBlock','gold'],['CrushedCoalBlock','coal'],['CoalBlock','coal'],['CrushedSulfurBlock','sulfur'],['SulfurBlock','sulfur'],['PeatBlock','peat'],['CrushedLimestoneBlock','limestone'],['LimestoneBlock','limestone'],['ClayBlock','clay']];
+const ORE_COL = { iron:'#b0342f', copper:'#cf6a2c', gold:'#d7a521', coal:'#4b4b48', sulfur:'#c9cf3a', peat:'#5a4327', limestone:'#b7ae97', clay:'#8a5a30' };
+const ORE_NAME = { iron:'Iron', copper:'Copper', gold:'Gold', coal:'Coal', sulfur:'Sulfur', peat:'Peat', limestone:'Limestone', clay:'Clay' };
 const ORE_DISP = { Grassland:'Grassland', RainForest:'Rainforest', WarmForest:'Warm forest', ColdForest:'Cold forest', Taiga:'Taiga', Tundra:'Tundra', Ice:'Ice', Desert:'Desert', ColdCoast:'Cold coast', WarmCoast:'Warm coast', Wetland:'Wetland' };
 function oreMaterial(t) { if (!t) return null; for (let i = 0; i < ORE_MATS.length; i++) if (t.indexOf(ORE_MATS[i][0]) >= 0) return ORE_MATS[i][1]; return null; }
 const shortBlock = t => (t || '').split(',')[0].split('.').pop().replace(/Block$/, '');
@@ -6844,7 +6845,7 @@ const OreChart = (function () {
   const WEIGHTF = { RainForest:'RainforestWeight', WarmForest:'WarmForestWeight', ColdForest:'CoolForestWeight', Taiga:'TaigaWeight', Tundra:'TundraWeight', Ice:'IceWeight', Desert:'DesertWeight', Wetland:'WetlandWeight' };
   const ALWAYS = { Grassland:1, ColdCoast:1, WarmCoast:1 };
   const biomeOrder = ['Desert','Grassland','Wetland','WarmForest','RainForest','WarmCoast','ColdCoast','ColdForest','Taiga','Tundra','Ice'];
-  const oreOrder = ['iron','copper','gold','coal','sulfur','peat','clay'];
+  const oreOrder = ['iron','copper','gold','coal','sulfur','peat','limestone','clay'];
   function extract(cfg) {
     const idmap = {};
     (function idx(o){ if (o && typeof o === 'object'){ if (!Array.isArray(o) && o['$id']) idmap[o['$id']] = o; for (const k in o) idx(o[k]); } })(cfg);
