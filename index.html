@@ -78,6 +78,7 @@
   .mixRow .mact{color:var(--accent); width:70px; text-align:right; font-size:11.5px;}
   .mixRow.mixGrass input{background:var(--surf1); color:var(--text2);}
   #orePanel{display:none; margin-top:20px;}
+  #oreChartPanel{display:none; margin-top:20px;}
   #oreEditor{display:flex; flex-direction:column; gap:6px; margin:8px 0 12px;}
   #oreEditor details{border:0.5px solid var(--border); border-radius:8px; background:var(--surf); padding:2px 10px;}
   #oreEditor summary{cursor:pointer; font-weight:600; font-size:13px; padding:5px 0; user-select:none;}
@@ -120,6 +121,28 @@
   <div id="meta"></div>
   <div id="prog">Generating… <span id="progPhase"></span><div class="bar"><div id="progBar"></div></div></div>
 
+  <div id="panel">
+    <div class="row">
+      <span class="lbl">Layer</span><span class="seg" id="layers"></span>
+      <label class="lbl" style="display:inline-flex;align-items:center;gap:5px;margin-left:8px"><input type="checkbox" id="waterToggle" checked> Rivers &amp; lakes</label>
+      <button id="expPng" style="margin-left:auto">Export PNG</button>
+    </div>
+    <div id="canvasWrap"><canvas id="cv"></canvas><div id="tip"></div></div>
+    <div id="legend"></div>
+    <div id="stats"></div>
+  </div>
+
+  <div id="oreChartPanel">
+    <div style="display:flex;align-items:center;gap:10px;margin:6px 0 2px;flex-wrap:wrap;">
+      <strong style="font-size:15px;">Ore distribution</strong>
+      <span class="lbl">Group by</span><span class="seg" id="oreGrp"></span>
+      <span class="lbl" style="margin-left:8px">Style</span><span class="seg" id="oreSty"></span>
+      <span class="lbl" id="oreMeta" style="margin-left:10px"></span>
+    </div>
+    <div id="oreChartWrap"><div id="oreChart"></div><div id="oreTip"></div></div>
+    <div id="oreLegend"></div>
+  </div>
+
   <div id="cfgPanel">
     <div style="display:flex;align-items:center;gap:10px;margin:6px 0 2px;">
       <strong style="font-size:15px;">Config</strong>
@@ -140,24 +163,6 @@
       <button id="oreHandoff" style="margin-left:auto">Open in ore visualizer ↗</button>
     </div>
     <div id="oreEditor"></div>
-    <div class="row" style="margin:2px 0 4px;">
-      <span class="lbl">Group by</span><span class="seg" id="oreGrp"></span>
-      <span class="lbl" style="margin-left:8px">Style</span><span class="seg" id="oreSty"></span>
-      <span class="lbl" id="oreMeta" style="margin-left:10px"></span>
-    </div>
-    <div id="oreChartWrap"><div id="oreChart"></div><div id="oreTip"></div></div>
-    <div id="oreLegend"></div>
-  </div>
-
-  <div id="panel">
-    <div class="row">
-      <span class="lbl">Layer</span><span class="seg" id="layers"></span>
-      <label class="lbl" style="display:inline-flex;align-items:center;gap:5px;margin-left:8px"><input type="checkbox" id="waterToggle" checked> Rivers &amp; lakes</label>
-      <button id="expPng" style="margin-left:auto">Export PNG</button>
-    </div>
-    <div id="canvasWrap"><canvas id="cv"></canvas><div id="tip"></div></div>
-    <div id="legend"></div>
-    <div id="stats"></div>
   </div>
 </div>
 
@@ -6682,6 +6687,7 @@ function loadConfigText(text) {
   terrain = derefTerrain(rawJson);
   buildOreEditor();
   $('orePanel').style.display = terrain ? 'block' : 'none';
+  $('oreChartPanel').style.display = terrain ? 'block' : 'none';
   if (terrain) OreChart.render(buildExportJson());
   generateMap(cfg);
 }
