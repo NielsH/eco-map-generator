@@ -183,6 +183,7 @@ const html = `<!DOCTYPE html>
       <strong style="font-size:15px;">Ore distribution</strong>
       <span class="lbl">Group by</span><span class="seg" id="oreGrp"></span>
       <span class="lbl" style="margin-left:8px">Style</span><span class="seg" id="oreSty"></span>
+      <span class="lbl" style="margin-left:8px">Scale</span><span class="seg" id="oreScl"></span>
       <span class="lbl" id="oreMeta" style="margin-left:10px"></span>
     </div>
     <div id="oreChartWrap"><div id="oreChart"></div><div id="oreTip"></div></div>
@@ -726,9 +727,9 @@ const OreChart = (function () {
   function smearY(dp, surf) { const lo=surf[0],hi=surf[1],cnt=hi-lo+1,arr=[];
     for (let Y=0;Y<=Ymax;Y++){ let sum=0; for (let sft=lo;sft<=hi;sft++){ const d=sft-Y; sum+=(d>=0&&d<=DMAX)?dp[d]:0; } arr.push(sum/cnt); }
     const sm=[]; for (let Y2=0;Y2<=Ymax;Y2++){ const a=arr[Math.max(0,Y2-1)],b=arr[Y2],c=arr[Math.min(Ymax,Y2+1)]; sm.push((a+2*b+c)/4); } return sm; }
-  let D=null, gMax=0, layout=[], curW=0, plotR=0, svgEl=null, hvLine=null, hvRect=null, H=0, tipEl=null, wrapEl=null;
+  let D=null, gMax=0, oreMax={}, layout=[], curW=0, plotR=0, svgEl=null, hvLine=null, hvRect=null, H=0, tipEl=null, wrapEl=null;
   const padTop=48, sc=2.4, x0=64, subW=34, gap=10;
-  const state = { mode:'ore', style:'violin' };
+  const state = { mode:'ore', style:'violin', scale:'global' };
   const cssv = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   const py = Y => padTop + (Ymax-Y)*sc;
   function buildGroups(mode) { const E=D.entries, groups=[];
@@ -750,13 +751,12 @@ const OreChart = (function () {
     groups.forEach(g => { const gStart=cx, slot=g.slot, cellsW=g.cells.length*subW; let cellx=gStart+(slot-cellsW)/2; const hcol=g.color?cT:(g.on?cT:cM);
       s+='<text x="'+(gStart+slot/2)+'" y="20" text-anchor="middle" fill="'+hcol+'" font-size="12.5" font-weight="600">'+g.label+'</text>';
       if (g.color) s+='<rect x="'+(cellx+4)+'" y="26" width="'+(cellsW-8)+'" height="3" rx="1.5" fill="'+g.color+'"/>'; else s+='<line x1="'+(cellx+4)+'" y1="27" x2="'+(cellx+cellsW-4)+'" y2="27" stroke="'+cB+'" stroke-width="1"/>';
-      let cMaxV=0; g.cells.forEach(e=>e.prof.forEach(v=>{ if (v>cMaxV) cMaxV=v; })); if (cMaxV<=0) cMaxV=1;
-      g.cells.forEach(e => { const bx=cellx, scx=bx+subW/2, col=ORE_COL[e.ore], dim=e.on?1:0.5; const syT=py(Math.min(e.surf[1],Ymax)),syB=py(e.surf[0]);
+      g.cells.forEach(e => { const bx=cellx, scx=bx+subW/2, col=ORE_COL[e.ore], dim=e.on?1:0.5; const norm=(state.scale==='global'?gMax:(oreMax[e.ore]||1))||1; const syT=py(Math.min(e.surf[1],Ymax)),syB=py(e.surf[0]);
         s+='<rect x="'+(bx+2)+'" y="'+syT+'" width="'+(subW-4)+'" height="'+(syB-syT)+'" fill="'+cM+'" fill-opacity="0.08"/><line x1="'+(bx+2)+'" y1="'+syT+'" x2="'+(bx+subW-2)+'" y2="'+syT+'" stroke="'+cM+'" stroke-width="1" stroke-opacity="0.35" stroke-dasharray="2 2"/>';
-        if (state.style === 'violin') { for (let Y=0;Y<=Ymax;Y++){ const nv=e.prof[Y]/cMaxV; if (nv<=0.004) continue; const rt=Math.sqrt(nv), hw=Math.max(1.1,rt*maxHW), op=(0.26+0.6*rt)*dim, yy=py(Y)-sc/2; s+='<rect x="'+(scx-hw).toFixed(1)+'" y="'+yy.toFixed(1)+'" width="'+(hw*2).toFixed(1)+'" height="'+(sc+0.5).toFixed(1)+'" fill="'+col+'" fill-opacity="'+op.toFixed(2)+'"/>'; } }
-        else { let ylo=1e9,yhi=-1; for (let Y2=0;Y2<=Ymax;Y2++){ if (e.prof[Y2]/cMaxV>0.03){ if (Y2<ylo)ylo=Y2; if (Y2>yhi)yhi=Y2; } } if (yhi>0){ const bt=py(yhi); s+='<rect x="'+(scx-barHW)+'" y="'+bt+'" width="'+(barHW*2)+'" height="'+(py(ylo)-bt)+'" rx="2" fill="'+col+'" fill-opacity="'+(0.82*dim).toFixed(2)+'"/>'; } }
+        if (state.style === 'violin') { for (let Y=0;Y<=Ymax;Y++){ const nv=e.prof[Y]/norm; if (nv<=0.004) continue; const rt=Math.sqrt(nv), hw=Math.max(1.1,rt*maxHW), op=(0.26+0.6*rt)*dim, yy=py(Y)-sc/2; s+='<rect x="'+(scx-hw).toFixed(1)+'" y="'+yy.toFixed(1)+'" width="'+(hw*2).toFixed(1)+'" height="'+(sc+0.5).toFixed(1)+'" fill="'+col+'" fill-opacity="'+op.toFixed(2)+'"/>'; } }
+        else { let ylo=1e9,yhi=-1; for (let Y2=0;Y2<=Ymax;Y2++){ if (e.prof[Y2]/norm>0.03){ if (Y2<ylo)ylo=Y2; if (Y2>yhi)yhi=Y2; } } if (yhi>0){ const bt=py(yhi); s+='<rect x="'+(scx-barHW)+'" y="'+bt+'" width="'+(barHW*2)+'" height="'+(py(ylo)-bt)+'" rx="2" fill="'+col+'" fill-opacity="'+(0.82*dim).toFixed(2)+'"/>'; } }
         s+='<text transform="rotate(-42 '+scx+' '+(H-48)+')" x="'+scx+'" y="'+(H-48)+'" text-anchor="end" fill="'+(e.on?cS:cM)+'" font-size="10">'+g.sub(e)+'</text>';
-        layout.push({x0:bx,x1:bx+subW,e,cMax:cMaxV}); cellx+=subW;
+        layout.push({x0:bx,x1:bx+subW,e}); cellx+=subW;
       });
       cx=gStart+slot+gap;
     });
@@ -770,21 +770,21 @@ const OreChart = (function () {
     const sx=(e.clientX-r.left)*(curW/r.width), sy=(e.clientY-r.top)*(H/r.height); const Y=Math.round(Ymax-(sy-padTop)/sc); let col=null;
     for (let i=0;i<layout.length;i++){ if (sx>=layout[i].x0&&sx<layout[i].x1){ col=layout[i]; break; } }
     if (!col||Y<0||Y>Ymax){ tipEl.style.display='none'; hvLine.style.display='none'; hvRect.style.display='none'; return; }
-    const en=col.e, val=en.prof[Y], gi=val/gMax*100, lp=val/col.cMax*100;
+    const en=col.e, val=en.prof[Y], gi=val/gMax*100, po=val/(oreMax[en.ore]||1)*100;
     hvLine.setAttribute('x1',x0); hvLine.setAttribute('x2',plotR); hvLine.setAttribute('y1',py(Y)); hvLine.setAttribute('y2',py(Y)); hvLine.style.display='block';
     hvRect.setAttribute('x',col.x0); hvRect.setAttribute('y',padTop); hvRect.setAttribute('width',subW); hvRect.setAttribute('height',Ymax*sc); hvRect.style.display='block';
     const sm=(en.surf[0]+en.surf[1])/2, dep=Math.round(sm-Y); const depL=dep>=0?('≈ '+dep+' blocks deep'):('~ '+(-dep)+' above surface');
     const giTxt=gi>=1?Math.round(gi):(gi>0.05?'<1':'0'); let bodyH;
-    if (gi<0.4) bodyH='<div style="color:'+cM+'">negligible '+ORE_NAME[en.ore].toLowerCase()+' here</div>';
-    else bodyH='<div>Density index <span style="font-weight:600;color:'+ORE_COL[en.ore]+'">'+giTxt+'</span> / 100 <span style="color:'+cM+'">global</span></div><div style="color:'+cS+'">'+Math.round(lp)+'% of this column peak</div>';
+    if (gi<0.4 && po<2) bodyH='<div style="color:'+cM+'">negligible '+ORE_NAME[en.ore].toLowerCase()+' here</div>';
+    else bodyH='<div>Density index <span style="font-weight:600;color:'+ORE_COL[en.ore]+'">'+giTxt+'</span> / 100 <span style="color:'+cM+'">global</span></div><div style="color:'+cS+'">'+Math.round(po)+'% of peak '+ORE_NAME[en.ore].toLowerCase()+'</div>';
     const absent=en.on?'':'<div style="color:'+cM+'">* not generated on this map</div>';
     tipEl.innerHTML='<div style="font-weight:600">'+ORE_DISP[en.bi]+' · '+ORE_NAME[en.ore]+'</div><div style="color:'+cS+'">Y '+Y+' · '+depL+'</div>'+bodyH+absent; tipEl.style.display='block';
     const wr=wrapEl.getBoundingClientRect(); tipEl.style.left=(e.clientX-wr.left+wrapEl.scrollLeft+14)+'px'; tipEl.style.top=(e.clientY-wr.top+12)+'px';
   }
   function renderFromCfg(cfg) {
     try { D = extract(cfg); } catch (ex) { $('oreChart').innerHTML='<div class="lbl" style="padding:12px">Ore chart unavailable: ' + ex.message + '</div>'; return; }
-    Ymax = Math.max(120, Math.ceil(D.MG/20)*20); DMAX = Ymax+90; H = padTop+Ymax*sc+70; gMax = 0;
-    D.entries.forEach(e => { e.prof = smearY(depthProfile(e), e.surf); e.prof.forEach(v => { if (v>gMax) gMax=v; }); }); if (gMax<=0) gMax=1;
+    Ymax = Math.max(120, Math.ceil(D.MG/20)*20); DMAX = Ymax+90; H = padTop+Ymax*sc+70; gMax = 0; oreMax = {};
+    D.entries.forEach(e => { e.prof = smearY(depthProfile(e), e.surf); e.pk = 0; e.prof.forEach(v => { if (v>gMax) gMax=v; if (v>e.pk) e.pk=v; }); if (e.pk>(oreMax[e.ore]||0)) oreMax[e.ore]=e.pk; }); if (gMax<=0) gMax=1;
     $('oreMeta').textContent = D.entries.length + ' biome×material bands · water Y' + D.WL + ' · gen height ' + D.MG;
     render();
   }
@@ -793,8 +793,9 @@ const OreChart = (function () {
     tipEl=$('oreTip'); wrapEl=$('oreChartWrap');
     seg('oreGrp', [{label:'Ore',val:'ore'},{label:'Biome',val:'biome'}], 'mode');
     seg('oreSty', [{label:'Violins',val:'violin'},{label:'Bars',val:'bars'}], 'style');
+    seg('oreScl', [{label:'Global',val:'global'},{label:'Per-ore',val:'perore'}], 'scale');
     let lg=''; oreOrder.forEach(o => { lg+='<span><span class="sw" style="background:'+ORE_COL[o]+'"></span>'+ORE_NAME[o]+'</span>'; });
-    lg+='<span style="color:var(--muted)">* biome not on this map · widths √-scaled · hover for density index</span>'; $('oreLegend').innerHTML=lg;
+    lg+='<span style="color:var(--muted)">* biome not on this map · widths √-scaled · <b>Global</b>: full width = densest ore anywhere · <b>Per-ore</b>: full width = peak of that ore · hover for density</span>'; $('oreLegend').innerHTML=lg;
   }
   return { render: renderFromCfg, init };
 })();
