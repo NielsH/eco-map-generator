@@ -62,7 +62,7 @@ const html = `<!DOCTYPE html>
   }
   *{box-sizing:border-box}
   body{margin:0; background:var(--bg); color:var(--text); font-family:var(--font); font-size:15px; line-height:1.5; padding:24px;}
-  .wrap{max-width:1240px; margin:0 auto;}
+  .wrap{max-width:1360px; margin:0 auto;}
   h1{font-size:21px; font-weight:600; margin:0 0 4px;}
   p.sub{color:var(--text2); margin:0 0 20px; font-size:14px;}
   #drop{border:1.5px dashed var(--border2); border-radius:12px; padding:22px; text-align:center; color:var(--text2);
@@ -576,9 +576,9 @@ function derefTerrain(json) {
 }
 
 // ---- shared ore constants (used by editor + chart) ----
-const ORE_MATS = [['CrushedIronOreBlock','iron'],['IronOreBlock','iron'],['CrushedCopperOreBlock','copper'],['CopperOreBlock','copper'],['CrushedGoldOreBlock','gold'],['GoldOreBlock','gold'],['CrushedCoalBlock','coal'],['CoalBlock','coal'],['ClayBlock','clay']];
-const ORE_COL = { iron:'#b0342f', copper:'#cf6a2c', gold:'#d7a521', coal:'#4b4b48', clay:'#8a5a30' };
-const ORE_NAME = { iron:'Iron', copper:'Copper', gold:'Gold', coal:'Coal', clay:'Clay' };
+const ORE_MATS = [['CrushedIronOreBlock','iron'],['IronOreBlock','iron'],['CrushedCopperOreBlock','copper'],['CopperOreBlock','copper'],['CrushedGoldOreBlock','gold'],['GoldOreBlock','gold'],['CrushedCoalBlock','coal'],['CoalBlock','coal'],['CrushedSulfurBlock','sulfur'],['SulfurBlock','sulfur'],['PeatBlock','peat'],['ClayBlock','clay']];
+const ORE_COL = { iron:'#b0342f', copper:'#cf6a2c', gold:'#d7a521', coal:'#4b4b48', sulfur:'#c9cf3a', peat:'#5a4327', clay:'#8a5a30' };
+const ORE_NAME = { iron:'Iron', copper:'Copper', gold:'Gold', coal:'Coal', sulfur:'Sulfur', peat:'Peat', clay:'Clay' };
 const ORE_DISP = { Grassland:'Grassland', RainForest:'Rainforest', WarmForest:'Warm forest', ColdForest:'Cold forest', Taiga:'Taiga', Tundra:'Tundra', Ice:'Ice', Desert:'Desert', ColdCoast:'Cold coast', WarmCoast:'Warm coast', Wetland:'Wetland' };
 function oreMaterial(t) { if (!t) return null; for (let i = 0; i < ORE_MATS.length; i++) if (t.indexOf(ORE_MATS[i][0]) >= 0) return ORE_MATS[i][1]; return null; }
 const shortBlock = t => (t || '').split(',')[0].split('.').pop().replace(/Block$/, '');
@@ -678,7 +678,7 @@ const OreChart = (function () {
   const WEIGHTF = { RainForest:'RainforestWeight', WarmForest:'WarmForestWeight', ColdForest:'CoolForestWeight', Taiga:'TaigaWeight', Tundra:'TundraWeight', Ice:'IceWeight', Desert:'DesertWeight', Wetland:'WetlandWeight' };
   const ALWAYS = { Grassland:1, ColdCoast:1, WarmCoast:1 };
   const biomeOrder = ['Desert','Grassland','Wetland','WarmForest','RainForest','WarmCoast','ColdCoast','ColdForest','Taiga','Tundra','Ice'];
-  const oreOrder = ['iron','copper','gold','coal','clay'];
+  const oreOrder = ['iron','copper','gold','coal','sulfur','peat','clay'];
   function extract(cfg) {
     const idmap = {};
     (function idx(o){ if (o && typeof o === 'object'){ if (!Array.isArray(o) && o['$id']) idmap[o['$id']] = o; for (const k in o) idx(o[k]); } })(cfg);
@@ -727,7 +727,7 @@ const OreChart = (function () {
     for (let Y=0;Y<=Ymax;Y++){ let sum=0; for (let sft=lo;sft<=hi;sft++){ const d=sft-Y; sum+=(d>=0&&d<=DMAX)?dp[d]:0; } arr.push(sum/cnt); }
     const sm=[]; for (let Y2=0;Y2<=Ymax;Y2++){ const a=arr[Math.max(0,Y2-1)],b=arr[Y2],c=arr[Math.min(Ymax,Y2+1)]; sm.push((a+2*b+c)/4); } return sm; }
   let D=null, gMax=0, layout=[], curW=0, plotR=0, svgEl=null, hvLine=null, hvRect=null, H=0, tipEl=null, wrapEl=null;
-  const padTop=48, sc=2.4, x0=64, subW=34, gap=14;
+  const padTop=48, sc=2.4, x0=64, subW=34, gap=10;
   const state = { mode:'ore', style:'violin' };
   const cssv = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   const py = Y => padTop + (Ymax-Y)*sc;
@@ -755,7 +755,7 @@ const OreChart = (function () {
         s+='<rect x="'+(bx+2)+'" y="'+syT+'" width="'+(subW-4)+'" height="'+(syB-syT)+'" fill="'+cM+'" fill-opacity="0.08"/><line x1="'+(bx+2)+'" y1="'+syT+'" x2="'+(bx+subW-2)+'" y2="'+syT+'" stroke="'+cM+'" stroke-width="1" stroke-opacity="0.35" stroke-dasharray="2 2"/>';
         if (state.style === 'violin') { for (let Y=0;Y<=Ymax;Y++){ const nv=e.prof[Y]/cMaxV; if (nv<=0.004) continue; const rt=Math.sqrt(nv), hw=Math.max(1.1,rt*maxHW), op=(0.26+0.6*rt)*dim, yy=py(Y)-sc/2; s+='<rect x="'+(scx-hw).toFixed(1)+'" y="'+yy.toFixed(1)+'" width="'+(hw*2).toFixed(1)+'" height="'+(sc+0.5).toFixed(1)+'" fill="'+col+'" fill-opacity="'+op.toFixed(2)+'"/>'; } }
         else { let ylo=1e9,yhi=-1; for (let Y2=0;Y2<=Ymax;Y2++){ if (e.prof[Y2]/cMaxV>0.03){ if (Y2<ylo)ylo=Y2; if (Y2>yhi)yhi=Y2; } } if (yhi>0){ const bt=py(yhi); s+='<rect x="'+(scx-barHW)+'" y="'+bt+'" width="'+(barHW*2)+'" height="'+(py(ylo)-bt)+'" rx="2" fill="'+col+'" fill-opacity="'+(0.82*dim).toFixed(2)+'"/>'; } }
-        s+='<text transform="rotate(-42 '+scx+' '+(H-28)+')" x="'+scx+'" y="'+(H-28)+'" text-anchor="end" fill="'+(e.on?cS:cM)+'" font-size="10">'+g.sub(e)+'</text>';
+        s+='<text transform="rotate(-42 '+scx+' '+(H-48)+')" x="'+scx+'" y="'+(H-48)+'" text-anchor="end" fill="'+(e.on?cS:cM)+'" font-size="10">'+g.sub(e)+'</text>';
         layout.push({x0:bx,x1:bx+subW,e,cMax:cMaxV}); cellx+=subW;
       });
       cx=gStart+slot+gap;
@@ -783,7 +783,7 @@ const OreChart = (function () {
   }
   function renderFromCfg(cfg) {
     try { D = extract(cfg); } catch (ex) { $('oreChart').innerHTML='<div class="lbl" style="padding:12px">Ore chart unavailable: ' + ex.message + '</div>'; return; }
-    Ymax = Math.max(120, Math.ceil(D.MG/20)*20); DMAX = Ymax+90; H = padTop+Ymax*sc+52; gMax = 0;
+    Ymax = Math.max(120, Math.ceil(D.MG/20)*20); DMAX = Ymax+90; H = padTop+Ymax*sc+70; gMax = 0;
     D.entries.forEach(e => { e.prof = smearY(depthProfile(e), e.surf); e.prof.forEach(v => { if (v>gMax) gMax=v; }); }); if (gMax<=0) gMax=1;
     $('oreMeta').textContent = D.entries.length + ' biome×material bands · water Y' + D.WL + ' · gen height ' + D.MG;
     render();
