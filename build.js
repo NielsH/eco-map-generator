@@ -185,6 +185,7 @@ const html = `<!DOCTYPE html>
       <span class="lbl">Group by</span><span class="seg" id="oreGrp"></span>
       <span class="lbl" style="margin-left:8px">Style</span><span class="seg" id="oreSty"></span>
       <span class="lbl" style="margin-left:8px">Scale</span><span class="seg" id="oreScl"></span>
+      <span class="lbl" style="margin-left:8px">Seed spread</span><span class="seg" id="oreSpr"></span>
       <span class="lbl" id="oreMeta" style="margin-left:10px"></span>
     </div>
     <div id="oreChartWrap"><div id="oreChart"></div><div id="oreTip"></div></div>
@@ -703,12 +704,39 @@ const OreChart = (function () {
         (bdr.SubModules||[]).forEach(sm => { sm = deref(sm); const ty = sm['$type']||''; const mat = oreMaterial(btype(sm.BlockType)); if (!mat) return;
           if (ty.indexOf('StandardTerrainModule') >= 0) { const r = rng(sm,'DepthRange',[0,200]); add(name, mat, { t:'std', a:r[0]|0, b:r[1]|0, w:sm.PercentChance!=null?sm.PercentChance:0.05 }); }
           else if (ty.indexOf('DepositTerrainModule') >= 0) { const sr = rng(sm,'DepthRange',[0,200]), br = rng(sm,'DepositDepthRange',[0,200]); const bc = rng(sm,'BlocksCountRange',[1,1]); const N = (bc[0]+bc[1])/2; const mw = meanW(sm);
-            add(name, mat, { t:'dep', sa:sr[0]|0, sb:sr[1]|0, ba:Math.min(sr[0],br[0])|0, bb:Math.max(sr[1],br[1])|0, w:(sm.SpawnPercentChance!=null?sm.SpawnPercentChance:0.01)*N, bo:boost(mw[0],mw[1],mw[2]), N:N }); }
+            const spc = sm.SpawnPercentChance!=null?sm.SpawnPercentChance:0.01;
+            add(name, mat, { t:'dep', sa:sr[0]|0, sb:sr[1]|0, ba:Math.min(sr[0],br[0])|0, bb:Math.max(sr[1],br[1])|0, w:spc*N, spc:spc, bo:boost(mw[0],mw[1],mw[2]), N:N }); }
         });
       });
     });
     const entries = []; for (const k in out) { const p = k.split('|'); entries.push({ bi:p[0], ore:p[1], surf:surfOf(p[0]), on:presentOf(p[0]), mods:out[k] }); }
-    return { entries, WL, MG };
+    // Seed-to-seed spread: each deposit is an independent per-block Bernoulli roll, so the count of deposit
+    // seed-points on one map is ~Poisson. Relative spread of a module is 1/sqrt(expected count); scatter has a
+    // huge count (~zero spread), rare deposits in rare biomes have few (visible spread). Combine per cell by
+    // error propagation over each module's integrated contribution. Areas are in blocks² (chance is per block).
+    // Prefer the actually-generated map for world area and biome coverage; fall back to config + constants when
+    // no map has been generated yet. Ocean is its own biome key, so per-biome coverage already excludes it.
+    let wsum = 0; if (weights) for (const bn in WEIGHTF) wsum += (weights[WEIGHTF[bn]]||0);
+    const fallbackFrac = name => { const f = WEIGHTF[name]; if (f) return Math.max(0, (weights && weights[f])||0);
+      if (name === 'Grassland') return Math.max(0.03, 1 - wsum); return 0.04; }; // coasts are thin strips
+    const dims = deref(cfg.Dimensions) || {};
+    const cfgArea = (((dims.WorldWidth|0)||72)*10) * (((dims.WorldLength|0)||72)*10);
+    const LANDSHARE = 0.6; // rough land fraction, used only in the no-map fallback
+    const map = (result && result.stats && result.worldSize) ? result : null;
+    let cellArea; // land area (blocks²) of a given ore-chart biome
+    if (map) { const worldArea = map.worldSize * map.worldSize, counts = map.stats.counts;
+      let tot = 0; for (const k in counts) tot += counts[k]; tot = tot || 1;
+      cellArea = name => { const c = counts[name]||0; return c > 0 ? worldArea*(c/tot) : cfgArea*LANDSHARE*fallbackFrac(name); }; }
+    else cellArea = name => cfgArea * LANDSHARE * fallbackFrac(name);
+    entries.forEach(e => { const area = cellArea(e.bi); let vSum = 0, iSum = 0, depI = 0, lam = 0;
+      e.mods.forEach(m => {
+        if (m.t === 'dep') { const band = Math.max(1, m.sb - m.sa + 1);
+          const lambda = Math.max(1e-6, m.spc * area * band); lam += lambda;
+          const I = m.w, cv = 1 / Math.sqrt(lambda); vSum += (I*cv)*(I*cv); iSum += I; depI += I; }
+        else iSum += m.w * Math.max(1, (m.b - m.a + 1)); }); // scatter: effectively zero variance
+      e.cv = iSum > 0 ? Math.min(1.5, Math.sqrt(vSum) / iSum) : 0; e.lambda = lam;
+      e.depShare = iSum > 0 ? depI / iSum : 0; }); // how much of this ore comes from sparse deposits vs steady scatter
+    return { entries, WL, MG, spreadFromMap: !!map };
   }
   let Ymax = 125, DMAX = 210;
   function depthProfile(e) {
@@ -730,7 +758,7 @@ const OreChart = (function () {
     const sm=[]; for (let Y2=0;Y2<=Ymax;Y2++){ const a=arr[Math.max(0,Y2-1)],b=arr[Y2],c=arr[Math.min(Ymax,Y2+1)]; sm.push((a+2*b+c)/4); } return sm; }
   let D=null, gMax=0, oreMax={}, layout=[], curW=0, plotR=0, svgEl=null, hvLine=null, hvRect=null, H=0, tipEl=null, wrapEl=null;
   const padTop=48, sc=2.4, x0=64, subW=34, gap=10;
-  const state = { mode:'ore', style:'violin', scale:'global' };
+  const state = { mode:'ore', style:'violin', scale:'global', spread:'off' };
   const cssv = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   const py = Y => padTop + (Ymax-Y)*sc;
   function buildGroups(mode) { const E=D.entries, groups=[];
@@ -754,7 +782,10 @@ const OreChart = (function () {
       if (g.color) s+='<rect x="'+(cellx+4)+'" y="26" width="'+(cellsW-8)+'" height="3" rx="1.5" fill="'+g.color+'"/>'; else s+='<line x1="'+(cellx+4)+'" y1="27" x2="'+(cellx+cellsW-4)+'" y2="27" stroke="'+cB+'" stroke-width="1"/>';
       g.cells.forEach(e => { const bx=cellx, scx=bx+subW/2, col=ORE_COL[e.ore], dim=e.on?1:0.5; const norm=(state.scale==='global'?gMax:(oreMax[e.ore]||1))||1; const syT=py(Math.min(e.surf[1],Ymax)),syB=py(e.surf[0]);
         s+='<rect x="'+(bx+2)+'" y="'+syT+'" width="'+(subW-4)+'" height="'+(syB-syT)+'" fill="'+cM+'" fill-opacity="0.08"/><line x1="'+(bx+2)+'" y1="'+syT+'" x2="'+(bx+subW-2)+'" y2="'+syT+'" stroke="'+cM+'" stroke-width="1" stroke-opacity="0.35" stroke-dasharray="2 2"/>';
-        if (state.style === 'violin') { for (let Y=0;Y<=Ymax;Y++){ const nv=e.prof[Y]/norm; if (nv<=0.004) continue; const rt=Math.sqrt(nv), hw=Math.max(1.1,rt*maxHW), op=(0.26+0.6*rt)*dim, yy=py(Y)-sc/2; s+='<rect x="'+(scx-hw).toFixed(1)+'" y="'+yy.toFixed(1)+'" width="'+(hw*2).toFixed(1)+'" height="'+(sc+0.5).toFixed(1)+'" fill="'+col+'" fill-opacity="'+op.toFixed(2)+'"/>'; } }
+        if (state.style === 'violin') { const halo=state.spread==='on'&&e.cv>0.02, hwCap=subW/2-0.5;
+          for (let Y=0;Y<=Ymax;Y++){ const nv=e.prof[Y]/norm; if (nv<=0.004) continue; const rt=Math.sqrt(nv), hw=Math.max(1.1,rt*maxHW), op=(0.26+0.6*rt)*dim, yy=py(Y)-sc/2, hgt=(sc+0.5).toFixed(1);
+            if (halo){ const hw2=Math.min(hwCap,hw*(1+e.cv)); s+='<rect x="'+(scx-hw2).toFixed(1)+'" y="'+yy.toFixed(1)+'" width="'+(hw2*2).toFixed(1)+'" height="'+hgt+'" fill="'+col+'" fill-opacity="'+(0.13*dim).toFixed(2)+'"/>'; }
+            s+='<rect x="'+(scx-hw).toFixed(1)+'" y="'+yy.toFixed(1)+'" width="'+(hw*2).toFixed(1)+'" height="'+hgt+'" fill="'+col+'" fill-opacity="'+op.toFixed(2)+'"/>'; } }
         else { let ylo=1e9,yhi=-1; for (let Y2=0;Y2<=Ymax;Y2++){ if (e.prof[Y2]/norm>0.03){ if (Y2<ylo)ylo=Y2; if (Y2>yhi)yhi=Y2; } } if (yhi>0){ const bt=py(yhi); s+='<rect x="'+(scx-barHW)+'" y="'+bt+'" width="'+(barHW*2)+'" height="'+(py(ylo)-bt)+'" rx="2" fill="'+col+'" fill-opacity="'+(0.82*dim).toFixed(2)+'"/>'; } }
         s+='<text transform="rotate(-42 '+scx+' '+(H-48)+')" x="'+scx+'" y="'+(H-48)+'" text-anchor="end" fill="'+(e.on?cS:cM)+'" font-size="10">'+g.sub(e)+'</text>';
         layout.push({x0:bx,x1:bx+subW,e}); cellx+=subW;
@@ -779,14 +810,20 @@ const OreChart = (function () {
     if (gi<0.4 && po<2) bodyH='<div style="color:'+cM+'">negligible '+ORE_NAME[en.ore].toLowerCase()+' here</div>';
     else bodyH='<div>Density index <span style="font-weight:600;color:'+ORE_COL[en.ore]+'">'+giTxt+'</span> / 100 <span style="color:'+cM+'">global</span></div><div style="color:'+cS+'">'+Math.round(po)+'% of peak '+ORE_NAME[en.ore].toLowerCase()+'</div>';
     const absent=en.on?'':'<div style="color:'+cM+'">* not generated on this map</div>';
-    tipEl.innerHTML='<div style="font-weight:600">'+ORE_DISP[en.bi]+' · '+ORE_NAME[en.ore]+'</div><div style="color:'+cS+'">Y '+Y+' · '+depL+'</div>'+bodyH+absent; tipEl.style.display='block';
+    let spreadH='';
+    if (en.lambda>0){ const pct=Math.round(en.cv*100), depN='≈'+Math.round(Math.max(1,en.lambda))+' deposits/map';
+      if (en.cv<0.05 && en.depShare<0.5) spreadH='<div style="color:'+cS+'">steady across seeds <span style="color:'+cM+'">(scatter-dominated · '+depN+')</span></div>';
+      else { const lbl=en.cv<0.05?'barely varies':(en.cv<0.2?'mild seed variance':'high seed variance');
+        spreadH='<div style="color:'+cS+'">seed spread ±'+pct+'% · '+depN+' <span style="color:'+cM+'">('+lbl+')</span></div>'; } }
+    tipEl.innerHTML='<div style="font-weight:600">'+ORE_DISP[en.bi]+' · '+ORE_NAME[en.ore]+'</div><div style="color:'+cS+'">Y '+Y+' · '+depL+'</div>'+bodyH+spreadH+absent; tipEl.style.display='block';
     const wr=wrapEl.getBoundingClientRect(); tipEl.style.left=(e.clientX-wr.left+wrapEl.scrollLeft+14)+'px'; tipEl.style.top=(e.clientY-wr.top+12)+'px';
   }
   function renderFromCfg(cfg) {
     try { D = extract(cfg); } catch (ex) { $('oreChart').innerHTML='<div class="lbl" style="padding:12px">Ore chart unavailable: ' + ex.message + '</div>'; return; }
     Ymax = Math.max(120, Math.ceil(D.MG/20)*20); DMAX = Ymax+90; H = padTop+Ymax*sc+70; gMax = 0; oreMax = {};
     D.entries.forEach(e => { e.prof = smearY(depthProfile(e), e.surf); e.pk = 0; e.prof.forEach(v => { if (v>gMax) gMax=v; if (v>e.pk) e.pk=v; }); if (e.pk>(oreMax[e.ore]||0)) oreMax[e.ore]=e.pk; }); if (gMax<=0) gMax=1;
-    $('oreMeta').textContent = D.entries.length + ' biome×material bands · water Y' + D.WL + ' · gen height ' + D.MG;
+    $('oreMeta').textContent = D.entries.length + ' biome×material bands · water Y' + D.WL + ' · gen height ' + D.MG
+      + ' · seed spread ' + (D.spreadFromMap ? 'from generated map' : 'estimated (generate for real coverage)');
     render();
   }
   function seg(id, opts, key) { const c=$(id); c.innerHTML=''; opts.forEach(o => { const b=document.createElement('button'); b.textContent=o.label; b.onclick=()=>{ state[key]=o.val; [...c.children].forEach(x=>x.classList.toggle('on', x===b)); render(); }; if (o.val===state[key]) b.className='on'; c.appendChild(b); }); }
@@ -795,8 +832,9 @@ const OreChart = (function () {
     seg('oreGrp', [{label:'Ore',val:'ore'},{label:'Biome',val:'biome'}], 'mode');
     seg('oreSty', [{label:'Violins',val:'violin'},{label:'Bars',val:'bars'}], 'style');
     seg('oreScl', [{label:'Global',val:'global'},{label:'Per-ore',val:'perore'}], 'scale');
+    seg('oreSpr', [{label:'Off',val:'off'},{label:'On',val:'on'}], 'spread');
     let lg=''; oreOrder.forEach(o => { lg+='<span><span class="sw" style="background:'+ORE_COL[o]+'"></span>'+ORE_NAME[o]+'</span>'; });
-    lg+='<span style="color:var(--muted)">* biome not on this map · widths √-scaled · <b>Global</b>: full width = densest ore anywhere · <b>Per-ore</b>: full width = peak of that ore · hover for density</span>'; $('oreLegend').innerHTML=lg;
+    lg+='<span style="color:var(--muted)">* biome not on this map · widths √-scaled · <b>Global</b>: full width = densest ore anywhere · <b>Per-ore</b>: full width = peak of that ore · <b>Seed spread</b>: faint halo = seed-to-seed variance (wide on rare deposits) · hover for density</span>'; $('oreLegend').innerHTML=lg;
   }
   return { render: renderFromCfg, init };
 })();
