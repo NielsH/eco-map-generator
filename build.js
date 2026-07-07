@@ -1074,7 +1074,15 @@ const BlockChart = (function () {
     const absent = en.on ? '' : '<div style="color:' + cM + '">* not generated on this map</div>';
     tipEl.innerHTML = '<div style="font-weight:600">' + (ORE_DISP[en.bi] || en.bi) + '</div><div style="color:' + cS + ';margin-bottom:3px">Y ' + Y + ' · ' + depL + '</div>' + body + absent;
     tipEl.style.display = 'block';
-    const wr = wrapEl.getBoundingClientRect(); tipEl.style.left = (e.clientX - wr.left + wrapEl.scrollLeft + 14) + 'px'; tipEl.style.top = (e.clientY - wr.top + 12) + 'px';
+    // keep the tooltip inside the (scrollable) chart box: flip above/left of the cursor near an edge so a tall
+    // breakdown never spills out and forces a scrollbar
+    const wr = wrapEl.getBoundingClientRect();
+    const relX = e.clientX - wr.left + wrapEl.scrollLeft, relY = e.clientY - wr.top + wrapEl.scrollTop;
+    const vL = wrapEl.scrollLeft, vT = wrapEl.scrollTop, vR = vL + wrapEl.clientWidth, vB = vT + wrapEl.clientHeight;
+    const tw = tipEl.offsetWidth, th = tipEl.offsetHeight;
+    let left = relX + 14; if (left + tw > vR) left = relX - tw - 14; if (left < vL + 2) left = vL + 2;
+    let top = relY + 12; if (top + th > vB) top = relY - th - 12; if (top < vT + 2) top = vT + 2; if (top + th > vB) top = Math.max(vT + 2, vB - th - 2);
+    tipEl.style.left = left + 'px'; tipEl.style.top = top + 'px';
   }
 
   function renderFromCfg(cfg) {
