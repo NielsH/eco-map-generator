@@ -124,7 +124,8 @@ const html = `<!DOCTYPE html>
   .mixRow .mact{color:var(--accent); width:70px; text-align:right; font-size:11.5px;}
   .mixRow.mixGrass input{background:var(--surf1); color:var(--text2);}
   #orePanel{display:none; margin-top:20px;}
-  #oreChartPanel{display:none; margin-top:20px;}
+  #chartsPanel{display:none; margin-top:20px;}
+  #chartTabs button{font-size:13px; padding:6px 13px;}
   #oreEditor{display:flex; flex-direction:column; gap:6px; margin:8px 0 12px;}
   #oreEditor details{border:0.5px solid var(--border); border-radius:8px; background:var(--surf); padding:2px 10px;}
   #oreEditor summary{cursor:pointer; font-weight:600; font-size:13px; padding:5px 0; user-select:none;}
@@ -147,6 +148,10 @@ const html = `<!DOCTYPE html>
   #oreChart svg{max-width:100%; height:auto;}
   #oreTip{position:absolute; display:none; pointer-events:none; background:var(--surf); border:0.5px solid var(--border2); border-radius:var(--radius); padding:8px 10px; font-size:12px; line-height:1.5; max-width:250px; z-index:5; box-shadow:0 2px 10px rgba(0,0,0,.15);}
   #oreLegend{display:flex; flex-wrap:wrap; gap:12px 18px; margin-top:12px; font-size:12px; color:var(--text2); align-items:center;}
+  #blockChartWrap{width:100%; overflow-x:auto; position:relative; border:0.5px solid var(--border); border-radius:12px; background:var(--surf); padding:6px 0; margin-top:4px;}
+  #blockChart svg{max-width:100%; height:auto;}
+  #blockTip{position:absolute; display:none; pointer-events:none; background:var(--surf); border:0.5px solid var(--border2); border-radius:var(--radius); padding:8px 10px; font-size:12px; line-height:1.5; max-width:290px; z-index:5; box-shadow:0 2px 10px rgba(0,0,0,.15);}
+  #blockLegend{display:flex; flex-wrap:wrap; gap:10px 16px; margin-top:12px; font-size:12px; color:var(--text2); align-items:center;}
 </style>
 </head>
 <body>
@@ -179,17 +184,38 @@ const html = `<!DOCTYPE html>
     <div id="stats"></div>
   </div>
 
-  <div id="oreChartPanel">
-    <div style="display:flex;align-items:center;gap:10px;margin:6px 0 2px;flex-wrap:wrap;">
-      <strong style="font-size:15px;">Ore distribution</strong>
-      <span class="lbl">Group by</span><span class="seg" id="oreGrp"></span>
-      <span class="lbl" style="margin-left:8px">Style</span><span class="seg" id="oreSty"></span>
-      <span class="lbl" style="margin-left:8px">Scale</span><span class="seg" id="oreScl"></span>
-      <span class="lbl" style="margin-left:8px">Seed spread</span><span class="seg" id="oreSpr"></span>
-      <span class="lbl" id="oreMeta" style="margin-left:10px"></span>
+  <div id="chartsPanel">
+    <div class="row" style="margin:6px 0 4px;">
+      <strong style="font-size:15px;">Underground</strong>
+      <span class="seg" id="chartTabs" style="margin-left:4px">
+        <button type="button" data-tab="block" class="on">Block composition</button>
+        <button type="button" data-tab="ore">Ore distribution</button>
+      </span>
     </div>
-    <div id="oreChartWrap"><div id="oreChart"></div><div id="oreTip"></div></div>
-    <div id="oreLegend"></div>
+
+    <div id="blockTab">
+      <div style="display:flex;align-items:center;gap:10px;margin:2px 0;flex-wrap:wrap;">
+        <span class="lbl">what a column is made of, top to bottom, per biome</span>
+        <span class="lbl" style="margin-left:8px">Crushed</span><span class="seg" id="blkCrush"></span>
+        <span class="lbl" style="margin-left:8px">Ores</span><span class="seg" id="blkEmph"></span>
+        <span class="lbl" id="blockMeta" style="margin-left:10px"></span>
+      </div>
+      <div id="blockChartWrap"><div id="blockChart"></div><div id="blockTip"></div></div>
+      <div id="blockLegend"></div>
+    </div>
+
+    <div id="oreTab" style="display:none">
+      <div style="display:flex;align-items:center;gap:10px;margin:2px 0;flex-wrap:wrap;">
+        <span class="lbl">where each material concentrates by biome &amp; depth</span>
+        <span class="lbl" style="margin-left:8px">Group by</span><span class="seg" id="oreGrp"></span>
+        <span class="lbl" style="margin-left:8px">Style</span><span class="seg" id="oreSty"></span>
+        <span class="lbl" style="margin-left:8px">Scale</span><span class="seg" id="oreScl"></span>
+        <span class="lbl" style="margin-left:8px">Seed spread</span><span class="seg" id="oreSpr"></span>
+        <span class="lbl" id="oreMeta" style="margin-left:10px"></span>
+      </div>
+      <div id="oreChartWrap"><div id="oreChart"></div><div id="oreTip"></div></div>
+      <div id="oreLegend"></div>
+    </div>
   </div>
 
   <div id="cfgPanel">
@@ -498,7 +524,7 @@ function generateMap(cfg) {
       $('progBar').style.width = '100%';
       result = m;
       updateMixActuals(m);
-      if (terrain) OreChart.render(buildExportJson());   // keep ore chart's biome present/absent + water line in sync
+      if (terrain) { const ej = buildExportJson(); OreChart.render(ej); BlockChart.render(ej); }   // keep charts' biome present/absent + water line in sync
       $('gen').disabled = false; $('regen').disabled = false;
       setTimeout(() => { $('prog').style.display = 'none'; }, 300);
       $('panel').style.display = 'block';
@@ -525,8 +551,8 @@ function loadConfigText(text) {
   terrain = derefTerrain(rawJson);
   buildOreEditor();
   $('orePanel').style.display = terrain ? 'block' : 'none';
-  $('oreChartPanel').style.display = terrain ? 'block' : 'none';
-  if (terrain) OreChart.render(buildExportJson());
+  $('chartsPanel').style.display = terrain ? 'block' : 'none';
+  if (terrain) { const ej = buildExportJson(); OreChart.render(ej); BlockChart.render(ej); }
   generateMap(cfg);
 }
 function generateFromForm() {
@@ -586,6 +612,33 @@ const ORE_DISP = { Grassland:'Grassland', RainForest:'Rainforest', WarmForest:'W
 function oreMaterial(t) { if (!t) return null; for (let i = 0; i < ORE_MATS.length; i++) if (t.indexOf(ORE_MATS[i][0]) >= 0) return ORE_MATS[i][1]; return null; }
 const shortBlock = t => (t || '').split(',')[0].split('.').pop().replace(/Block$/, '');
 const btOf = bt => (bt && bt.Type) ? bt.Type : '';
+
+// ---- full block palette (base strata + every non-ore block the ore chart ignores) ----
+// Ores reuse ORE_COL/ORE_NAME via oreMaterial(); everything else (soils, sediments, rock) lives here.
+const ORE_ORDER = ['iron','copper','gold','coal','sulfur','peat','limestone','clay'];
+const BLOCK_COL = {
+  Dirt:'#7c5a38', RockySoil:'#8f7b52', Grass:'#6bbf59', GrassBlock:'#6bbf59',
+  WetlandsSoil:'#5d6b46', FrozenSoil:'#93a7ad', Sand:'#e4d59b', DesertSand:'#e9cb8d',
+  Sandstone:'#d8b573', Shale:'#69737b', Slate:'#5c666e', Gravel:'#9c958b',
+  Granite:'#b98f89', Gneiss:'#9a97a2', Basalt:'#4b4753',
+  Snow:'#eef4fa', Ice:'#cfe8f5', ImpenetrableStone:'#2b2b30', Bedrock:'#2b2b30',
+  Empty:'#5a6b7a', Air:'#5a6b7a',
+};
+// shallow soils/sediment first, hard rock deeper, ores last so their thin bands read on top of the stack
+const BLOCK_STACK_ORDER = ['Grass','GrassBlock','Dirt','RockySoil','WetlandsSoil','FrozenSoil','Snow','Ice','Sand','DesertSand','Gravel','Sandstone','Shale','Slate','Gneiss','Granite','Basalt','ImpenetrableStone','Bedrock'];
+const blockBaseName = t => { const s = shortBlock(t); return s.indexOf('Crushed') === 0 ? s.slice(7) : s; };
+function hashColor(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return 'hsl(' + (((h % 360) + 360) % 360) + ',30%,58%)'; }
+function blockColorRaw(t) { const m = oreMaterial(t); if (m) return ORE_COL[m]; const b = blockBaseName(t); return BLOCK_COL[b] || hashColor(b); }
+const prettyName = s => s.replace(/([a-z])([A-Z])/g, '$1 $2');
+function blockRank(t) { const m = oreMaterial(t); if (m) return 200 + ORE_ORDER.indexOf(m); const i = BLOCK_STACK_ORDER.indexOf(blockBaseName(t)); return i < 0 ? 120 : i; }
+// display grouping: merge folds crushed+ore variants together (CrushedIronOre+IronOre -> Iron, CrushedSandstone+Sandstone -> Sandstone)
+function blockKeyInfo(t, merge) {
+  const m = oreMaterial(t);
+  if (!merge) return { key: t, label: prettyName(shortBlock(t)), color: blockColorRaw(t), rank: blockRank(t), ore: !!m };
+  if (m) return { key: 'ore:' + m, label: ORE_NAME[m], color: ORE_COL[m], rank: 200 + ORE_ORDER.indexOf(m), ore: true };
+  const b = blockBaseName(t);
+  return { key: 'rock:' + b, label: prettyName(b), color: BLOCK_COL[b] || hashColor(b), rank: blockRank(t), ore: false };
+}
 
 // ---- focused ore/scatter editor (edits the dereferenced terrain tree in place) ----
 // "vein" = DepositTerrainModule (concentrated ore vein); "scatter" = StandardTerrainModule (chance-based blocks/bands).
@@ -673,7 +726,7 @@ function wireOreEditor() {
   host.querySelectorAll('button[data-add]').forEach(b => b.addEventListener('click', () => oreAdd(+b.dataset.b, b.dataset.add)));
 }
 let oreRenderTimer = null;
-function scheduleOreRender() { clearTimeout(oreRenderTimer); oreRenderTimer = setTimeout(() => { if (terrain) OreChart.render(buildExportJson()); }, 150); }
+function scheduleOreRender() { clearTimeout(oreRenderTimer); oreRenderTimer = setTimeout(() => { if (terrain) { const ej = buildExportJson(); OreChart.render(ej); BlockChart.render(ej); } }, 150); }
 
 // ---- ore-distribution chart (port of WorldGenOreVisualizer) ----
 const OreChart = (function () {
@@ -839,6 +892,210 @@ const OreChart = (function () {
   return { render: renderFromCfg, init };
 })();
 
+// ---- block-composition chart: per-biome vertical "what you dig through" stack over world height ----
+// Complements the ore chart. Where the ore chart normalises each ore's density on its own axis, this shows
+// the 100%-stacked composition of ALL blocks (base strata + scatter + veins) at each Y, per biome, so you can
+// read how the mix shifts with depth. Model is a faithful aggregate of the server's TerrainDepthModule:
+// each stratum's bottom is a per-column noise threshold ~U[Min,Max]; the shallowest in-order stratum whose
+// threshold >= depth wins, then that stratum's scatters apply first-wins by PercentChance, and veins carve a
+// small deposit fraction out on top. We Monte-Carlo the strata thresholds (fixed seed -> stable chart).
+const BlockChart = (function () {
+  const ELEV = { Grassland:[.02,.4], WarmForest:[.1,.5], ColdForest:[.1,.7], RainForest:[.1,.5], Desert:[.02,.2], Taiga:[.3,1], Tundra:[.4,1], Ice:[.6,1], Wetland:[.02,.3], ColdCoast:[.05,.1], WarmCoast:[.05,.1] };
+  const WEIGHTF = { RainForest:'RainforestWeight', WarmForest:'WarmForestWeight', ColdForest:'CoolForestWeight', Taiga:'TaigaWeight', Tundra:'TundraWeight', Ice:'IceWeight', Desert:'DesertWeight', Wetland:'WetlandWeight' };
+  const ALWAYS = { Grassland:1, ColdCoast:1, WarmCoast:1 };
+  const biomeOrder = ['Desert','Grassland','Wetland','WarmForest','RainForest','WarmCoast','ColdCoast','ColdForest','Taiga','Tundra','Ice'];
+  const cssv = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const state = { merge:'merge', emph:'off' };
+  let Ymax = 125, DMAX = 210;
+  const padTop = 44, sc = 2.4, x0 = 54, colW = 50, gap = 16, maxHW = colW/2 - 3;
+  const py = Y => padTop + (Ymax - Y) * sc;
+  function mulberry32(a){ return function(){ a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+
+  // pull every block (not just ores) + the full strata/submodule structure out of the config
+  function extract(cfg) {
+    const idmap = {};
+    (function idx(o){ if (o && typeof o === 'object'){ if (!Array.isArray(o) && o['$id']) idmap[o['$id']] = o; for (const k in o) idx(o[k]); } })(cfg);
+    const deref = o => (o && o['$ref'] != null) ? idmap[o['$ref']] : o;
+    const btype = bt => { bt = deref(bt); return (bt && bt.Type) ? bt.Type : ''; };
+    const rng = (o, k, d) => { const r = o[k]; if (!r) return d; return [r.min != null ? r.min : d[0], r.max != null ? r.max : d[1]]; };
+    const meanW = o => { const dw = o.DirectionWeights || []; if (!dw.length) return [1,1,1]; let x=0,y=0,z=0; for (let i=0;i<dw.length;i++){x+=dw[i].X||0;y+=dw[i].Y||0;z+=dw[i].Z||0;} return [x/dw.length,y/dw.length,z/dw.length]; };
+    const boost = (wx,wy,wz) => { wx=Math.max(wx,1e-6);wy=Math.max(wy,1e-6);wz=Math.max(wz,1e-6); return Math.pow(wy,2/3)/Math.pow(wx*wz,1/3); };
+    let weights = null;
+    (function find(o){ if (weights||!o||typeof o!=='object') return; if (!Array.isArray(o)&&(o.CoolForestWeight!=null||o.DesertWeight!=null)){weights=o;return;} for (const k in o) find(o[k]); })(cfg);
+    const WL = cfg.WaterLevel != null ? cfg.WaterLevel : 60, MG = cfg.MaxGenerationHeight != null ? cfg.MaxGenerationHeight : 120;
+    const surfOf = name => { const e = ELEV[name] || [.1,.5]; return [Math.round(WL + e[0]*(MG-WL)), Math.round(WL + e[1]*(MG-WL))]; };
+    const presentOf = name => { if (ALWAYS[name]) return true; if (!weights) return true; const f = WEIGHTF[name]; if (!f) return true; return (weights[f]||0) > 0; };
+    const terr = deref(cfg.TerrainModule); if (!terr || !terr.Modules) throw new Error('No TerrainModule.Modules');
+    const biomes = [];
+    terr.Modules.forEach(bm => { bm = deref(bm); const name = bm.BiomeName; if (!ELEV[name]) return;
+      const dm = deref(bm.Module); const ranges = (dm && dm.BlockDepthRanges) || [];
+      const strata = ranges.map(bdr => { bdr = deref(bdr);
+        const scatters = [], deposits = [];
+        (bdr.SubModules||[]).forEach(sm => { sm = deref(sm); const ty = sm['$type']||''; const bt = btype(sm.BlockType); if (!bt) return;
+          if (ty.indexOf('StandardTerrainModule') >= 0) { const r = rng(sm,'DepthRange',[0,200]); scatters.push({ block:bt, a:Math.max(0,r[0]|0), b:Math.max(r[0]|0,r[1]|0), pc:Math.max(0,Math.min(1, sm.PercentChance!=null?sm.PercentChance:0.05)) }); }
+          else if (ty.indexOf('DepositTerrainModule') >= 0) { const sr = rng(sm,'DepthRange',[0,200]), br = rng(sm,'DepositDepthRange',[0,200]); const bc = rng(sm,'BlocksCountRange',[1,1]); const N = Math.max(1,(bc[0]+bc[1])/2); const mw = meanW(sm);
+            deposits.push({ block:bt, sa:sr[0]|0, sb:Math.max(sr[0]|0,sr[1]|0), ba:Math.min(sr[0],br[0])|0, bb:Math.max(sr[1],br[1])|0, spc:Math.max(0, sm.SpawnPercentChance!=null?sm.SpawnPercentChance:0.01), bo:boost(mw[0],mw[1],mw[2]), N:N }); }
+        });
+        return { block: btype(bdr.BlockType), min: Math.max(0,bdr.Min|0), max: Math.max(bdr.Min|0,bdr.Max|0), scatters, deposits };
+      }).filter(st => st.block);
+      biomes.push({ bi:name, surf:surfOf(name), on:presentOf(name), strata });
+    });
+    return { biomes, WL, MG };
+  }
+
+  // which stratum wins at depth d for one sampled set of thresholds (port of TerrainDepthModule.TrySpawnBlock)
+  function selectBase(T, N, d) { let last = N - 1;
+    for (let i = N - 2; i >= 0; i--) { let skip = false;
+      for (let j = i + 1; j < N; j++) { if (T[j] <= T[i]) { skip = true; break; } }
+      if (skip) continue;
+      if (d <= T[i]) last = i; else break;
+    } return last; }
+
+  // expected per-depth occupancy fraction of one vein (same smear the ore chart uses)
+  function depositFrac(m) {
+    const arr = new Float64Array(DMAX + 1);
+    const ey = 0.62 * Math.cbrt(m.N) * m.bo, h = Math.max(1, Math.round(ey));
+    const base = new Float64Array(DMAX + 1); for (let d = Math.max(0,m.sa); d <= m.sb && d <= DMAX; d++) base[d] = 1;
+    const sm = new Float64Array(DMAX + 1);
+    for (let d = 0; d <= DMAX; d++) { let acc = 0, ws = 0; for (let k = -h; k <= h; k++) { const wk = h + 1 - Math.abs(k), dd = d - k; if (dd >= 0 && dd <= DMAX) acc += base[dd]*wk; ws += wk; } sm[d] = acc/ws; }
+    for (let d2 = 0; d2 <= DMAX; d2++) if (d2 < m.ba || d2 > m.bb) sm[d2] = 0;
+    let tot = 0; for (let d3 = 0; d3 <= DMAX; d3++) tot += sm[d3];
+    const w = m.spc * m.N;
+    if (tot > 0) for (let d4 = 0; d4 <= DMAX; d4++) arr[d4] = sm[d4]/tot*w;
+    return arr;
+  }
+
+  // composition (raw block type -> fraction, sums to 1) at every depth 0..DMAX for one biome
+  function computeComp(entry) {
+    const strata = entry.strata, N = strata.length, comp = [], raws = new Set();
+    if (!N) { for (let d = 0; d <= DMAX; d++) comp.push({}); return { comp, raws }; }
+    const baseP = []; for (let i = 0; i < N; i++) baseP.push(new Float64Array(DMAX + 1));
+    const S = 160, rnd = mulberry32(0x1234567), T = new Float64Array(N);
+    for (let s = 0; s < S; s++) {
+      for (let i = 0; i < N; i++) { const st = strata[i]; T[i] = st.min + rnd() * (st.max - st.min); }
+      for (let d = 0; d <= DMAX; d++) baseP[selectBase(T, N, d)][d]++;
+    }
+    for (let i = 0; i < N; i++) for (let d = 0; d <= DMAX; d++) baseP[i][d] /= S;
+    const depFrac = {};
+    strata.forEach(st => st.deposits.forEach(dep => { const a = depositFrac(dep); const cur = depFrac[dep.block] || (depFrac[dep.block] = new Float64Array(DMAX + 1)); for (let d = 0; d <= DMAX; d++) cur[d] += a[d]; }));
+    const addTo = (o, k, v) => { if (v > 0) o[k] = (o[k] || 0) + v; };
+    for (let d = 0; d <= DMAX; d++) {
+      const c = {};
+      for (let i = 0; i < N; i++) { const p = baseP[i][d]; if (p <= 0) continue; const st = strata[i]; let remaining = 1;
+        for (const scb of st.scatters) { if (d >= scb.a && d <= scb.b) { const take = remaining * scb.pc; addTo(c, scb.block, p * take); remaining -= take; } }
+        addTo(c, st.block, p * remaining); }
+      let depTot = 0; for (const k in depFrac) depTot += depFrac[k][d];
+      if (depTot > 0) { const cap = Math.min(0.95, depTot), scale = 1 - cap, f = cap / depTot;
+        for (const k in c) c[k] *= scale;
+        for (const k in depFrac) addTo(c, k, depFrac[k][d] * f); }
+      for (const k in c) raws.add(k);
+      comp.push(c);
+    }
+    return { comp, raws };
+  }
+
+  let D = null, cols = [], curW = 0, plotR = 0, H = 0, svgEl = null, hvLine = null, hvRect = null, tipEl = null, wrapEl = null;
+
+  // map a biome's depth-composition onto world-height Y, averaged over its (soft) surface band; air above surface
+  function projectToY(entry) {
+    const merge = state.merge === 'merge', lo = entry.surf[0], hi = entry.surf[1], cnt = hi - lo + 1;
+    const yKeys = [], ySolid = new Float64Array(Ymax + 1), used = {};
+    for (let Y = 0; Y <= Ymax; Y++) {
+      const agg = {}; let solid = 0;
+      for (let sft = lo; sft <= hi; sft++) { const d = sft - Y; if (d < 0) continue; solid++; const c = entry.comp[Math.min(d, DMAX)];
+        for (const raw in c) { const info = blockKeyInfo(raw, merge); const k = info.key; agg[k] = (agg[k] || 0) + c[raw]; if (!used[k]) used[k] = info; } }
+      ySolid[Y] = cnt > 0 ? solid / cnt : 0;
+      if (solid > 0) for (const k in agg) agg[k] /= solid;
+      yKeys.push(agg);
+    }
+    return { yKeys, ySolid, used };
+  }
+
+  function render() {
+    if (!D) return;
+    const cT = cssv('--text'), cS = cssv('--text2'), cM = cssv('--muted'), cB = cssv('--border'), water = cssv('--water') || '#3987e5';
+    const shown = biomeOrder.map(b => D.biomes.find(e => e.bi === b)).filter(Boolean);
+    const n = shown.length;
+    curW = x0 + n * colW + Math.max(0, n - 1) * gap + 16; plotR = curW - 12;
+    const emph = state.emph === 'on', legendKeys = {}; cols = [];
+    let s = '<svg id="blkSvg" xmlns="http://www.w3.org/2000/svg" width="' + curW + '" height="' + H + '" viewBox="0 0 ' + curW + ' ' + H + '" style="display:block;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">';
+    const step = Ymax > 140 ? 40 : 20;
+    for (let t = 0; t <= Ymax; t += step) { const ty = py(t); s += '<line x1="' + x0 + '" y1="' + ty + '" x2="' + plotR + '" y2="' + ty + '" stroke="' + cB + '" stroke-width="1"/><text x="' + (x0 - 8) + '" y="' + (ty + 4) + '" text-anchor="end" fill="' + cM + '" font-size="11">' + t + '</text>'; }
+    s += '<text x="12" y="' + py(Ymax*0.82) + '" fill="' + cS + '" font-size="12" transform="rotate(-90 12 ' + py(Ymax*0.82) + ')">World height (Y)</text>';
+    const wy = py(D.WL); s += '<line x1="' + x0 + '" y1="' + wy + '" x2="' + plotR + '" y2="' + wy + '" stroke="' + water + '" stroke-width="1.4" stroke-dasharray="5 4"/><text x="' + plotR + '" y="' + (wy - 5) + '" text-anchor="end" fill="' + water + '" font-size="10.5">water Y' + D.WL + '</text>';
+    s += '<rect id="blkHvr" x="0" y="0" width="0" height="0" fill="' + cM + '" fill-opacity="0.10" style="display:none"/>';
+    shown.forEach((entry, ci) => {
+      const cx = x0 + ci * (colW + gap) + colW / 2, dim = entry.on ? 1 : 0.45;
+      const proj = projectToY(entry); for (const k in proj.used) legendKeys[k] = proj.used[k];
+      const keys = Object.keys(proj.used).sort((a, b) => (proj.used[a].rank - proj.used[b].rank) || a.localeCompare(b));
+      // header
+      s += '<text x="' + cx + '" y="20" text-anchor="middle" fill="' + (entry.on ? cT : cM) + '" font-size="12" font-weight="600">' + (ORE_DISP[entry.bi] || entry.bi) + (entry.on ? '' : '*') + '</text>';
+      // cumulative left/right edge per key per Y (centred stack, width tracks the solid fraction so the top tapers in)
+      const leftE = {}, rightE = {}; keys.forEach(k => { leftE[k] = new Float64Array(Ymax + 1); rightE[k] = new Float64Array(Ymax + 1); });
+      for (let Y = 0; Y <= Ymax; Y++) { const comp = proj.yKeys[Y], hw = proj.ySolid[Y] * maxHW; let x = cx - hw;
+        for (const k of keys) { const w = (comp[k] || 0) * 2 * hw; leftE[k][Y] = x; rightE[k][Y] = x + w; x += w; } }
+      // one filled ribbon per block; adjacent edges are shared so the stack is seamless
+      keys.forEach(k => { const info = proj.used[k]; let op = dim; if (emph && !info.ore) op *= 0.28;
+        let path = 'M'; for (let Y = 0; Y <= Ymax; Y++) path += (leftE[k][Y]).toFixed(1) + ' ' + py(Y).toFixed(1) + ' ';
+        for (let Y = Ymax; Y >= 0; Y--) path += (rightE[k][Y]).toFixed(1) + ' ' + py(Y).toFixed(1) + ' ';
+        s += '<path d="' + path + 'Z" fill="' + info.color + '" fill-opacity="' + op.toFixed(2) + '"/>'; });
+      // faint silhouette so near-empty columns still read (only over the solid range, no stalk above the surface)
+      const topY = Math.min(Ymax, entry.surf[1]);
+      let sil = 'M'; for (let Y = 0; Y <= topY; Y++) sil += (cx - proj.ySolid[Y]*maxHW).toFixed(1) + ' ' + py(Y).toFixed(1) + ' ';
+      for (let Y = topY; Y >= 0; Y--) sil += (cx + proj.ySolid[Y]*maxHW).toFixed(1) + ' ' + py(Y).toFixed(1) + ' ';
+      s += '<path d="' + sil + 'Z" fill="none" stroke="' + cB + '" stroke-width="0.75"/>';
+      cols.push({ x0: cx - maxHW - gap/2, x1: cx + maxHW + gap/2, cx: cx, e: entry, proj: proj, keys: keys });
+    });
+    s += '<line id="blkHvl" x1="0" y1="0" x2="0" y2="0" stroke="' + cT + '" stroke-width="1" stroke-opacity="0.5" stroke-dasharray="3 3" style="display:none"/></svg>';
+    $('blockChart').innerHTML = s; svgEl = $('blkSvg'); hvLine = $('blkHvl'); hvRect = $('blkHvr');
+    svgEl.addEventListener('mousemove', onMove);
+    svgEl.addEventListener('mouseleave', () => { tipEl.style.display='none'; hvLine.style.display='none'; hvRect.style.display='none'; });
+    // legend
+    const lk = Object.keys(legendKeys).sort((a, b) => (legendKeys[a].rank - legendKeys[b].rank) || a.localeCompare(b));
+    let lg = ''; lk.forEach(k => { const info = legendKeys[k]; lg += '<span><span class="sw" style="background:' + info.color + '"></span>' + info.label + '</span>'; });
+    lg += '<span style="color:var(--muted)">* biome not on this map · each column is a 100%-stacked mix at that depth (soft top = varying surface) · hover for the exact breakdown</span>';
+    $('blockLegend').innerHTML = lg;
+  }
+
+  function onMove(e) {
+    const cM = cssv('--muted'), cS = cssv('--text2'); const r = svgEl.getBoundingClientRect();
+    const sx = (e.clientX - r.left) * (curW / r.width), sy = (e.clientY - r.top) * (H / r.height), Y = Math.round(Ymax - (sy - padTop) / sc);
+    let col = null; for (let i = 0; i < cols.length; i++) { if (sx >= cols[i].x0 && sx < cols[i].x1) { col = cols[i]; break; } }
+    if (!col || Y < 0 || Y > Ymax) { tipEl.style.display='none'; hvLine.style.display='none'; hvRect.style.display='none'; return; }
+    hvLine.setAttribute('x1', x0); hvLine.setAttribute('x2', plotR); hvLine.setAttribute('y1', py(Y)); hvLine.setAttribute('y2', py(Y)); hvLine.style.display = 'block';
+    hvRect.setAttribute('x', col.cx - maxHW - 1); hvRect.setAttribute('y', padTop); hvRect.setAttribute('width', maxHW*2 + 2); hvRect.setAttribute('height', Ymax*sc); hvRect.style.display = 'block';
+    const en = col.e, comp = col.proj.yKeys[Y], solid = col.proj.ySolid[Y];
+    const sm = (en.surf[0] + en.surf[1]) / 2, dep = Math.round(sm - Y), depL = dep >= 0 ? ('~ ' + dep + ' blocks deep') : ('~ ' + (-dep) + ' above surface');
+    let body;
+    if (solid < 0.02) body = '<div style="color:' + cM + '">above the surface here (air)</div>';
+    else { const rows = Object.keys(comp).map(k => ({ k, v: comp[k], info: col.proj.used[k] })).filter(x => x.v >= 0.005).sort((a, b) => b.v - a.v);
+      if (!rows.length) body = '<div style="color:' + cM + '">—</div>';
+      else body = rows.map(x => '<div style="display:flex;gap:7px;align-items:center"><span class="sw" style="background:' + x.info.color + '"></span><span style="flex:1">' + x.info.label + '</span><span style="color:' + cS + ';font-variant-numeric:tabular-nums">' + (x.v * 100 >= 1 ? Math.round(x.v * 100) : (x.v * 100).toFixed(1)) + '%</span></div>').join(''); }
+    const absent = en.on ? '' : '<div style="color:' + cM + '">* not generated on this map</div>';
+    tipEl.innerHTML = '<div style="font-weight:600">' + (ORE_DISP[en.bi] || en.bi) + '</div><div style="color:' + cS + ';margin-bottom:3px">Y ' + Y + ' · ' + depL + '</div>' + body + absent;
+    tipEl.style.display = 'block';
+    const wr = wrapEl.getBoundingClientRect(); tipEl.style.left = (e.clientX - wr.left + wrapEl.scrollLeft + 14) + 'px'; tipEl.style.top = (e.clientY - wr.top + 12) + 'px';
+  }
+
+  function renderFromCfg(cfg) {
+    try { D = extract(cfg); } catch (ex) { $('blockChart').innerHTML = '<div class="lbl" style="padding:12px">Block composition unavailable: ' + ex.message + '</div>'; return; }
+    Ymax = Math.max(120, Math.ceil(D.MG / 20) * 20); DMAX = Ymax + 90; H = padTop + Ymax * sc + 20;
+    let nBlocks = 0; const seen = {};
+    D.biomes.forEach(e => { const cc = computeComp(e); e.comp = cc.comp; cc.raws.forEach(r => { const k = blockKeyInfo(r, state.merge === 'merge').key; if (!seen[k]) { seen[k] = 1; nBlocks++; } }); });
+    $('blockMeta').textContent = D.biomes.length + ' biomes · ' + nBlocks + ' block types · water Y' + D.WL + ' · gen height ' + D.MG;
+    render();
+  }
+
+  function seg(id, opts, key) { const c = $(id); c.innerHTML = ''; opts.forEach(o => { const b = document.createElement('button'); b.textContent = o.label; b.onclick = () => { state[key] = o.val; [].forEach.call(c.children, x => x.classList.toggle('on', x === b)); if (key === 'merge' && D) renderFromCfg(lastCfg); else render(); }; if (o.val === state[key]) b.className = 'on'; c.appendChild(b); }); }
+  let lastCfg = null;
+  function init() {
+    tipEl = $('blockTip'); wrapEl = $('blockChartWrap');
+    seg('blkCrush', [{ label:'Merge', val:'merge' }, { label:'Separate', val:'separate' }], 'merge');
+    seg('blkEmph', [{ label:'Normal', val:'off' }, { label:'Emphasize', val:'on' }], 'emph');
+  }
+  return { render: function (cfg) { lastCfg = cfg; renderFromCfg(cfg); }, init };
+})();
+
 // hand-off the current (edited) config to the standalone ore visualizer via postMessage handshake
 let pendingHandoff = null;
 function oreHandoff() {
@@ -948,6 +1205,14 @@ $('cv').addEventListener('mouseleave', ()=>{ $('tip').style.display='none'; });
 // ---- wiring ----
 buildForm();
 OreChart.init();
+BlockChart.init();
+// underground charts: two tabs in one panel, Block composition default
+(function initChartTabs(){
+  const tabs = $('chartTabs');
+  const show = t => { $('blockTab').style.display = t === 'block' ? '' : 'none'; $('oreTab').style.display = t === 'ore' ? '' : 'none';
+    for (const b of tabs.children) b.classList.toggle('on', b.dataset.tab === t); };
+  for (const b of tabs.children) b.onclick = () => show(b.dataset.tab);
+})();
 $('oreHandoff').onclick = oreHandoff;
 $('gen').onclick = () => loadConfigText($('paste').value);
 $('regen').onclick = generateFromForm;
