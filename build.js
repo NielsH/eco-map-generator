@@ -629,12 +629,22 @@ const BLOCK_STACK_ORDER = ['Grass','GrassBlock','Dirt','RockySoil','WetlandsSoil
 const blockBaseName = t => { const s = shortBlock(t); return s.indexOf('Crushed') === 0 ? s.slice(7) : s; };
 function hashColor(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return 'hsl(' + (((h % 360) + 360) % 360) + ',30%,58%)'; }
 function blockColorRaw(t) { const m = oreMaterial(t); if (m) return ORE_COL[m]; const b = blockBaseName(t); return BLOCK_COL[b] || hashColor(b); }
+const isCrushed = t => shortBlock(t).indexOf('Crushed') === 0;
+// crushed variants share their base block's colour; in "Separate" mode we lighten them so a crushed band reads as a paler shade next to the solid one
+function lightenColor(c) {
+  const amt = 0.42;
+  if (c[0] === '#') { let h = c.slice(1); if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+    const mix = i => Math.round(parseInt(h.slice(i,i+2),16) + (255 - parseInt(h.slice(i,i+2),16)) * amt);
+    return 'rgb(' + mix(0) + ',' + mix(2) + ',' + mix(4) + ')'; }
+  const m = c.match(/hsl\(\s*(\d+)\s*,\s*(\d+)%\s*,\s*(\d+)%\s*\)/);
+  return m ? 'hsl(' + m[1] + ',' + m[2] + '%,' + Math.min(96, +m[3] + 22) + '%)' : c;
+}
 const prettyName = s => s.replace(/([a-z])([A-Z])/g, '$1 $2');
 function blockRank(t) { const m = oreMaterial(t); if (m) return 200 + ORE_ORDER.indexOf(m); const i = BLOCK_STACK_ORDER.indexOf(blockBaseName(t)); return i < 0 ? 120 : i; }
 // display grouping: merge folds crushed+ore variants together (CrushedIronOre+IronOre -> Iron, CrushedSandstone+Sandstone -> Sandstone)
 function blockKeyInfo(t, merge) {
   const m = oreMaterial(t);
-  if (!merge) return { key: t, label: prettyName(shortBlock(t)), color: blockColorRaw(t), rank: blockRank(t), ore: !!m };
+  if (!merge) return { key: t, label: prettyName(shortBlock(t)), color: isCrushed(t) ? lightenColor(blockColorRaw(t)) : blockColorRaw(t), rank: blockRank(t), ore: !!m };
   if (m) return { key: 'ore:' + m, label: ORE_NAME[m], color: ORE_COL[m], rank: 200 + ORE_ORDER.indexOf(m), ore: true };
   const b = blockBaseName(t);
   return { key: 'rock:' + b, label: prettyName(b), color: BLOCK_COL[b] || hashColor(b), rank: blockRank(t), ore: false };
