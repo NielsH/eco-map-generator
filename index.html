@@ -77,7 +77,6 @@
   .mixRow .pct{color:var(--muted); width:14px;}
   .mixRow .mact{color:var(--accent); width:70px; text-align:right; font-size:11.5px;}
   .mixRow.mixGrass input{background:var(--surf1); color:var(--text2);}
-  #orePanel{display:none; margin-top:20px;}
   #chartsPanel{display:none; margin-top:20px;}
   #chartTabs button{font-size:13px; padding:6px 13px;}
   #oreTabs button{font-size:13px; padding:6px 13px;}
@@ -147,6 +146,7 @@
       <span class="seg" id="chartTabs" style="margin-left:4px">
         <button type="button" data-tab="block" class="on">Block composition</button>
         <button type="button" data-tab="ore">Ore distribution</button>
+        <button type="button" data-tab="edit">Editor</button>
       </span>
     </div>
 
@@ -173,6 +173,31 @@
       <div id="oreChartWrap"><div id="oreChart"></div><div id="oreTip"></div></div>
       <div id="oreLegend"></div>
     </div>
+
+    <div id="editTab" style="display:none">
+      <div style="display:flex;align-items:center;gap:10px;margin:2px 0 6px;flex-wrap:wrap;">
+        <span class="seg" id="oreTabs">
+          <button type="button" data-tab="visual" class="on">Visual editor</button>
+          <button type="button" data-tab="manual">Manual knobs</button>
+        </span>
+        <button id="oreHandoff" style="margin-left:auto">Open in ore visualizer ↗</button>
+      </div>
+      <div id="oreVisualTab">
+        <div class="lbl" style="margin:4px 0 6px">Pick a biome, then drag a vein/scatter to move it, drag its top/bottom edges to resize its depth range, or its right edge to change abundance. Click one to fine-tune or change its block.</div>
+        <div id="ovBiomes"></div>
+        <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start;margin-top:8px">
+          <div id="ovLane" style="flex:0 0 auto;border:0.5px solid var(--border);border-radius:12px;background:var(--surf);padding:6px 0;overflow-x:auto;max-width:100%"></div>
+          <div style="flex:1 1 240px;min-width:230px">
+            <div id="ovDetail"></div>
+            <div class="oreAdd" style="margin-top:8px"><button id="ovAddVein">+ vein</button><button id="ovAddScatter">+ scatter</button></div>
+          </div>
+        </div>
+      </div>
+      <div id="oreManualTab" style="display:none">
+        <div class="lbl" style="margin:4px 0 8px">Edit veins &amp; scatter for every biome, add/remove nodes — the distribution chart updates live.</div>
+        <div id="oreEditor"></div>
+      </div>
+    </div>
   </div>
 
   <div id="cfgPanel">
@@ -188,31 +213,6 @@
     </div>
   </div>
 
-  <div id="orePanel">
-    <div style="display:flex;align-items:center;gap:10px;margin:6px 0 2px;flex-wrap:wrap;">
-      <strong style="font-size:15px;">Block &amp; ore composition</strong>
-      <span class="seg" id="oreTabs" style="margin-left:2px">
-        <button type="button" data-tab="visual" class="on">Visual editor</button>
-        <button type="button" data-tab="manual">Manual knobs</button>
-      </span>
-      <button id="oreHandoff" style="margin-left:auto">Open in ore visualizer ↗</button>
-    </div>
-    <div id="oreVisualTab">
-      <div class="lbl" style="margin:4px 0 6px">Pick a biome, then drag a vein/scatter to move its depth, or drag its right edge to change abundance. Click one to fine-tune or change its block.</div>
-      <div id="ovBiomes"></div>
-      <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start;margin-top:8px">
-        <div id="ovLane" style="flex:0 0 auto;border:0.5px solid var(--border);border-radius:12px;background:var(--surf);padding:6px 0;overflow-x:auto;max-width:100%"></div>
-        <div style="flex:1 1 240px;min-width:230px">
-          <div id="ovDetail"></div>
-          <div class="oreAdd" style="margin-top:8px"><button id="ovAddVein">+ vein</button><button id="ovAddScatter">+ scatter</button></div>
-        </div>
-      </div>
-    </div>
-    <div id="oreManualTab" style="display:none">
-      <div class="lbl" style="margin:4px 0 8px">Edit veins &amp; scatter for every biome, add/remove nodes — the distribution chart updates live.</div>
-      <div id="oreEditor"></div>
-    </div>
-  </div>
 </div>
 
 <script type="text/plain" id="libsrc">
@@ -6736,7 +6736,6 @@ function loadConfigText(text) {
   terrain = derefTerrain(rawJson);
   buildOreEditor();
   OreVisual.build();
-  $('orePanel').style.display = terrain ? 'block' : 'none';
   $('chartsPanel').style.display = terrain ? 'block' : 'none';
   if (terrain) { const ej = buildExportJson(); OreChart.render(ej); BlockChart.render(ej); }
   generateMap(cfg);
@@ -6969,8 +6968,11 @@ const OreVisual = (function () {
       s += '<rect x="' + (cx - wH).toFixed(1) + '" y="' + yT.toFixed(1) + '" width="' + (wH * 2).toFixed(1) + '" height="' + (yB - yT).toFixed(1) + '" rx="4" fill="' + col + '" fill-opacity="' + (o.kind === 'std' ? 0.72 : 0.92) + '"' + (seld ? ' stroke="' + cT + '" stroke-width="2"' : '') + '/>';
       s += '<text x="' + cx + '" y="' + (H - 20) + '" text-anchor="middle" font-size="10.5" fill="' + (seld ? cT : cS) + '">' + ORE_NAME[o.mat] + '</text>';
       s += '<text x="' + cx + '" y="' + (H - 8) + '" text-anchor="middle" font-size="9.5" fill="' + cM + '">' + (o.kind === 'dep' ? 'vein' : 'scatter') + '</text>';
+      const eh = Math.max(4, Math.min(8, (yB - yT) / 3));
       s += '<rect x="' + (cx - wH).toFixed(1) + '" y="' + yT.toFixed(1) + '" width="' + (wH * 2).toFixed(1) + '" height="' + (yB - yT).toFixed(1) + '" fill="transparent" pointer-events="all" data-drag="' + i + '|move" style="cursor:move"/>';
-      s += '<rect x="' + (cx + wH - 7).toFixed(1) + '" y="' + yT.toFixed(1) + '" width="14" height="' + (yB - yT).toFixed(1) + '" fill="transparent" pointer-events="all" data-drag="' + i + '|w" style="cursor:ew-resize"/>';
+      s += '<rect x="' + (cx - wH).toFixed(1) + '" y="' + (yT - 3).toFixed(1) + '" width="' + (wH * 2).toFixed(1) + '" height="' + (eh + 3).toFixed(1) + '" fill="transparent" pointer-events="all" data-drag="' + i + '|t" style="cursor:ns-resize"/>';
+      s += '<rect x="' + (cx - wH).toFixed(1) + '" y="' + (yB - eh).toFixed(1) + '" width="' + (wH * 2).toFixed(1) + '" height="' + (eh + 3).toFixed(1) + '" fill="transparent" pointer-events="all" data-drag="' + i + '|b" style="cursor:ns-resize"/>';
+      s += '<rect x="' + (cx + wH - 7).toFixed(1) + '" y="' + (yT + eh).toFixed(1) + '" width="14" height="' + Math.max(1, (yB - yT - eh * 2)).toFixed(1) + '" fill="transparent" pointer-events="all" data-drag="' + i + '|w" style="cursor:ew-resize"/>';
     });
     s += '</svg>';
     laneEl.innerHTML = s; svgEl = document.getElementById('ovSvg');
@@ -6983,6 +6985,8 @@ const OreVisual = (function () {
   function onMove(e) { if (!drag) return; const r = svgEl.getBoundingClientRect(); const o = drag.o;
     if (drag.k === 'move') { const d = d2y((e.clientY - r.top) * (H / r.height)); const span = snapMax - snapMin;
       let nmin = Math.max(0, Math.min(maxD - span, Math.round(snapMin + (d - startDepth)))); o.node.DepthRange = o.node.DepthRange || {}; o.node.DepthRange.min = nmin; o.node.DepthRange.max = nmin + span; }
+    else if (drag.k === 't') { const d = Math.round(d2y((e.clientY - r.top) * (H / r.height))); o.node.DepthRange = o.node.DepthRange || {}; o.node.DepthRange.min = Math.max(0, Math.min((o.node.DepthRange.max || 0) - 1, d)); }
+    else if (drag.k === 'b') { const d = Math.round(d2y((e.clientY - r.top) * (H / r.height))); o.node.DepthRange = o.node.DepthRange || {}; o.node.DepthRange.max = Math.max((o.node.DepthRange.min || 0) + 1, Math.min(maxD, d)); }
     else if (drag.k === 'w') { const W = svgEl.viewBox.baseVal.width, cx = X0 + drag.i * COLW + COLW / 2; const xx = (e.clientX - r.left) * (W / r.width);
       let frac = Math.max(0.12, Math.min(1, (xx - cx) / (COLW / 2 - 7))), v = frac * chMax(o), st = chStep(o); setChance(o, +(Math.round(v / st) * st).toFixed(4)); }
     render(); renderDetail(); scheduleOreRender(); }
@@ -7509,8 +7513,9 @@ OreVisual.init();
 // underground charts: two tabs in one panel, Block composition default
 (function initChartTabs(){
   const tabs = $('chartTabs');
-  const show = t => { $('blockTab').style.display = t === 'block' ? '' : 'none'; $('oreTab').style.display = t === 'ore' ? '' : 'none';
-    for (const b of tabs.children) b.classList.toggle('on', b.dataset.tab === t); };
+  const show = t => { $('blockTab').style.display = t === 'block' ? '' : 'none'; $('oreTab').style.display = t === 'ore' ? '' : 'none'; $('editTab').style.display = t === 'edit' ? '' : 'none';
+    for (const b of tabs.children) b.classList.toggle('on', b.dataset.tab === t);
+    if (t === 'edit' && terrain) { if ($('oreManualTab').style.display === 'none') OreVisual.build(); else buildOreEditor(); } };
   for (const b of tabs.children) b.onclick = () => show(b.dataset.tab);
 })();
 // block & ore editor: Visual editor / Manual knobs tabs (rebuild the shown tab so edits in the other stay in sync)
