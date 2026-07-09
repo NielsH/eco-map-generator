@@ -769,10 +769,14 @@ const OreVisual = (function () {
   let drag = null, startDepth = 0, snapMin = 0, snapMax = 0;
   const cssv = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   const biomes = () => (terrain && terrain.Modules) ? terrain.Modules : [];
-  const chanceOf = o => o.kind === 'dep' ? (o.node.SpawnPercentChance || 0) : (o.node.PercentChance || 0);
-  const setChance = (o, v) => { if (o.kind === 'dep') o.node.SpawnPercentChance = v; else o.node.PercentChance = v; };
-  const chMax = o => o.kind === 'dep' ? 0.03 : 1;
-  const chStep = o => o.kind === 'dep' ? 0.0005 : 0.01;
+  // an object's bar width represents its share of blocks at its depth (same as the composition chart):
+  // scatter = PercentChance directly; vein = saturating cover 1-(1-spawn)^veinSize. Dragging width sets the share
+  // and back-solves the underlying config value.
+  const veinN = o => { const bc = o.node.BlocksCountRange || {}; return Math.max(1, ((bc.min != null ? bc.min : 1) + (bc.max != null ? bc.max : 1)) / 2); };
+  const shareOf = o => o.kind === 'dep' ? (1 - Math.pow(1 - Math.max(0, Math.min(1, o.node.SpawnPercentChance || 0)), veinN(o))) : Math.max(0, Math.min(1, o.node.PercentChance || 0));
+  const setShare = (o, frac) => { frac = Math.max(0, Math.min(1, frac));
+    if (o.kind === 'dep') o.node.SpawnPercentChance = +(1 - Math.pow(1 - frac, 1 / veinN(o))).toFixed(4);
+    else o.node.PercentChance = +frac.toFixed(3); };
   const y = d => TOP + d * SC, d2y = yy => (yy - TOP) / SC;
   function collect(bm) { const out = []; const rs = (bm.Module && bm.Module.BlockDepthRanges) || [];
     rs.forEach(l => (l.SubModules || []).forEach(sm => { const ty = sm['$type'] || ''; const mat = oreMaterial(btOf(sm.BlockType)); if (!mat) return;
@@ -798,7 +802,7 @@ const OreVisual = (function () {
     if (!objs.length) s += '<text x="' + (X0 + 30) + '" y="' + (TOP + 44) + '" fill="' + cM + '" font-size="12.5">No veins or scatter here yet — add one below.</text>';
     objs.forEach((o, i) => { const x = X0 + i * COLW, cx = x + COLW / 2; const r = o.node.DepthRange || { min: 0, max: 10 };
       const mn = Math.max(0, r.min || 0), mx = Math.max(mn + 1, r.max || 0); const yT = y(mn), yB = y(Math.min(maxD, mx));
-      const frac = Math.min(1, Math.max(0.12, chanceOf(o) / chMax(o))), wH = frac * (COLW / 2 - 7);
+      const frac = Math.min(1, Math.max(0.06, shareOf(o))), wH = frac * (COLW / 2 - 7);
       const col = blockColorRaw(btOf(o.node.BlockType)), seld = sel && o.node === sel.node;
       s += '<rect x="' + (cx - wH).toFixed(1) + '" y="' + yT.toFixed(1) + '" width="' + (wH * 2).toFixed(1) + '" height="' + (yB - yT).toFixed(1) + '" rx="4" fill="' + col + '" fill-opacity="' + (o.kind === 'std' ? 0.72 : 0.92) + '"' + (seld ? ' stroke="' + cT + '" stroke-width="2"' : '') + '/>';
       s += '<text x="' + cx + '" y="' + (H - 20) + '" text-anchor="middle" font-size="10.5" fill="' + (seld ? cT : cS) + '">' + ORE_NAME[o.mat] + '</text>';
@@ -823,7 +827,7 @@ const OreVisual = (function () {
     else if (drag.k === 't') { const d = Math.round(d2y((e.clientY - r.top) * (H / r.height))); o.node.DepthRange = o.node.DepthRange || {}; o.node.DepthRange.min = Math.max(0, Math.min((o.node.DepthRange.max || 0) - 1, d)); }
     else if (drag.k === 'b') { const d = Math.round(d2y((e.clientY - r.top) * (H / r.height))); o.node.DepthRange = o.node.DepthRange || {}; o.node.DepthRange.max = Math.max((o.node.DepthRange.min || 0) + 1, Math.min(maxD, d)); }
     else if (drag.k === 'w') { const W = svgEl.viewBox.baseVal.width, cx = X0 + drag.i * COLW + COLW / 2; const xx = (e.clientX - r.left) * (W / r.width);
-      let frac = Math.max(0.12, Math.min(1, (xx - cx) / (COLW / 2 - 7))), v = frac * chMax(o), st = chStep(o); setChance(o, +(Math.round(v / st) * st).toFixed(4)); }
+      setShare(o, Math.max(0.02, Math.min(1, (xx - cx) / (COLW / 2 - 7)))); }
     render(); renderDetail(); scheduleOreRender(); }
   function renderDetail() {
     if (!detailEl) return;
@@ -1081,19 +1085,21 @@ const BlockChart = (function () {
       if (d <= T[i]) last = i; else break;
     } return last; }
 
-  // expected per-depth occupancy fraction of one vein (same smear the ore chart uses)
-  function depositFrac(m) {
+  // peak-normalised vertical shape of a vein: 1 at its densest depth, tapering to its bounds
+  function depShape(m) {
     const arr = new Float64Array(DMAX + 1);
     const ey = 0.62 * Math.cbrt(m.N) * m.bo, h = Math.max(1, Math.round(ey));
     const base = new Float64Array(DMAX + 1); for (let d = Math.max(0,m.sa); d <= m.sb && d <= DMAX; d++) base[d] = 1;
     const sm = new Float64Array(DMAX + 1);
     for (let d = 0; d <= DMAX; d++) { let acc = 0, ws = 0; for (let k = -h; k <= h; k++) { const wk = h + 1 - Math.abs(k), dd = d - k; if (dd >= 0 && dd <= DMAX) acc += base[dd]*wk; ws += wk; } sm[d] = acc/ws; }
     for (let d2 = 0; d2 <= DMAX; d2++) if (d2 < m.ba || d2 > m.bb) sm[d2] = 0;
-    let tot = 0; for (let d3 = 0; d3 <= DMAX; d3++) tot += sm[d3];
-    const w = m.spc * m.N;
-    if (tot > 0) for (let d4 = 0; d4 <= DMAX; d4++) arr[d4] = sm[d4]/tot*w;
+    let peak = 0; for (let d3 = 0; d3 <= DMAX; d3++) if (sm[d3] > peak) peak = sm[d3];
+    if (peak > 0) for (let d4 = 0; d4 <= DMAX; d4++) arr[d4] = sm[d4]/peak;
     return arr;
   }
+  // fraction of a vein's zone that fills with its block — saturates toward 1 as spawn chance / vein size grow
+  // (deposits seed at SpawnPercentChance and grow ~N blocks, so their zone fills far denser than the raw chance)
+  const depCover = m => 1 - Math.pow(1 - Math.max(0, Math.min(1, m.spc)), Math.max(1, m.N));
 
   // composition (raw block type -> fraction, sums to 1) at every depth 0..DMAX for one biome
   function computeComp(entry) {
@@ -1106,18 +1112,16 @@ const BlockChart = (function () {
       for (let d = 0; d <= DMAX; d++) baseP[selectBase(T, N, d)][d]++;
     }
     for (let i = 0; i < N; i++) for (let d = 0; d <= DMAX; d++) baseP[i][d] /= S;
-    const depFrac = {};
-    strata.forEach(st => st.deposits.forEach(dep => { const a = depositFrac(dep); const cur = depFrac[dep.block] || (depFrac[dep.block] = new Float64Array(DMAX + 1)); for (let d = 0; d <= DMAX; d++) cur[d] += a[d]; }));
+    // veins claim their share first (they overwrite as a post-pass in the game), first-wins by order; base + scatter fill the rest
+    const deps = []; strata.forEach(st => st.deposits.forEach(dep => deps.push({ block: dep.block, cov: depCover(dep), shape: depShape(dep) })));
     const addTo = (o, k, v) => { if (v > 0) o[k] = (o[k] || 0) + v; };
     for (let d = 0; d <= DMAX; d++) {
-      const c = {};
-      for (let i = 0; i < N; i++) { const p = baseP[i][d]; if (p <= 0) continue; const st = strata[i]; let remaining = 1;
-        for (const scb of st.scatters) { if (d >= scb.a && d <= scb.b) { const take = remaining * scb.pc; addTo(c, scb.block, p * take); remaining -= take; } }
-        addTo(c, st.block, p * remaining); }
-      let depTot = 0; for (const k in depFrac) depTot += depFrac[k][d];
-      if (depTot > 0) { const cap = Math.min(0.95, depTot), scale = 1 - cap, f = cap / depTot;
-        for (const k in c) c[k] *= scale;
-        for (const k in depFrac) addTo(c, k, depFrac[k][d] * f); }
+      const c = {}; let rem = 1;
+      for (const dp of deps) { const cs = dp.cov * dp.shape[d]; if (cs <= 0) continue; const take = rem * Math.min(1, cs); addTo(c, dp.block, take); rem -= take; }
+      const nonDep = rem; // fraction left for base rock + scatter, split by which stratum is selected
+      for (let i = 0; i < N; i++) { const p = baseP[i][d]; if (p <= 0) continue; const st = strata[i]; let sRem = 1;
+        for (const scb of st.scatters) { if (d >= scb.a && d <= scb.b) { const take = sRem * scb.pc; addTo(c, scb.block, nonDep * p * take); sRem -= take; } }
+        addTo(c, st.block, nonDep * p * sRem); }
       for (const k in c) raws.add(k);
       comp.push(c);
     }
