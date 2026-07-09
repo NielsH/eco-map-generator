@@ -123,9 +123,11 @@ const html = `<!DOCTYPE html>
   .mixRow .pct{color:var(--muted); width:14px;}
   .mixRow .mact{color:var(--accent); width:70px; text-align:right; font-size:11.5px;}
   .mixRow.mixGrass input{background:var(--surf1); color:var(--text2);}
-  #orePanel{display:none; margin-top:20px;}
   #chartsPanel{display:none; margin-top:20px;}
   #chartTabs button{font-size:13px; padding:6px 13px;}
+  #oreTabs button{font-size:13px; padding:6px 13px;}
+  #ovBiomes{display:flex; gap:6px; flex-wrap:wrap; margin:6px 0 2px;}
+  #ovLane svg{max-width:100%;}
   #oreEditor{display:flex; flex-direction:column; gap:6px; margin:8px 0 12px;}
   #oreEditor details{border:0.5px solid var(--border); border-radius:8px; background:var(--surf); padding:2px 10px;}
   #oreEditor summary{cursor:pointer; font-weight:600; font-size:13px; padding:5px 0; user-select:none;}
@@ -190,6 +192,7 @@ const html = `<!DOCTYPE html>
       <span class="seg" id="chartTabs" style="margin-left:4px">
         <button type="button" data-tab="block" class="on">Block composition</button>
         <button type="button" data-tab="ore">Ore distribution</button>
+        <button type="button" data-tab="edit">Editor</button>
       </span>
     </div>
 
@@ -216,6 +219,31 @@ const html = `<!DOCTYPE html>
       <div id="oreChartWrap"><div id="oreChart"></div><div id="oreTip"></div></div>
       <div id="oreLegend"></div>
     </div>
+
+    <div id="editTab" style="display:none">
+      <div style="display:flex;align-items:center;gap:10px;margin:2px 0 6px;flex-wrap:wrap;">
+        <span class="seg" id="oreTabs">
+          <button type="button" data-tab="visual" class="on">Visual editor</button>
+          <button type="button" data-tab="manual">Manual knobs</button>
+        </span>
+        <button id="oreHandoff" style="margin-left:auto">Open in ore visualizer ↗</button>
+      </div>
+      <div id="oreVisualTab">
+        <div class="lbl" style="margin:4px 0 6px">Pick a biome, then drag a vein/scatter to move it, drag its top/bottom edges to resize its depth range, or its right edge to change abundance. Click one to fine-tune or change its block.</div>
+        <div id="ovBiomes"></div>
+        <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start;margin-top:8px">
+          <div id="ovLane" style="flex:0 0 auto;border:0.5px solid var(--border);border-radius:12px;background:var(--surf);padding:6px 0;overflow-x:auto;max-width:100%"></div>
+          <div style="flex:1 1 240px;min-width:230px">
+            <div id="ovDetail"></div>
+            <div class="oreAdd" style="margin-top:8px"><button id="ovAddVein">+ vein</button><button id="ovAddScatter">+ scatter</button></div>
+          </div>
+        </div>
+      </div>
+      <div id="oreManualTab" style="display:none">
+        <div class="lbl" style="margin:4px 0 8px">Edit veins &amp; scatter for every biome, add/remove nodes — the distribution chart updates live.</div>
+        <div id="oreEditor"></div>
+      </div>
+    </div>
   </div>
 
   <div id="cfgPanel">
@@ -231,14 +259,6 @@ const html = `<!DOCTYPE html>
     </div>
   </div>
 
-  <div id="orePanel">
-    <div style="display:flex;align-items:center;gap:10px;margin:6px 0 2px;flex-wrap:wrap;">
-      <strong style="font-size:15px;">Block &amp; ore composition</strong>
-      <span class="lbl">edit veins &amp; scatter, add/remove nodes — the distribution chart updates live</span>
-      <button id="oreHandoff" style="margin-left:auto">Open in ore visualizer ↗</button>
-    </div>
-    <div id="oreEditor"></div>
-  </div>
 </div>
 
 <script type="text/plain" id="libsrc">
@@ -550,7 +570,7 @@ function loadConfigText(text) {
   $('cfgPanel').style.display = 'block';
   terrain = derefTerrain(rawJson);
   buildOreEditor();
-  $('orePanel').style.display = terrain ? 'block' : 'none';
+  OreVisual.build();
   $('chartsPanel').style.display = terrain ? 'block' : 'none';
   if (terrain) { const ej = buildExportJson(); OreChart.render(ej); BlockChart.render(ej); }
   generateMap(cfg);
@@ -687,9 +707,9 @@ function oreAdd(bi, type) {
   if (!bm.Module.BlockDepthRanges || !bm.Module.BlockDepthRanges.length) { bm.Module.BlockDepthRanges = [{ NoiseFrequency:40, Min:0, Max:0, BlockType:{ Type:'Eco.World.Blocks.DirtBlock, Eco.World' }, SubModules:[] }]; }
   const layer = bm.Module.BlockDepthRanges[0]; layer.SubModules = layer.SubModules || [];
   layer.SubModules.push(type === 'vein' ? tmplVein() : tmplScatter());
-  oreOpen.add(bm.BiomeName); buildOreEditor(); scheduleOreRender();
+  oreOpen.add(bm.BiomeName); buildOreEditor(); OreVisual.build(); scheduleOreRender();
 }
-function oreRemove(idx) { const e = oreNodes[idx]; if (!e) return; const i = e.sub.indexOf(e.node); if (i >= 0) e.sub.splice(i, 1); buildOreEditor(); scheduleOreRender(); }
+function oreRemove(idx) { const e = oreNodes[idx]; if (!e) return; const i = e.sub.indexOf(e.node); if (i >= 0) e.sub.splice(i, 1); buildOreEditor(); OreVisual.build(); scheduleOreRender(); }
 function buildOreEditor() {
   const host = $('oreEditor'); host.innerHTML = ''; oreNodes = [];
   if (!terrain || !terrain.Modules) { host.innerHTML = '<div class="lbl">This config has no TerrainModule to edit.</div>'; return; }
@@ -737,6 +757,110 @@ function wireOreEditor() {
 }
 let oreRenderTimer = null;
 function scheduleOreRender() { clearTimeout(oreRenderTimer); oreRenderTimer = setTimeout(() => { if (terrain) { const ej = buildExportJson(); OreChart.render(ej); BlockChart.render(ej); } }, 150); }
+
+// ---- visual ore editor: per-biome depth lane where each vein/scatter is a draggable object ----
+// Drag an object's body to move its DepthRange, drag its right edge to change abundance (SpawnPercentChance /
+// PercentChance). Click to select and fine-tune with the same knobs as the manual editor. Edits the real
+// TerrainModule node objects in place and shares scheduleOreRender so the charts + export stay in sync.
+const OreVisual = (function () {
+  const TOP = 16, SC = 2.2, X0 = 46, COLW = 58;
+  let biomeIdx = 0, sel = null, objs = [], maxD = 120, H = 0;
+  let laneEl = null, detailEl = null, svgEl = null;
+  let drag = null, startDepth = 0, snapMin = 0, snapMax = 0;
+  const cssv = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const biomes = () => (terrain && terrain.Modules) ? terrain.Modules : [];
+  // an object's bar width represents its share of blocks at its depth (same as the composition chart):
+  // scatter = PercentChance directly; vein = saturating cover 1-(1-spawn)^veinSize. Dragging width sets the share
+  // and back-solves the underlying config value.
+  const veinN = o => { const bc = o.node.BlocksCountRange || {}; return Math.max(1, ((bc.min != null ? bc.min : 1) + (bc.max != null ? bc.max : 1)) / 2); };
+  const shareOf = o => o.kind === 'dep' ? (1 - Math.pow(1 - Math.max(0, Math.min(1, o.node.SpawnPercentChance || 0)), veinN(o))) : Math.max(0, Math.min(1, o.node.PercentChance || 0));
+  const setShare = (o, frac) => { frac = Math.max(0, Math.min(1, frac));
+    if (o.kind === 'dep') o.node.SpawnPercentChance = +(1 - Math.pow(1 - frac, 1 / veinN(o))).toFixed(4);
+    else o.node.PercentChance = +frac.toFixed(3); };
+  const y = d => TOP + d * SC, d2y = yy => (yy - TOP) / SC;
+  function collect(bm) { const out = []; const rs = (bm.Module && bm.Module.BlockDepthRanges) || [];
+    rs.forEach(l => (l.SubModules || []).forEach(sm => { const ty = sm['$type'] || ''; const mat = oreMaterial(btOf(sm.BlockType)); if (!mat) return;
+      if (ty.indexOf('DepositTerrainModule') >= 0) out.push({ node: sm, kind: 'dep', sub: l.SubModules, mat });
+      else if (ty.indexOf('StandardTerrainModule') >= 0) out.push({ node: sm, kind: 'std', sub: l.SubModules, mat }); }));
+    return out; }
+  function render() {
+    const bms = biomes();
+    let chips = ''; bms.forEach((bm, i) => { const on = i === biomeIdx;
+      chips += '<button type="button" data-bi="' + i + '" style="font:inherit;font-size:13px;padding:5px 11px;border-radius:8px;border:0.5px solid ' + (on ? 'var(--accent)' : 'var(--border)') + ';background:' + (on ? 'var(--accent)' : 'var(--surf)') + ';color:' + (on ? '#fff' : 'var(--text)') + ';cursor:pointer">' + (ORE_DISP[bm.BiomeName] || bm.BiomeName) + '</button>'; });
+    $('ovBiomes').innerHTML = chips;
+    $('ovBiomes').querySelectorAll('button').forEach(b => b.onclick = () => { biomeIdx = +b.dataset.bi; sel = null; render(); renderDetail(); });
+    const bm = bms[biomeIdx]; objs = bm ? collect(bm) : [];
+    if (sel) { const f = objs.find(o => o.node === sel.node); sel = f || null; }
+    maxD = 60; objs.forEach(o => { const r = o.node.DepthRange || {}; maxD = Math.max(maxD, r.max || 0); if (o.kind === 'dep') { const dd = o.node.DepositDepthRange || {}; maxD = Math.max(maxD, dd.max || 0); } });
+    maxD = Math.min(220, Math.ceil((maxD + 10) / 20) * 20); H = TOP + maxD * SC + 34;
+    const W = Math.max(X0 + 130, X0 + objs.length * COLW + 30);
+    const cB = cssv('--border'), cM = cssv('--muted'), cT = cssv('--text'), cS = cssv('--text2');
+    const midY = TOP + maxD * SC * 0.5;
+    let s = '<svg id="ovSvg" xmlns="http://www.w3.org/2000/svg" width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '" style="display:block;touch-action:none;user-select:none;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">';
+    s += '<text x="12" y="' + midY + '" fill="' + cS + '" font-size="12" transform="rotate(-90 12 ' + midY + ')">Depth (blocks below surface)</text>';
+    for (let d = 0; d <= maxD; d += 20) { const yy = y(d); s += '<line x1="' + X0 + '" y1="' + yy + '" x2="' + W + '" y2="' + yy + '" stroke="' + cB + '"/><text x="' + (X0 - 8) + '" y="' + (yy + 4) + '" text-anchor="end" font-size="11" fill="' + cM + '">' + d + '</text>'; }
+    if (!objs.length) s += '<text x="' + (X0 + 30) + '" y="' + (TOP + 44) + '" fill="' + cM + '" font-size="12.5">No veins or scatter here yet — add one below.</text>';
+    objs.forEach((o, i) => { const x = X0 + i * COLW, cx = x + COLW / 2; const r = o.node.DepthRange || { min: 0, max: 10 };
+      const mn = Math.max(0, r.min || 0), mx = Math.max(mn + 1, r.max || 0); const yT = y(mn), yB = y(Math.min(maxD, mx));
+      const frac = Math.min(1, Math.max(0.06, shareOf(o))), wH = frac * (COLW / 2 - 7);
+      const col = blockColorRaw(btOf(o.node.BlockType)), seld = sel && o.node === sel.node;
+      s += '<rect x="' + (cx - wH).toFixed(1) + '" y="' + yT.toFixed(1) + '" width="' + (wH * 2).toFixed(1) + '" height="' + (yB - yT).toFixed(1) + '" rx="4" fill="' + col + '" fill-opacity="' + (o.kind === 'std' ? 0.72 : 0.92) + '"' + (seld ? ' stroke="' + cT + '" stroke-width="2"' : '') + '/>';
+      s += '<text x="' + cx + '" y="' + (H - 20) + '" text-anchor="middle" font-size="10.5" fill="' + (seld ? cT : cS) + '">' + ORE_NAME[o.mat] + '</text>';
+      s += '<text x="' + cx + '" y="' + (H - 8) + '" text-anchor="middle" font-size="9.5" fill="' + cM + '">' + (o.kind === 'dep' ? 'vein' : 'scatter') + '</text>';
+      const eh = Math.max(4, Math.min(8, (yB - yT) / 3));
+      s += '<rect x="' + (cx - wH).toFixed(1) + '" y="' + yT.toFixed(1) + '" width="' + (wH * 2).toFixed(1) + '" height="' + (yB - yT).toFixed(1) + '" fill="transparent" pointer-events="all" data-drag="' + i + '|move" style="cursor:move"/>';
+      s += '<rect x="' + (cx - wH).toFixed(1) + '" y="' + (yT - 3).toFixed(1) + '" width="' + (wH * 2).toFixed(1) + '" height="' + (eh + 3).toFixed(1) + '" fill="transparent" pointer-events="all" data-drag="' + i + '|t" style="cursor:ns-resize"/>';
+      s += '<rect x="' + (cx - wH).toFixed(1) + '" y="' + (yB - eh).toFixed(1) + '" width="' + (wH * 2).toFixed(1) + '" height="' + (eh + 3).toFixed(1) + '" fill="transparent" pointer-events="all" data-drag="' + i + '|b" style="cursor:ns-resize"/>';
+      s += '<rect x="' + (cx + wH - 7).toFixed(1) + '" y="' + (yT + eh).toFixed(1) + '" width="14" height="' + Math.max(1, (yB - yT - eh * 2)).toFixed(1) + '" fill="transparent" pointer-events="all" data-drag="' + i + '|w" style="cursor:ew-resize"/>';
+    });
+    s += '</svg>';
+    laneEl.innerHTML = s; svgEl = document.getElementById('ovSvg');
+    svgEl.addEventListener('pointerdown', onDown);
+  }
+  function onDown(e) { const t = e.target; if (!t || !t.dataset || !t.dataset.drag) return; const p = t.dataset.drag.split('|');
+    sel = objs[+p[0]]; drag = { i: +p[0], o: objs[+p[0]], k: p[1] }; const r = svgEl.getBoundingClientRect();
+    startDepth = d2y((e.clientY - r.top) * (H / r.height)); const rg = drag.o.node.DepthRange || {}; snapMin = rg.min || 0; snapMax = rg.max || 0;
+    e.preventDefault(); render(); renderDetail(); }
+  function onMove(e) { if (!drag) return; const r = svgEl.getBoundingClientRect(); const o = drag.o;
+    if (drag.k === 'move') { const d = d2y((e.clientY - r.top) * (H / r.height)); const span = snapMax - snapMin;
+      let nmin = Math.max(0, Math.min(maxD - span, Math.round(snapMin + (d - startDepth)))); o.node.DepthRange = o.node.DepthRange || {}; o.node.DepthRange.min = nmin; o.node.DepthRange.max = nmin + span; }
+    else if (drag.k === 't') { const d = Math.round(d2y((e.clientY - r.top) * (H / r.height))); o.node.DepthRange = o.node.DepthRange || {}; o.node.DepthRange.min = Math.max(0, Math.min((o.node.DepthRange.max || 0) - 1, d)); }
+    else if (drag.k === 'b') { const d = Math.round(d2y((e.clientY - r.top) * (H / r.height))); o.node.DepthRange = o.node.DepthRange || {}; o.node.DepthRange.max = Math.max((o.node.DepthRange.min || 0) + 1, Math.min(maxD, d)); }
+    else if (drag.k === 'w') { const W = svgEl.viewBox.baseVal.width, cx = X0 + drag.i * COLW + COLW / 2; const xx = (e.clientX - r.left) * (W / r.width);
+      setShare(o, Math.max(0.02, Math.min(1, (xx - cx) / (COLW / 2 - 7)))); }
+    render(); renderDetail(); scheduleOreRender(); }
+  function renderDetail() {
+    if (!detailEl) return;
+    if (!sel) { detailEl.innerHTML = '<div class="lbl" style="padding:6px 0">Click a vein or scatter to fine-tune it or change its block — or add one below.</div>'; return; }
+    const o = sel, opts = collectBlockTypes(), dep = o.kind === 'dep';
+    const dot = '<span class="ndot" style="background:' + ORE_COL[o.mat] + '"></span>', del = '<button class="ndel" title="Remove this node">✕</button>';
+    let h = '<div class="oreNode" style="border-top:none">' + dot + '<span class="tag">' + (dep ? 'vein' : 'scatter') + '</span>' + blockSelect(btOf(o.node.BlockType), opts);
+    h += dep ? (knob1('SpawnPercentChance', o.node.SpawnPercentChance) + knobR('DepthRange', o.node.DepthRange) + knobR('BlocksCountRange', o.node.BlocksCountRange))
+             : (knob1('PercentChance', o.node.PercentChance) + knobR('DepthRange', o.node.DepthRange) + knob1('NoiseFrequency', o.node.NoiseFrequency));
+    h += del + '</div>'; detailEl.innerHTML = h; wireDetail(o);
+  }
+  function wireDetail(o) { const node = o.node;
+    detailEl.querySelectorAll('input,select').forEach(inp => inp.addEventListener('input', () => {
+      const f = inp.dataset.f; if (!f) return;
+      if (f === 'block') { node.BlockType = node.BlockType || {}; node.BlockType.Type = inp.value; o.mat = oreMaterial(inp.value) || o.mat; render(); scheduleOreRender(); return; }
+      const val = parseFloat(inp.value); if (!isFinite(val)) return;
+      if (f.endsWith('_min') || f.endsWith('_max')) { const key = f.slice(0, -4), mm = f.slice(-3); node[key] = node[key] || {}; node[key][mm] = val; } else node[f] = val;
+      detailEl.querySelectorAll('input[data-f="' + f + '"]').forEach(sib => { if (sib === inp) return; if (sib.type === 'range' && val > +sib.max) sib.max = val; sib.value = val; });
+      render(); scheduleOreRender();
+    }));
+    const d = detailEl.querySelector('.ndel'); if (d) d.onclick = () => { const idx = o.sub.indexOf(o.node); if (idx >= 0) o.sub.splice(idx, 1); sel = null; buildOreEditor(); render(); renderDetail(); scheduleOreRender(); };
+  }
+  function add(type) { const bm = biomes()[biomeIdx]; if (!bm) return; bm.Module = bm.Module || {};
+    if (!bm.Module.BlockDepthRanges || !bm.Module.BlockDepthRanges.length) bm.Module.BlockDepthRanges = [{ NoiseFrequency: 40, Min: 0, Max: 0, BlockType: { Type: 'Eco.World.Blocks.DirtBlock, Eco.World' }, SubModules: [] }];
+    const layer = bm.Module.BlockDepthRanges[0]; layer.SubModules = layer.SubModules || []; const n = type === 'vein' ? tmplVein() : tmplScatter();
+    layer.SubModules.push(n); buildOreEditor(); render(); sel = objs.find(x => x.node === n) || null; renderDetail(); scheduleOreRender(); }
+  function build() { laneEl = $('ovLane'); detailEl = $('ovDetail');
+    if (!terrain || !terrain.Modules) { if (laneEl) laneEl.innerHTML = '<div class="lbl" style="padding:10px">No TerrainModule to edit.</div>'; if (detailEl) detailEl.innerHTML = ''; return; }
+    if (biomeIdx >= terrain.Modules.length) biomeIdx = 0; render(); renderDetail(); }
+  function init() { document.addEventListener('pointermove', onMove); document.addEventListener('pointerup', () => { drag = null; });
+    $('ovAddVein').onclick = () => add('vein'); $('ovAddScatter').onclick = () => add('scatter'); }
+  return { build, init };
+})();
 
 // ---- ore-distribution chart (port of WorldGenOreVisualizer) ----
 const OreChart = (function () {
@@ -961,19 +1085,21 @@ const BlockChart = (function () {
       if (d <= T[i]) last = i; else break;
     } return last; }
 
-  // expected per-depth occupancy fraction of one vein (same smear the ore chart uses)
-  function depositFrac(m) {
+  // peak-normalised vertical shape of a vein: 1 at its densest depth, tapering to its bounds
+  function depShape(m) {
     const arr = new Float64Array(DMAX + 1);
     const ey = 0.62 * Math.cbrt(m.N) * m.bo, h = Math.max(1, Math.round(ey));
     const base = new Float64Array(DMAX + 1); for (let d = Math.max(0,m.sa); d <= m.sb && d <= DMAX; d++) base[d] = 1;
     const sm = new Float64Array(DMAX + 1);
     for (let d = 0; d <= DMAX; d++) { let acc = 0, ws = 0; for (let k = -h; k <= h; k++) { const wk = h + 1 - Math.abs(k), dd = d - k; if (dd >= 0 && dd <= DMAX) acc += base[dd]*wk; ws += wk; } sm[d] = acc/ws; }
     for (let d2 = 0; d2 <= DMAX; d2++) if (d2 < m.ba || d2 > m.bb) sm[d2] = 0;
-    let tot = 0; for (let d3 = 0; d3 <= DMAX; d3++) tot += sm[d3];
-    const w = m.spc * m.N;
-    if (tot > 0) for (let d4 = 0; d4 <= DMAX; d4++) arr[d4] = sm[d4]/tot*w;
+    let peak = 0; for (let d3 = 0; d3 <= DMAX; d3++) if (sm[d3] > peak) peak = sm[d3];
+    if (peak > 0) for (let d4 = 0; d4 <= DMAX; d4++) arr[d4] = sm[d4]/peak;
     return arr;
   }
+  // fraction of a vein's zone that fills with its block — saturates toward 1 as spawn chance / vein size grow
+  // (deposits seed at SpawnPercentChance and grow ~N blocks, so their zone fills far denser than the raw chance)
+  const depCover = m => 1 - Math.pow(1 - Math.max(0, Math.min(1, m.spc)), Math.max(1, m.N));
 
   // composition (raw block type -> fraction, sums to 1) at every depth 0..DMAX for one biome
   function computeComp(entry) {
@@ -986,18 +1112,16 @@ const BlockChart = (function () {
       for (let d = 0; d <= DMAX; d++) baseP[selectBase(T, N, d)][d]++;
     }
     for (let i = 0; i < N; i++) for (let d = 0; d <= DMAX; d++) baseP[i][d] /= S;
-    const depFrac = {};
-    strata.forEach(st => st.deposits.forEach(dep => { const a = depositFrac(dep); const cur = depFrac[dep.block] || (depFrac[dep.block] = new Float64Array(DMAX + 1)); for (let d = 0; d <= DMAX; d++) cur[d] += a[d]; }));
+    // veins claim their share first (they overwrite as a post-pass in the game), first-wins by order; base + scatter fill the rest
+    const deps = []; strata.forEach(st => st.deposits.forEach(dep => deps.push({ block: dep.block, cov: depCover(dep), shape: depShape(dep) })));
     const addTo = (o, k, v) => { if (v > 0) o[k] = (o[k] || 0) + v; };
     for (let d = 0; d <= DMAX; d++) {
-      const c = {};
-      for (let i = 0; i < N; i++) { const p = baseP[i][d]; if (p <= 0) continue; const st = strata[i]; let remaining = 1;
-        for (const scb of st.scatters) { if (d >= scb.a && d <= scb.b) { const take = remaining * scb.pc; addTo(c, scb.block, p * take); remaining -= take; } }
-        addTo(c, st.block, p * remaining); }
-      let depTot = 0; for (const k in depFrac) depTot += depFrac[k][d];
-      if (depTot > 0) { const cap = Math.min(0.95, depTot), scale = 1 - cap, f = cap / depTot;
-        for (const k in c) c[k] *= scale;
-        for (const k in depFrac) addTo(c, k, depFrac[k][d] * f); }
+      const c = {}; let rem = 1;
+      for (const dp of deps) { const cs = dp.cov * dp.shape[d]; if (cs <= 0) continue; const take = rem * Math.min(1, cs); addTo(c, dp.block, take); rem -= take; }
+      const nonDep = rem; // fraction left for base rock + scatter, split by which stratum is selected
+      for (let i = 0; i < N; i++) { const p = baseP[i][d]; if (p <= 0) continue; const st = strata[i]; let sRem = 1;
+        for (const scb of st.scatters) { if (d >= scb.a && d <= scb.b) { const take = sRem * scb.pc; addTo(c, scb.block, nonDep * p * take); sRem -= take; } }
+        addTo(c, st.block, nonDep * p * sRem); }
       for (const k in c) raws.add(k);
       comp.push(c);
     }
@@ -1224,11 +1348,21 @@ $('cv').addEventListener('mouseleave', ()=>{ $('tip').style.display='none'; });
 buildForm();
 OreChart.init();
 BlockChart.init();
+OreVisual.init();
 // underground charts: two tabs in one panel, Block composition default
 (function initChartTabs(){
   const tabs = $('chartTabs');
-  const show = t => { $('blockTab').style.display = t === 'block' ? '' : 'none'; $('oreTab').style.display = t === 'ore' ? '' : 'none';
-    for (const b of tabs.children) b.classList.toggle('on', b.dataset.tab === t); };
+  const show = t => { $('blockTab').style.display = t === 'block' ? '' : 'none'; $('oreTab').style.display = t === 'ore' ? '' : 'none'; $('editTab').style.display = t === 'edit' ? '' : 'none';
+    for (const b of tabs.children) b.classList.toggle('on', b.dataset.tab === t);
+    if (t === 'edit' && terrain) { if ($('oreManualTab').style.display === 'none') OreVisual.build(); else buildOreEditor(); } };
+  for (const b of tabs.children) b.onclick = () => show(b.dataset.tab);
+})();
+// block & ore editor: Visual editor / Manual knobs tabs (rebuild the shown tab so edits in the other stay in sync)
+(function initOreTabs(){
+  const tabs = $('oreTabs');
+  const show = t => { $('oreVisualTab').style.display = t === 'visual' ? '' : 'none'; $('oreManualTab').style.display = t === 'manual' ? '' : 'none';
+    for (const b of tabs.children) b.classList.toggle('on', b.dataset.tab === t);
+    if (terrain) { if (t === 'visual') OreVisual.build(); else buildOreEditor(); } };
   for (const b of tabs.children) b.onclick = () => show(b.dataset.tab);
 })();
 $('oreHandoff').onclick = oreHandoff;
