@@ -79,12 +79,22 @@ model's honesty caveats). Underground editing changes the ore chart + the export
 - On load, `derefTerrain()` resolves the `TerrainModule`'s `$id`/`$ref` graph into a plain editable tree
   (keeps `$type`, drops `$id`/`$ref`) stored in the global `terrain`. Export writes it back as plain JSON
   (no cycles, so it deserializes fine without the reference ids).
-- The focused editor exposes material-bearing **veins** (`DepositTerrainModule`) and **scatter**
+- The **Manual knobs** editor exposes material-bearing **veins** (`DepositTerrainModule`) and **scatter**
   (`StandardTerrainModule`) with slider+number knobs; add/remove per biome. `oreOpen` preserves which
   `<details>` are expanded across rebuilds.
-- `OreChart` is ported from the eco-biome-visualizer (`extract`/`depthProfile`/`smearY`/`render`). It runs on
-  the live `buildExportJson()`. The hand-off button posts that config to the standalone visualizer
-  (`eco-oreviz-ready` → `eco-config` postMessage handshake).
+- The **Visual editor** (`OreVisual` IIFE in `build.js`) draws the whole underground for one biome as a single
+  100%-stacked column and lets you drag blocks to edit them. It builds a per-**depth** composition (veins
+  overwrite first-wins, then each stratum's rock is carved by its scatters — the same model as `BlockChart`),
+  then **projects it onto real world height**: it ports `BlockChart.projectToY`, averaging the depth
+  composition over the biome's surface band (`surfOf` via the `ELEV` map + water level) so the surface sits at
+  its true Y with air above and a soft taper through the band. The column is centred and tiles exactly
+  (`fracY`/`cumY`/`xOf`), so it's gap-free. Editing stays depth-based: pointer-Y maps back to depth through the
+  surface **midpoint** (`depthAtSvgY`), so drags past the midpoint can fall off-screen — use the detail-panel
+  number inputs for those. Vertical scale is `SCe = 1000 / max(60, MaxGenerationHeight)` (taller worlds scale up).
+- Two charts render from the live `buildExportJson()`: **`BlockChart`** (the 100%-stacked block-composition
+  chart the Visual editor is designed to match) and **`OreChart`**, ported from the eco-biome-visualizer
+  (`extract`/`depthProfile`/`smearY`/`render`). The hand-off button posts the config to the standalone
+  visualizer (`eco-oreviz-ready` → `eco-config` postMessage handshake).
 
 ## Gotchas (learned the hard way)
 
