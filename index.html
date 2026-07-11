@@ -98,6 +98,14 @@
   .oreNode .dash{color:var(--muted);}
   .oreNode .ndel{margin-left:auto; border:none; background:transparent; color:var(--muted); font-size:13px; padding:2px 7px; cursor:pointer; border-radius:5px;}
   .oreNode .ndel:hover{color:#c0392b; background:var(--surf1);}
+  .ovRow{display:flex; align-items:center; gap:6px; padding:3px 6px; border-radius:6px; cursor:pointer; font-size:12px; line-height:1.5;}
+  .ovRow:hover{background:var(--surf1);}
+  .ovRow.sel{outline:1.5px solid var(--accent); background:var(--surf1);}
+  .ovRow .ltag{color:var(--muted); font-size:9.5px; text-transform:uppercase; letter-spacing:.03em; flex:0 0 auto; width:44px;}
+  .ovRow .lnm{flex:1 1 auto; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .ovRow .ndel{border:none; background:transparent; color:var(--muted); font-size:12px; padding:0 5px; cursor:pointer; border-radius:5px; opacity:0; flex:0 0 auto;}
+  .ovRow:hover .ndel, .ovRow.sel .ndel{opacity:1;}
+  .ovRow .ndel:hover{color:#c0392b; background:var(--surf);}
   .oreAdd{display:flex; gap:8px; padding:9px 0 5px;}
   .oreAdd button{font-size:12px; padding:4px 11px;}
   #oreChartWrap{width:100%; overflow-x:auto; position:relative; border:0.5px solid var(--border); border-radius:12px; background:var(--surf); padding:6px 0; margin-top:4px;}
@@ -183,11 +191,13 @@
         <button id="oreHandoff" style="margin-left:auto">Open in ore visualizer ↗</button>
       </div>
       <div id="oreVisualTab">
-        <div class="lbl" style="margin:4px 0 6px">Pick a biome, then drag a vein/scatter to move it, drag its top/bottom edges to resize its depth range, or its right edge to change abundance. Click one to fine-tune or change its block.</div>
+        <div class="lbl" style="margin:4px 0 6px">Pick a biome — the column shows the whole mix at real world height (surface at its true Y, air above, smeared over the surface band), matching the block-composition chart. Click any block to edit it; drag a vein to move it, its top/bottom edges to resize its depth, its inner edge to change abundance, or a base-rock boundary to move where a layer ends.</div>
         <div id="ovBiomes"></div>
-        <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start;margin-top:8px">
-          <div id="ovLane" style="flex:0 0 auto;border:0.5px solid var(--border);border-radius:12px;background:var(--surf);padding:6px 0;overflow-x:auto;max-width:100%"></div>
-          <div style="flex:1 1 240px;min-width:230px">
+        <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start;justify-content:center;margin-top:8px">
+          <div id="ovLane" style="flex:0 0 auto;border:0.5px solid var(--border);border-radius:12px;background:var(--surf);padding:6px 10px;overflow-x:auto;max-width:100%"></div>
+          <div style="flex:1 1 240px;min-width:230px;max-width:340px">
+            <div class="lbl" style="margin:0 0 4px">All blocks — click to select, ✕ to remove</div>
+            <div id="ovList" style="max-height:260px;overflow-y:auto;margin-bottom:10px;border:0.5px solid var(--border);border-radius:8px;padding:4px"></div>
             <div id="ovDetail"></div>
             <div class="oreAdd" style="margin-top:8px"><button id="ovAddVein">+ vein</button><button id="ovAddScatter">+ scatter</button></div>
           </div>
@@ -6844,9 +6854,10 @@ const ORE_SLIDER = {
   PercentChance:      { min:0, max:1,    step:0.01 },
   NoiseFrequency:     { min:0, max:100,  step:1 },
   DepthRange:         { min:0, max:120,  step:1 },
+  DepositDepthRange:  { min:0, max:120,  step:1 },
   BlocksCountRange:   { min:0, max:300,  step:1 },
 };
-const KNOB_LABEL = { SpawnPercentChance:'chance', PercentChance:'chance', NoiseFrequency:'freq', DepthRange:'depth', BlocksCountRange:'blocks (vein size)' };
+const KNOB_LABEL = { SpawnPercentChance:'chance', PercentChance:'chance', NoiseFrequency:'freq', DepthRange:'seed depth', DepositDepthRange:'grows over', BlocksCountRange:'blocks (vein size)' };
 const sMax = (f, v) => { const c = ORE_SLIDER[f]; v = v || 0; return c.step < 1 ? Math.max(c.max, +(v * 1.25).toFixed(4)) : Math.max(c.max, Math.ceil(v)); };
 const sFmt = (f, v) => (ORE_SLIDER[f].step < 1 ? String(+(+v).toFixed(4)) : String(Math.round(v)));
 function collectBlockTypes() {
@@ -6928,12 +6939,18 @@ function scheduleOreRender() { clearTimeout(oreRenderTimer); oreRenderTimer = se
 // PercentChance). Click to select and fine-tune with the same knobs as the manual editor. Edits the real
 // TerrainModule node objects in place and shares scheduleOreRender so the charts + export stay in sync.
 const OreVisual = (function () {
-  const TOP = 16, SC = 2.2, X0 = 46, COLW = 58;
-  let biomeIdx = 0, sel = null, objs = [], maxD = 120, H = 0;
-  let laneEl = null, detailEl = null, svgEl = null;
+  const TOP = 16, SC = 5, X0 = 46, COLW = 58, Wc = 300, MINW = 5, MINBH = 16;
+  let biomeIdx = 0, sel = null, objs = [], strata = [], maxD = 120, H = 0, oreX = X0, lastBands = [], oreLayout = [];
+  // world-height projection state (set each render): the biome's surface band, the vertical axis, and the centred column
+  let surfLo = 60, surfHi = 60, surfMid = 60, YmaxE = 120, SCe = 3, TOPY = 18, cxE = 0, maxHW = 0;
+  const ELEV = { Grassland:[.02,.4], WarmForest:[.1,.5], ColdForest:[.1,.7], RainForest:[.1,.5], Desert:[.02,.2], Taiga:[.3,1], Tundra:[.4,1], Ice:[.6,1], Wetland:[.02,.3], ColdCoast:[.05,.1], WarmCoast:[.05,.1] };
+  const waterLvl = () => { const el = $('cf_waterLevel'); const v = el ? parseInt(el.value, 10) : 60; return isFinite(v) ? v : 60; };
+  let laneEl = null, detailEl = null, listEl = null, svgEl = null;
   let drag = null, startDepth = 0, snapMin = 0, snapMax = 0;
   const cssv = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   const biomes = () => (terrain && terrain.Modules) ? terrain.Modules : [];
+  // the depth axis spans the world's max generation height (blocks can't go below Y0), same for every biome
+  const worldMaxD = () => { const el = $('cf_maxGenerationHeight'); const v = el ? parseInt(el.value, 10) : 120; return (isFinite(v) && v > 0) ? v : 120; };
   // an object's bar width represents its share of blocks at its depth (same as the composition chart):
   // scatter = PercentChance directly; vein = saturating cover 1-(1-spawn)^veinSize. Dragging width sets the share
   // and back-solves the underlying config value.
@@ -6942,86 +6959,250 @@ const OreVisual = (function () {
   const setShare = (o, frac) => { frac = Math.max(0, Math.min(1, frac));
     if (o.kind === 'dep') o.node.SpawnPercentChance = +(1 - Math.pow(1 - frac, 1 / veinN(o))).toFixed(4);
     else o.node.PercentChance = +frac.toFixed(3); };
-  const y = d => TOP + d * SC, d2y = yy => (yy - TOP) / SC;
+  // a vein doesn't fill a flat box: it seeds within its DepthRange and grows blocks across its (usually larger)
+  // DepositDepthRange, densest at the seed and tapering out. Mirror the composition chart's depShape so the views agree.
+  const meanW = node => { const dw = node.DirectionWeights || []; if (!dw.length) return [1, 1, 1]; let x = 0, yy = 0, z = 0; for (let i = 0; i < dw.length; i++) { x += dw[i].X || 0; yy += dw[i].Y || 0; z += dw[i].Z || 0; } return [x / dw.length, yy / dw.length, z / dw.length]; };
+  const vBoost = (wx, wy, wz) => { wx = Math.max(wx, 1e-6); wy = Math.max(wy, 1e-6); wz = Math.max(wz, 1e-6); return Math.pow(wy, 2 / 3) / Math.pow(wx * wz, 1 / 3); };
+  function veinShape(node, sa, sb, ba, bb, md) {
+    const bc = node.BlocksCountRange || {}, N = Math.max(1, ((bc.min != null ? bc.min : 1) + (bc.max != null ? bc.max : 1)) / 2);
+    const mw = meanW(node), h = Math.max(1, Math.round(0.62 * Math.cbrt(N) * vBoost(mw[0], mw[1], mw[2])));
+    const base = new Float64Array(md + 1); for (let d = Math.max(0, sa); d <= Math.min(md, sb); d++) base[d] = 1;
+    const sm = new Float64Array(md + 1);
+    for (let d = 0; d <= md; d++) { let acc = 0, ws = 0; for (let k = -h; k <= h; k++) { const wk = h + 1 - Math.abs(k), dd = d - k; if (dd >= 0 && dd <= md) acc += base[dd] * wk; ws += wk; } sm[d] = acc / ws; }
+    for (let d = 0; d <= md; d++) if (d < ba || d > bb) sm[d] = 0;
+    let peak = 0; for (let d = 0; d <= md; d++) if (sm[d] > peak) peak = sm[d];
+    const arr = new Float64Array(md + 1); if (peak > 0) for (let d = 0; d <= md; d++) arr[d] = sm[d] / peak;
+    return arr;
+  }
+  // world-height axis (matches the block-composition chart): linear in world Y. A depth maps to Y through the
+  // biome's MEAN surface (surfMid); the display smears each depth across the whole surface band, but a single
+  // drag handle sits at the band midpoint. Pointer Y -> depth is the inverse, so dragging down = deeper.
+  const pyE = Y => TOPY + (YmaxE - Y) * SCe;                    // world Y -> svg pixel-y
+  const svgY2Y = sy => YmaxE - (sy - TOPY) / SCe;              // svg pixel-y -> world Y
+  const depthAtSvgY = sy => surfMid - svgY2Y(sy);             // svg pixel-y -> depth below surface
+  const yAtDepth = d => pyE(surfMid - d);                      // depth -> svg pixel-y (handle placement)
+  const clampY = Y => Math.max(0, Math.min(YmaxE, Y));
+  // every vein/scatter, including non-ore blocks (Empty caves, soil, crushed rock) the composition chart shows, so the two agree
   function collect(bm) { const out = []; const rs = (bm.Module && bm.Module.BlockDepthRanges) || [];
-    rs.forEach(l => (l.SubModules || []).forEach(sm => { const ty = sm['$type'] || ''; const mat = oreMaterial(btOf(sm.BlockType)); if (!mat) return;
-      if (ty.indexOf('DepositTerrainModule') >= 0) out.push({ node: sm, kind: 'dep', sub: l.SubModules, mat });
-      else if (ty.indexOf('StandardTerrainModule') >= 0) out.push({ node: sm, kind: 'std', sub: l.SubModules, mat }); }));
+    rs.forEach(l => (l.SubModules || []).forEach(sm => { const ty = sm['$type'] || ''; const bt = btOf(sm.BlockType); if (!bt) return; const mat = oreMaterial(bt);
+      if (ty.indexOf('DepositTerrainModule') >= 0) out.push({ node: sm, kind: 'dep', sub: l.SubModules, mat, parent: l });
+      else if (ty.indexOf('StandardTerrainModule') >= 0) out.push({ node: sm, kind: 'std', sub: l.SubModules, mat, parent: l }); }));
     return out; }
+  // display name for a node: ore label if it's an ore, otherwise the block's own pretty name
+  const oreLabel = o => ORE_NAME[o.mat] || prettyName(shortBlock(btOf(o.node.BlockType)));
+  const oreDot = o => ORE_COL[o.mat] || blockColorRaw(btOf(o.node.BlockType));
+  // base rock strata: the BlockDepthRanges that carry a base block (the bulk fill the composition chart shows)
+  function collectStrata(bm) { const rs = (bm.Module && bm.Module.BlockDepthRanges) || [], list = [];
+    rs.forEach(l => { const b = btOf(l.BlockType); if (b) list.push({ node: l, block: b, min: Math.max(0, l.Min | 0), max: Math.max(l.Min | 0, l.Max | 0) }); }); return list; }
+  const mulb = a => () => { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  function selBase(T, N, d) { let last = N - 1; for (let i = N - 2; i >= 0; i--) { let sk = false; for (let j = i + 1; j < N; j++) { if (T[j] <= T[i]) { sk = true; break; } } if (sk) continue; if (d <= T[i]) last = i; else break; } return last; }
+  // which base stratum dominates each depth (same threshold model the composition chart uses), grouped into contiguous bands
+  function baseBands(list, md) { const N = list.length; if (!N) return { bands: [], prob: [] };
+    const cnt = list.map(() => new Float64Array(md + 1)), S = 120, rnd = mulb(0x51ed3c), T = new Float64Array(N);
+    for (let s = 0; s < S; s++) { for (let i = 0; i < N; i++) T[i] = list[i].min + rnd() * (list[i].max - list[i].min); for (let d = 0; d <= md; d++) cnt[selBase(T, N, d)][d]++; }
+    const bands = []; let cur = -1, start = 0;
+    for (let d = 0; d <= md; d++) { let bi = 0, bv = -1; for (let i = 0; i < N; i++) if (cnt[i][d] > bv) { bv = cnt[i][d]; bi = i; }
+      if (bi !== cur) { if (cur >= 0) bands.push({ st: list[cur], si: cur, top: start, bot: d - 1 }); cur = bi; start = d; } }
+    if (cur >= 0) bands.push({ st: list[cur], si: cur, top: start, bot: md });
+    for (let i = 0; i < N; i++) for (let d = 0; d <= md; d++) cnt[i][d] /= S;
+    return { bands: bands, prob: cnt }; }
+  const labelColor = c => { if (c && c[0] === '#') { let h = c.slice(1); if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2]; const r = parseInt(h.slice(0,2),16), g = parseInt(h.slice(2,4),16), b = parseInt(h.slice(4,6),16); return (0.299*r + 0.587*g + 0.114*b) > 150 ? '#1a1a18' : '#f5f5f0'; } return '#1a1a18'; };
   function render() {
     const bms = biomes();
     let chips = ''; bms.forEach((bm, i) => { const on = i === biomeIdx;
       chips += '<button type="button" data-bi="' + i + '" style="font:inherit;font-size:13px;padding:5px 11px;border-radius:8px;border:0.5px solid ' + (on ? 'var(--accent)' : 'var(--border)') + ';background:' + (on ? 'var(--accent)' : 'var(--surf)') + ';color:' + (on ? '#fff' : 'var(--text)') + ';cursor:pointer">' + (ORE_DISP[bm.BiomeName] || bm.BiomeName) + '</button>'; });
     $('ovBiomes').innerHTML = chips;
-    $('ovBiomes').querySelectorAll('button').forEach(b => b.onclick = () => { biomeIdx = +b.dataset.bi; sel = null; render(); renderDetail(); });
-    const bm = bms[biomeIdx]; objs = bm ? collect(bm) : [];
-    if (sel) { const f = objs.find(o => o.node === sel.node); sel = f || null; }
-    maxD = 60; objs.forEach(o => { const r = o.node.DepthRange || {}; maxD = Math.max(maxD, r.max || 0); if (o.kind === 'dep') { const dd = o.node.DepositDepthRange || {}; maxD = Math.max(maxD, dd.max || 0); } });
-    maxD = Math.min(220, Math.ceil((maxD + 10) / 20) * 20); H = TOP + maxD * SC + 34;
-    const W = Math.max(X0 + 130, X0 + objs.length * COLW + 30);
-    const cB = cssv('--border'), cM = cssv('--muted'), cT = cssv('--text'), cS = cssv('--text2');
-    const midY = TOP + maxD * SC * 0.5;
+    $('ovBiomes').querySelectorAll('button').forEach(b => b.onclick = () => { biomeIdx = +b.dataset.bi; sel = null; render(); renderDetail(); renderList(); });
+    const bm = bms[biomeIdx]; objs = bm ? collect(bm) : []; strata = bm ? collectStrata(bm) : [];
+    if (sel) { if (sel.kind === 'strat') { const f = strata.find(st => st.node === sel.node); sel = f ? { kind: 'strat', node: f.node, block: f.block } : null; } else { const f = objs.find(o => o.node === sel.node); sel = f || null; } }
+    maxD = Math.max(20, worldMaxD());
+    const hasBase = strata.length > 0; let baseProb = [];
+    if (hasBase) { const bb = baseBands(strata, maxD); lastBands = bb.bands; baseProb = bb.prob; } else lastBands = [];
+    const stratIdxOf = new Map(); strata.forEach((st, i) => stratIdxOf.set(st.node, i));
+    // crushed variants share their solid twin's raw colour (and often the base rock's), so lighten them to read as a distinct paler shade
+    const oreCol = bt => isCrushed(bt) ? lightenColor(blockColorRaw(bt)) : blockColorRaw(bt);
+    const oi = objs.map(o => { const bt = btOf(o.node.BlockType);
+      if (o.kind === 'dep') { const dr = o.node.DepthRange || {}, dd = o.node.DepositDepthRange || {};
+        const sa = Math.max(0, dr.min | 0), sb = Math.max(sa, Math.min(maxD, dr.max | 0));
+        const ba = Math.max(0, Math.min(sa, dd.min != null ? dd.min | 0 : sa)), bb = Math.min(maxD, Math.max(sb, dd.max != null ? dd.max | 0 : sb));
+        return { o, mn: ba, mx: Math.max(ba + 1, bb), sa, sb, shape: veinShape(o.node, sa, sb, ba, bb, maxD), sh: Math.max(0, Math.min(1, shareOf(o))), col: oreCol(bt) }; }
+      const r = o.node.DepthRange || { min: 0, max: 10 }; const mn = Math.max(0, r.min | 0), mx = Math.max(mn + 1, Math.min(maxD, r.max | 0));
+      return { o, mn, mx, sh: Math.max(0, Math.min(1, shareOf(o))), col: oreCol(bt) }; });
+    // ---- world-height view: build the depth composition (as before), then project it onto real world Y ----
+    const WL = waterLvl(); YmaxE = maxD;
+    const elv = ELEV[bm ? bm.BiomeName : ''] || [.1, .5];
+    surfLo = Math.round(WL + elv[0] * (YmaxE - WL)); surfHi = Math.round(WL + elv[1] * (YmaxE - WL));
+    surfMid = (surfLo + surfHi) / 2;
+    SCe = 1000 / Math.max(60, YmaxE); TOPY = 18;
+    const colBot = pyE(0); H = colBot + 24;
+    const CX = X0, W = CX + Wc + 16; cxE = CX + Wc / 2; maxHW = Wc / 2 - 4;
+    const cB = cssv('--border'), cM = cssv('--muted'), cT = cssv('--text'), cS = cssv('--text2'), cWl = cssv('--water') || '#3987e5';
+    // a scatter only shows in proportion to how often its own rock layer is generated at that depth; a vein overwrites across layers
+    const shAt = (i, d) => { const info = oi[i]; if (d < info.mn || d > info.mx || info.sh <= 0) return 0;
+      if (info.shape) return info.sh * info.shape[d];
+      if (info.o.kind === 'std' && hasBase) { const pi = stratIdxOf.get(info.o.parent); if (pi != null) return info.sh * baseProb[pi][d]; }
+      return info.sh; };
+    // one 100% column at each DEPTH: veins overwrite first (first-wins), then each stratum's rock is carved by its scatters
+    const N = strata.length;
+    const veinIdx = [], scatBy = strata.map(() => []), orphan = [];
+    oi.forEach((info, i) => { if (info.o.kind === 'dep') veinIdx.push(i); else { const pi = stratIdxOf.get(info.o.parent); if (pi != null) scatBy[pi].push(i); else orphan.push(i); } });
+    const cells = [];
+    strata.forEach((st, i) => { cells.push({ t: 'rock', si: i, node: st.node, col: blockColorRaw(st.block), label: prettyName(shortBlock(st.block)) });
+      scatBy[i].forEach(oiIdx => cells.push({ t: 'ore', oiIdx: oiIdx, node: oi[oiIdx].o.node, col: oi[oiIdx].col, label: oreLabel(oi[oiIdx].o) })); });
+    orphan.concat(veinIdx).forEach(oiIdx => cells.push({ t: 'ore', oiIdx: oiIdx, node: oi[oiIdx].o.node, col: oi[oiIdx].col, label: oreLabel(oi[oiIdx].o) }));
+    const C = cells.length, oiCell = {}, rockCell = {};
+    cells.forEach((c, ci) => { if (c.t === 'ore') oiCell[c.oiIdx] = ci; else rockCell[c.si] = ci; });
+    const frac = cells.map(() => new Float64Array(maxD + 1));
+    for (let d = 0; d <= maxD; d++) { let rem = 1;
+      veinIdx.forEach(oiIdx => { const cov = Math.min(1, shAt(oiIdx, d)); if (cov <= 0) return; const take = rem * cov; frac[oiCell[oiIdx]][d] = take; rem -= take; });
+      const nonDep = rem;
+      strata.forEach((st, i) => { const p = baseProb[i] ? baseProb[i][d] : 0; if (p <= 0) return; const foot = nonDep * p; let sRem = 1;
+        scatBy[i].forEach(oiIdx => { const info = oi[oiIdx]; if (d < info.mn || d > info.mx) return; const pc = Math.max(0, Math.min(1, info.sh)); const take = sRem * pc; frac[oiCell[oiIdx]][d] += foot * take; sRem -= take; });
+        frac[rockCell[i]][d] += foot * sRem; }); }
+    // project the depth-composition onto world Y, averaged over the surface band [surfLo,surfHi]: air above the highest
+    // surface, a soft taper through the band, full solid below it. This is exactly the block-composition chart's projectToY.
+    const cnt = surfHi - surfLo + 1;
+    const fracY = cells.map(() => new Float64Array(YmaxE + 1)), solidY = new Float64Array(YmaxE + 1);
+    for (let Y = 0; Y <= YmaxE; Y++) { let solid = 0;
+      for (let sft = surfLo; sft <= surfHi; sft++) { let d = sft - Y; if (d < 0) continue; if (d > maxD) d = maxD; solid++;
+        for (let c = 0; c < C; c++) fracY[c][Y] += frac[c][d]; }
+      solidY[Y] = cnt > 0 ? solid / cnt : 0;
+      if (solid > 0) for (let c = 0; c < C; c++) fracY[c][Y] /= solid; }
+    const cumY = []; for (let c = 0; c <= C; c++) cumY.push(new Float64Array(YmaxE + 1));
+    for (let Y = 0; Y <= YmaxE; Y++) { let acc = 0; for (let c = 0; c < C; c++) { cumY[c][Y] = acc; acc += fracY[c][Y]; } cumY[C][Y] = acc; }
+    // centred column whose half-width tracks the solid fraction, so the surface narrows softly to air (like the chart)
+    const xOf = (c, Y) => { const hw = solidY[Y] * maxHW; return cxE - hw + 2 * hw * cumY[c][Y]; };
+    const maxFrac = cells.map((c, ci) => { let m = 0; for (let Y = 0; Y <= YmaxE; Y++) if (fracY[ci][Y] > m) m = fracY[ci][Y]; return m; });
+    const peakY = cells.map((c, ci) => { let pk = 0, pv = -1; for (let Y = 0; Y <= YmaxE; Y++) if (fracY[ci][Y] > pv) { pv = fracY[ci][Y]; pk = Y; } return pk; });
+    const axMid = (pyE(YmaxE) + pyE(0)) / 2;
     let s = '<svg id="ovSvg" xmlns="http://www.w3.org/2000/svg" width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '" style="display:block;touch-action:none;user-select:none;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">';
-    s += '<text x="12" y="' + midY + '" fill="' + cS + '" font-size="12" transform="rotate(-90 12 ' + midY + ')">Depth (blocks below surface)</text>';
-    for (let d = 0; d <= maxD; d += 20) { const yy = y(d); s += '<line x1="' + X0 + '" y1="' + yy + '" x2="' + W + '" y2="' + yy + '" stroke="' + cB + '"/><text x="' + (X0 - 8) + '" y="' + (yy + 4) + '" text-anchor="end" font-size="11" fill="' + cM + '">' + d + '</text>'; }
-    if (!objs.length) s += '<text x="' + (X0 + 30) + '" y="' + (TOP + 44) + '" fill="' + cM + '" font-size="12.5">No veins or scatter here yet — add one below.</text>';
-    objs.forEach((o, i) => { const x = X0 + i * COLW, cx = x + COLW / 2; const r = o.node.DepthRange || { min: 0, max: 10 };
-      const mn = Math.max(0, r.min || 0), mx = Math.max(mn + 1, r.max || 0); const yT = y(mn), yB = y(Math.min(maxD, mx));
-      const frac = Math.min(1, Math.max(0.06, shareOf(o))), wH = frac * (COLW / 2 - 7);
-      const col = blockColorRaw(btOf(o.node.BlockType)), seld = sel && o.node === sel.node;
-      s += '<rect x="' + (cx - wH).toFixed(1) + '" y="' + yT.toFixed(1) + '" width="' + (wH * 2).toFixed(1) + '" height="' + (yB - yT).toFixed(1) + '" rx="4" fill="' + col + '" fill-opacity="' + (o.kind === 'std' ? 0.72 : 0.92) + '"' + (seld ? ' stroke="' + cT + '" stroke-width="2"' : '') + '/>';
-      s += '<text x="' + cx + '" y="' + (H - 20) + '" text-anchor="middle" font-size="10.5" fill="' + (seld ? cT : cS) + '">' + ORE_NAME[o.mat] + '</text>';
-      s += '<text x="' + cx + '" y="' + (H - 8) + '" text-anchor="middle" font-size="9.5" fill="' + cM + '">' + (o.kind === 'dep' ? 'vein' : 'scatter') + '</text>';
-      const eh = Math.max(4, Math.min(8, (yB - yT) / 3));
-      s += '<rect x="' + (cx - wH).toFixed(1) + '" y="' + yT.toFixed(1) + '" width="' + (wH * 2).toFixed(1) + '" height="' + (yB - yT).toFixed(1) + '" fill="transparent" pointer-events="all" data-drag="' + i + '|move" style="cursor:move"/>';
-      s += '<rect x="' + (cx - wH).toFixed(1) + '" y="' + (yT - 3).toFixed(1) + '" width="' + (wH * 2).toFixed(1) + '" height="' + (eh + 3).toFixed(1) + '" fill="transparent" pointer-events="all" data-drag="' + i + '|t" style="cursor:ns-resize"/>';
-      s += '<rect x="' + (cx - wH).toFixed(1) + '" y="' + (yB - eh).toFixed(1) + '" width="' + (wH * 2).toFixed(1) + '" height="' + (eh + 3).toFixed(1) + '" fill="transparent" pointer-events="all" data-drag="' + i + '|b" style="cursor:ns-resize"/>';
-      s += '<rect x="' + (cx + wH - 7).toFixed(1) + '" y="' + (yT + eh).toFixed(1) + '" width="14" height="' + Math.max(1, (yB - yT - eh * 2)).toFixed(1) + '" fill="transparent" pointer-events="all" data-drag="' + i + '|w" style="cursor:ew-resize"/>';
-    });
+    s += '<text x="12" y="' + axMid.toFixed(1) + '" fill="' + cS + '" font-size="12" transform="rotate(-90 12 ' + axMid.toFixed(1) + ')">World height (Y)</text>';
+    for (let Y = 0; Y <= YmaxE; Y += 20) { const yy = pyE(Y); s += '<line x1="' + CX + '" y1="' + yy.toFixed(1) + '" x2="' + W + '" y2="' + yy.toFixed(1) + '" stroke="' + cB + '"/><text x="' + (CX - 8) + '" y="' + (yy + 4).toFixed(1) + '" text-anchor="end" font-size="11" fill="' + cM + '">' + Y + '</text>'; }
+    // orient against the real world: water line + this biome's surface band
+    const wyy = pyE(Math.min(YmaxE, WL)); s += '<line x1="' + CX + '" y1="' + wyy.toFixed(1) + '" x2="' + W + '" y2="' + wyy.toFixed(1) + '" stroke="' + cWl + '" stroke-width="1.2" stroke-dasharray="5 4"/><text x="' + (W - 4) + '" y="' + (wyy - 4).toFixed(1) + '" text-anchor="end" font-size="10" fill="' + cWl + '">water Y' + WL + '</text>';
+    s += '<text x="' + cxE.toFixed(1) + '" y="' + (pyE(Math.min(YmaxE, surfHi)) - 5).toFixed(1) + '" text-anchor="middle" font-size="10" fill="' + cM + '">surface Y' + surfLo + '–' + surfHi + '</text>';
+    oreLayout = [];
+    cells.forEach((c, ci) => { if (maxFrac[ci] < 1e-4) return;
+      const seld = c.t === 'rock' ? (sel && sel.kind === 'strat' && sel.node === c.node) : (sel && sel.kind !== 'strat' && sel.node === c.node);
+      let path = 'M'; for (let Y = 0; Y <= YmaxE; Y++) path += xOf(ci, Y).toFixed(1) + ' ' + pyE(Y).toFixed(1) + ' ';
+      for (let Y = YmaxE; Y >= 0; Y--) path += xOf(ci + 1, Y).toFixed(1) + ' ' + pyE(Y).toFixed(1) + ' ';
+      s += '<path d="' + path + 'Z" fill="' + c.col + '"' + (c.t === 'rock' ? ' data-strat="' + c.si + '" style="cursor:pointer"' : '') + '/>';
+      if (seld) s += '<path d="' + path + 'Z" fill="none" stroke="' + cT + '" stroke-width="2"/>';
+      const pk = peakY[ci], wpx = xOf(ci + 1, pk) - xOf(ci, pk);
+      if (wpx > 30) s += '<text x="' + ((xOf(ci, pk) + xOf(ci + 1, pk)) / 2).toFixed(1) + '" y="' + (pyE(pk) + 3).toFixed(1) + '" text-anchor="middle" font-size="' + (c.t === 'rock' ? 10 : 9) + '" fill="' + labelColor(c.col) + '" pointer-events="none">' + c.label + '</text>';
+      if (c.t === 'ore') { const info = oi[c.oiIdx], hTop = info.sa != null ? info.sa : info.mn, hBot = info.sb != null ? info.sb : info.mx;
+        // resize handles sit on the ribbon's actual visible Y-extent (its surface-smear); dragging still maps back to depth
+        let tY = -1, bY = -1; for (let Y = 0; Y <= YmaxE; Y++) if (fracY[ci][Y] > 1e-3) { if (bY < 0) bY = Y; tY = Y; }
+        if (tY < 0) { tY = clampY(surfMid - hTop); bY = clampY(surfMid - hBot); }
+        const lc = xOf(ci, pk);
+        oreLayout[c.oiIdx] = { leftX: xOf(ci, pk), rightX: xOf(ci + 1, pk), share: shareOf(info.o) };
+        s += '<path d="' + path + 'Z" fill="transparent" pointer-events="all" data-drag="' + c.oiIdx + '|move" style="cursor:move"/>';
+        const lT = xOf(ci, tY), rT = xOf(ci + 1, tY), lB = xOf(ci, bY), rB = xOf(ci + 1, bY);
+        s += '<rect x="' + lT.toFixed(1) + '" y="' + (pyE(tY) - 3).toFixed(1) + '" width="' + Math.max(6, rT - lT).toFixed(1) + '" height="7" fill="transparent" pointer-events="all" data-drag="' + c.oiIdx + '|t" style="cursor:ns-resize"/>';
+        s += '<rect x="' + lB.toFixed(1) + '" y="' + (pyE(bY) - 4).toFixed(1) + '" width="' + Math.max(6, rB - lB).toFixed(1) + '" height="7" fill="transparent" pointer-events="all" data-drag="' + c.oiIdx + '|b" style="cursor:ns-resize"/>';
+        // width handle on the inner (left) edge — drag it into the rock to make the ore more abundant; a visible grip shows when selected
+        if (seld) s += '<line x1="' + lc.toFixed(1) + '" y1="' + (pyE(tY) + 1).toFixed(1) + '" x2="' + lc.toFixed(1) + '" y2="' + (pyE(bY) - 1).toFixed(1) + '" stroke="' + cT + '" stroke-width="3" stroke-linecap="round"/>';
+        s += '<rect x="' + (lc - 7).toFixed(1) + '" y="' + pyE(tY).toFixed(1) + '" width="14" height="' + Math.max(6, pyE(bY) - pyE(tY)).toFixed(1) + '" fill="transparent" pointer-events="all" data-drag="' + c.oiIdx + '|w" style="cursor:ew-resize"/>'; } });
+    if (hasBase) {
+      // selected stratum: mark its dominant bottom edge (projected to world Y); boundary-drag handles at layer transitions
+      strata.forEach((st, i) => { if (!(sel && sel.kind === 'strat' && sel.node === st.node)) return; let bb = -1; lastBands.forEach(b => { if (b.si === i) bb = Math.max(bb, b.bot); }); if (bb >= 0 && bb < maxD) { const bYw = clampY(surfMid - (bb + 1)), yy = pyE(bYw), hw = solidY[Math.round(bYw)] * maxHW; s += '<line x1="' + (cxE - hw).toFixed(1) + '" y1="' + yy.toFixed(1) + '" x2="' + (cxE + hw).toFixed(1) + '" y2="' + yy.toFixed(1) + '" stroke="' + cT + '" stroke-width="1.5"/>'; } });
+      lastBands.forEach(b => { if (b.si < N - 1) { const yy = pyE(clampY(surfMid - (b.bot + 1))); s += '<rect x="' + CX + '" y="' + (yy - 4).toFixed(1) + '" width="' + Wc + '" height="8" fill="transparent" pointer-events="all" data-sdrag="' + b.si + '" style="cursor:ns-resize"/>'; } });
+      // ghost markers for strata that never appear (their bottom sits below a deeper layer, so the engine skips them), kept selectable
+      strata.forEach((st, si) => { if (maxFrac[rockCell[si]] >= 1e-3) return; const dmid = Math.min(maxD, Math.round((st.min + st.max) / 2)), yy = pyE(clampY(surfMid - dmid)), seld = sel && sel.kind === 'strat' && sel.node === st.node;
+        s += '<rect x="' + (cxE - 60).toFixed(1) + '" y="' + (yy - 3).toFixed(1) + '" width="120" height="6" fill="' + blockColorRaw(st.block) + '" fill-opacity="0.25" stroke="' + (seld ? cT : cM) + '" stroke-width="' + (seld ? 1.5 : 0.75) + '" stroke-dasharray="3 2"/>';
+        s += '<text x="' + cxE.toFixed(1) + '" y="' + (yy - 6).toFixed(1) + '" text-anchor="middle" font-size="8.5" fill="' + cM + '" pointer-events="none">' + shortBlock(st.block) + '</text>';
+        s += '<rect x="' + (cxE - 60).toFixed(1) + '" y="' + (yy - 9).toFixed(1) + '" width="120" height="18" fill="transparent" pointer-events="all" data-strat="' + si + '" style="cursor:pointer"/>'; });
+    }
+    if (!cells.length) s += '<text x="' + (CX + 20) + '" y="' + (TOPY + 44) + '" fill="' + cM + '" font-size="12">nothing here yet — add a vein or scatter below</text>';
+    s += '<rect x="' + CX + '" y="' + pyE(YmaxE).toFixed(1) + '" width="' + Wc + '" height="' + (colBot - pyE(YmaxE)).toFixed(1) + '" fill="none" stroke="' + cB + '" stroke-width="1"/>';
     s += '</svg>';
     laneEl.innerHTML = s; svgEl = document.getElementById('ovSvg');
     svgEl.addEventListener('pointerdown', onDown);
   }
-  function onDown(e) { const t = e.target; if (!t || !t.dataset || !t.dataset.drag) return; const p = t.dataset.drag.split('|');
+  function onDown(e) { const t = e.target; if (!t || !t.dataset) return;
+    if (t.dataset.sdrag != null) { const st = strata[+t.dataset.sdrag]; if (st) { sel = { kind: 'strat', node: st.node, block: st.block }; drag = { strat: st.node, spread: Math.max(0, (st.node.Max | 0) - (st.node.Min | 0)) }; } e.preventDefault(); render(); renderDetail(); renderList(); return; }
+    if (t.dataset.strat != null) { const st = strata[+t.dataset.strat]; sel = st ? { kind: 'strat', node: st.node, block: st.block } : null; drag = null; render(); renderDetail(); renderList(); return; }
+    if (!t.dataset.drag) return; const p = t.dataset.drag.split('|');
     sel = objs[+p[0]]; drag = { i: +p[0], o: objs[+p[0]], k: p[1] }; const r = svgEl.getBoundingClientRect();
-    startDepth = d2y((e.clientY - r.top) * (H / r.height)); const rg = drag.o.node.DepthRange || {}; snapMin = rg.min || 0; snapMax = rg.max || 0;
-    e.preventDefault(); render(); renderDetail(); }
-  function onMove(e) { if (!drag) return; const r = svgEl.getBoundingClientRect(); const o = drag.o;
-    if (drag.k === 'move') { const d = d2y((e.clientY - r.top) * (H / r.height)); const span = snapMax - snapMin;
+    startDepth = depthAtSvgY((e.clientY - r.top) * (H / r.height)); const rg = drag.o.node.DepthRange || {}; snapMin = rg.min || 0; snapMax = rg.max || 0;
+    if (p[1] === 'w') { const vbW = svgEl.viewBox.baseVal.width; drag.wx = (e.clientX - r.left) * (vbW / r.width); drag.wshare = shareOf(drag.o); }
+    e.preventDefault(); render(); renderDetail(); renderList(); }
+  function onMove(e) { if (!drag) return; const r = svgEl.getBoundingClientRect();
+    if (drag.strat) { const d = Math.round(depthAtSvgY((e.clientY - r.top) * (H / r.height))); const node = drag.strat, half = Math.round(drag.spread / 2);
+      node.Min = Math.max(0, d - half); node.Max = Math.max(node.Min, node.Min + drag.spread); render(); renderDetail(); scheduleOreRender(); return; }
+    const o = drag.o;
+    if (drag.k === 'move') { const d = depthAtSvgY((e.clientY - r.top) * (H / r.height)); const span = snapMax - snapMin;
       let nmin = Math.max(0, Math.min(maxD - span, Math.round(snapMin + (d - startDepth)))); o.node.DepthRange = o.node.DepthRange || {}; o.node.DepthRange.min = nmin; o.node.DepthRange.max = nmin + span; }
-    else if (drag.k === 't') { const d = Math.round(d2y((e.clientY - r.top) * (H / r.height))); o.node.DepthRange = o.node.DepthRange || {}; o.node.DepthRange.min = Math.max(0, Math.min((o.node.DepthRange.max || 0) - 1, d)); }
-    else if (drag.k === 'b') { const d = Math.round(d2y((e.clientY - r.top) * (H / r.height))); o.node.DepthRange = o.node.DepthRange || {}; o.node.DepthRange.max = Math.max((o.node.DepthRange.min || 0) + 1, Math.min(maxD, d)); }
-    else if (drag.k === 'w') { const W = svgEl.viewBox.baseVal.width, cx = X0 + drag.i * COLW + COLW / 2; const xx = (e.clientX - r.left) * (W / r.width);
-      setShare(o, Math.max(0.02, Math.min(1, (xx - cx) / (COLW / 2 - 7)))); }
+    else if (drag.k === 't') { const d = Math.round(depthAtSvgY((e.clientY - r.top) * (H / r.height))); o.node.DepthRange = o.node.DepthRange || {}; o.node.DepthRange.min = Math.max(0, Math.min((o.node.DepthRange.max || 0) - 1, d)); }
+    else if (drag.k === 'b') { const d = Math.round(depthAtSvgY((e.clientY - r.top) * (H / r.height))); o.node.DepthRange = o.node.DepthRange || {}; o.node.DepthRange.max = Math.max((o.node.DepthRange.min || 0) + 1, Math.min(maxD, d)); }
+    else if (drag.k === 'w') { const vbW = svgEl.viewBox.baseVal.width, xx = (e.clientX - r.left) * (vbW / r.width);
+      if (drag.wx != null) setShare(o, Math.max(0.005, Math.min(1, drag.wshare - (xx - drag.wx) / Wc))); }
     render(); renderDetail(); scheduleOreRender(); }
+  // list of every block in the biome (base rock + veins + scatters); click to select, ✕ to remove an ore
+  function renderList() {
+    if (!listEl) return;
+    let h = '';
+    strata.forEach((st, i) => { const seld = sel && sel.kind === 'strat' && sel.node === st.node;
+      h += '<div class="ovRow' + (seld ? ' sel' : '') + '" data-lk="s" data-li="' + i + '"><span class="ndot" style="background:' + blockColorRaw(st.block) + '"></span><span class="ltag">rock</span><span class="lnm">' + prettyName(shortBlock(st.block)) + '</span><button class="ndel" data-delstrat="' + i + '" title="Remove this rock layer and its veins/scatters">✕</button></div>'; });
+    objs.forEach((o, i) => { const seld = sel && sel.kind !== 'strat' && sel.node === o.node;
+      h += '<div class="ovRow' + (seld ? ' sel' : '') + '" data-lk="o" data-li="' + i + '"><span class="ndot" style="background:' + oreDot(o) + '"></span><span class="ltag">' + (o.kind === 'dep' ? 'vein' : 'scatter') + '</span><span class="lnm">' + oreLabel(o) + '</span><button class="ndel" data-del="' + i + '" title="Remove this block">✕</button></div>'; });
+    listEl.innerHTML = h || '<div class="lbl" style="padding:6px">No blocks in this biome.</div>';
+    listEl.querySelectorAll('.ovRow').forEach(row => row.onclick = e => { if (e.target.closest('.ndel')) return;
+      if (row.dataset.lk === 's') { const st = strata[+row.dataset.li]; sel = st ? { kind: 'strat', node: st.node, block: st.block } : null; }
+      else sel = objs[+row.dataset.li] || null;
+      render(); renderDetail(); renderList(); });
+    listEl.querySelectorAll('.ndel[data-del]').forEach(btn => btn.onclick = e => { e.stopPropagation();
+      const o = objs[+btn.dataset.del]; if (!o) return; const idx = o.sub.indexOf(o.node); if (idx >= 0) o.sub.splice(idx, 1); if (sel && sel.node === o.node) sel = null; buildOreEditor(); render(); renderDetail(); renderList(); scheduleOreRender(); });
+    listEl.querySelectorAll('.ndel[data-delstrat]').forEach(btn => btn.onclick = e => { e.stopPropagation(); removeStratum(strata[+btn.dataset.delstrat]); });
+  }
+  // remove a base-rock layer (its BlockDepthRange, along with any veins/scatters nested in it)
+  function removeStratum(st) { if (!st) return; const bm = biomes()[biomeIdx]; const arr = bm && bm.Module && bm.Module.BlockDepthRanges; if (!arr) return;
+    const idx = arr.indexOf(st.node); if (idx < 0) return; arr.splice(idx, 1); if (sel && sel.node === st.node) sel = null;
+    buildOreEditor(); render(); renderDetail(); renderList(); scheduleOreRender(); }
   function renderDetail() {
     if (!detailEl) return;
-    if (!sel) { detailEl.innerHTML = '<div class="lbl" style="padding:6px 0">Click a vein or scatter to fine-tune it or change its block — or add one below.</div>'; return; }
+    if (!sel) { detailEl.innerHTML = '<div class="lbl" style="padding:6px 0">Click a base-rock layer, vein, or scatter to edit it — or add a vein/scatter below.</div>'; return; }
+    if (sel.kind === 'strat') { const opts = collectBlockTypes(), col = blockColorRaw(sel.block);
+      detailEl.innerHTML = '<div class="oreNode" style="border-top:none"><span class="ndot" style="background:' + col + '"></span><span class="tag">base rock</span>' + blockSelect(sel.block, opts)
+        + '<span class="kk"><label>layer bottom</label><input type="number" class="kv" data-sf="Min" value="' + (sel.node.Min | 0) + '"><span class="dash">–</span><input type="number" class="kv" data-sf="Max" value="' + (sel.node.Max | 0) + '"></span>'
+        + '<button class="ndel" title="Remove this rock layer and its veins/scatters">✕</button></div>'
+        + '<div id="ovStratNote" style="font-size:11.5px;color:var(--muted);margin-top:5px">' + stratNoteHtml(sel.node) + '</div>';
+      wireStrat(sel); return; }
     const o = sel, opts = collectBlockTypes(), dep = o.kind === 'dep';
-    const dot = '<span class="ndot" style="background:' + ORE_COL[o.mat] + '"></span>', del = '<button class="ndel" title="Remove this node">✕</button>';
+    const dot = '<span class="ndot" style="background:' + oreDot(o) + '"></span>', del = '<button class="ndel" title="Remove this node">✕</button>';
     let h = '<div class="oreNode" style="border-top:none">' + dot + '<span class="tag">' + (dep ? 'vein' : 'scatter') + '</span>' + blockSelect(btOf(o.node.BlockType), opts);
-    h += dep ? (knob1('SpawnPercentChance', o.node.SpawnPercentChance) + knobR('DepthRange', o.node.DepthRange) + knobR('BlocksCountRange', o.node.BlocksCountRange))
+    h += dep ? (knob1('SpawnPercentChance', o.node.SpawnPercentChance) + knobR('DepthRange', o.node.DepthRange) + knobR('DepositDepthRange', o.node.DepositDepthRange) + knobR('BlocksCountRange', o.node.BlocksCountRange))
              : (knob1('PercentChance', o.node.PercentChance) + knobR('DepthRange', o.node.DepthRange) + knob1('NoiseFrequency', o.node.NoiseFrequency));
     h += del + '</div>'; detailEl.innerHTML = h; wireDetail(o);
   }
   function wireDetail(o) { const node = o.node;
     detailEl.querySelectorAll('input,select').forEach(inp => inp.addEventListener('input', () => {
       const f = inp.dataset.f; if (!f) return;
-      if (f === 'block') { node.BlockType = node.BlockType || {}; node.BlockType.Type = inp.value; o.mat = oreMaterial(inp.value) || o.mat; render(); scheduleOreRender(); return; }
+      if (f === 'block') { node.BlockType = node.BlockType || {}; node.BlockType.Type = inp.value; o.mat = oreMaterial(inp.value) || o.mat; render(); renderList(); scheduleOreRender(); return; }
       const val = parseFloat(inp.value); if (!isFinite(val)) return;
       if (f.endsWith('_min') || f.endsWith('_max')) { const key = f.slice(0, -4), mm = f.slice(-3); node[key] = node[key] || {}; node[key][mm] = val; } else node[f] = val;
       detailEl.querySelectorAll('input[data-f="' + f + '"]').forEach(sib => { if (sib === inp) return; if (sib.type === 'range' && val > +sib.max) sib.max = val; sib.value = val; });
       render(); scheduleOreRender();
     }));
-    const d = detailEl.querySelector('.ndel'); if (d) d.onclick = () => { const idx = o.sub.indexOf(o.node); if (idx >= 0) o.sub.splice(idx, 1); sel = null; buildOreEditor(); render(); renderDetail(); scheduleOreRender(); };
+    const d = detailEl.querySelector('.ndel'); if (d) d.onclick = () => { const idx = o.sub.indexOf(o.node); if (idx >= 0) o.sub.splice(idx, 1); sel = null; buildOreEditor(); render(); renderDetail(); renderList(); scheduleOreRender(); };
+  }
+  function stratNoteHtml(node) { let top = null, bot = null; lastBands.forEach(b => { if (b.st.node === node) { top = top == null ? b.top : Math.min(top, b.top); bot = bot == null ? b.bot : Math.max(bot, b.bot); } });
+    const cov = top != null ? ('fills depth <b>' + top + '–' + bot + '</b>') : '<b>overridden</b> — its bottom sits below a deeper layer, so the engine skips it. Lower this bottom, or raise the layers below it.';
+    return cov + ' · Min–Max is where this layer <b>ends</b> — its top comes from the layer above. Drag the bottom edge to move the boundary.'; }
+  function wireStrat(o) { const node = o.node;
+    detailEl.querySelectorAll('input,select').forEach(inp => inp.addEventListener('input', () => {
+      if (inp.dataset.f === 'block') { node.BlockType = node.BlockType || {}; node.BlockType.Type = inp.value; sel.block = inp.value; render(); renderList(); scheduleOreRender(); return; }
+      const sf = inp.dataset.sf; if (!sf) return; const val = parseInt(inp.value, 10); if (!isFinite(val)) return; node[sf] = val; render();
+      const n = document.getElementById('ovStratNote'); if (n) n.innerHTML = stratNoteHtml(node); scheduleOreRender(); }));
+    const d = detailEl.querySelector('.ndel'); if (d) d.onclick = () => removeStratum(strata.find(st => st.node === node) || o);
   }
   function add(type) { const bm = biomes()[biomeIdx]; if (!bm) return; bm.Module = bm.Module || {};
     if (!bm.Module.BlockDepthRanges || !bm.Module.BlockDepthRanges.length) bm.Module.BlockDepthRanges = [{ NoiseFrequency: 40, Min: 0, Max: 0, BlockType: { Type: 'Eco.World.Blocks.DirtBlock, Eco.World' }, SubModules: [] }];
     const layer = bm.Module.BlockDepthRanges[0]; layer.SubModules = layer.SubModules || []; const n = type === 'vein' ? tmplVein() : tmplScatter();
-    layer.SubModules.push(n); buildOreEditor(); render(); sel = objs.find(x => x.node === n) || null; renderDetail(); scheduleOreRender(); }
-  function build() { laneEl = $('ovLane'); detailEl = $('ovDetail');
+    layer.SubModules.push(n); buildOreEditor(); render(); sel = objs.find(x => x.node === n) || null; renderDetail(); renderList(); scheduleOreRender(); }
+  function build() { laneEl = $('ovLane'); detailEl = $('ovDetail'); listEl = $('ovList');
     if (!terrain || !terrain.Modules) { if (laneEl) laneEl.innerHTML = '<div class="lbl" style="padding:10px">No TerrainModule to edit.</div>'; if (detailEl) detailEl.innerHTML = ''; return; }
-    if (biomeIdx >= terrain.Modules.length) biomeIdx = 0; render(); renderDetail(); }
+    if (biomeIdx >= terrain.Modules.length) biomeIdx = 0; render(); renderDetail(); renderList(); }
   function init() { document.addEventListener('pointermove', onMove); document.addEventListener('pointerup', () => { drag = null; });
     $('ovAddVein').onclick = () => add('vein'); $('ovAddScatter').onclick = () => add('scatter'); }
   return { build, init };
