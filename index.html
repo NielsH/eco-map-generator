@@ -155,7 +155,7 @@
         <button id="view3dClose" style="margin-left:auto">← Back to map</button>
       </div>
       <div id="view3dCanvas" style="width:100%;height:70vh;min-height:420px;border-radius:var(--radius);overflow:hidden;background:#8fbcd4;position:relative"></div>
-      <div class="lbl" style="margin-top:6px">Click the scene to look around · <b>W A S D</b> move · <b>Space / Q</b> up · <b>Shift / E</b> down · scroll to change speed · <b>Esc</b> releases the mouse</div>
+      <div class="lbl" style="margin-top:6px"><b>Drag</b> to look around · <b>W A S D</b> move · <b>Space / Q</b> up · <b>Shift / E</b> down · scroll to change speed</div>
     </div>
   </div>
 
@@ -6624,7 +6624,7 @@ var Render3D = (function () {
   var CHUNK = 32, RENDER_DIST = 7, MAX_BUILDS_PER_FRAME = 3;
 
   // ---- input / fly camera ----
-  var keys = {}, yaw = 0, pitch = -0.5, pointerLocked = false, speed = 40;
+  var keys = {}, yaw = 0, pitch = -0.5, dragging = false, speed = 40;
   var tmpF = null, lastT = 0;
 
   function onKey(e, down) {
@@ -6633,9 +6633,10 @@ var Render3D = (function () {
     if (down && (k === 'w' || k === 'a' || k === 's' || k === 'd' || k === ' ')) e.preventDefault();
   }
   function onMouseMove(e) {
-    if (!pointerLocked) return;
-    yaw -= e.movementX * 0.0025;
-    pitch -= e.movementY * 0.0025;
+    if (!dragging) return;
+    // "grab the scene": drag right and the view follows your hand (inverse of FPS look)
+    yaw += e.movementX * 0.003;
+    pitch += e.movementY * 0.003;
     var lim = Math.PI / 2 - 0.02;
     if (pitch > lim) pitch = lim; if (pitch < -lim) pitch = -lim;
   }
@@ -6766,13 +6767,15 @@ var Render3D = (function () {
     var hemi = new T.HemisphereLight(0xffffff, 0x556b2f, 0.9); scene.add(hemi);
     var sun = new T.DirectionalLight(0xffffff, 0.8); sun.position.set(0.5, 1, 0.3); scene.add(sun);
     resize();
+    renderer.domElement.style.cursor = 'grab';
     window.addEventListener('resize', resize);
     window.addEventListener('keydown', function (e) { if (running) onKey(e, true); });
     window.addEventListener('keyup', function (e) { if (running) onKey(e, false); });
     window.addEventListener('mousemove', onMouseMove);
-    renderer.domElement.addEventListener('click', function () { renderer.domElement.requestPointerLock(); });
+    // click-and-drag to look around (more predictable than pointer lock; cursor stays visible)
+    renderer.domElement.addEventListener('mousedown', function (e) { dragging = true; renderer.domElement.style.cursor = 'grabbing'; e.preventDefault(); });
+    window.addEventListener('mouseup', function () { if (dragging) { dragging = false; if (renderer) renderer.domElement.style.cursor = 'grab'; } });
     renderer.domElement.addEventListener('wheel', onWheel, { passive: false });
-    document.addEventListener('pointerlockchange', function () { pointerLocked = document.pointerLockElement === renderer.domElement; });
   }
 
   function resize() {
@@ -6801,7 +6804,7 @@ var Render3D = (function () {
   }
 
   function start() { if (running) return; running = true; lastT = performance.now(); rafId = requestAnimationFrame(frame); }
-  function stop() { running = false; if (rafId) cancelAnimationFrame(rafId); keys = {}; if (document.pointerLockElement) document.exitPointerLock(); }
+  function stop() { running = false; if (rafId) cancelAnimationFrame(rafId); keys = {}; dragging = false; }
 
   return { init: init, setWorld: setWorld, start: start, stop: stop, resize: resize, isReady: function () { return !!renderer; }, hasWorld: function () { return !!world; } };
 })();

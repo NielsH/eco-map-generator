@@ -216,7 +216,7 @@ const html = `<!DOCTYPE html>
         <button id="view3dClose" style="margin-left:auto">← Back to map</button>
       </div>
       <div id="view3dCanvas" style="width:100%;height:70vh;min-height:420px;border-radius:var(--radius);overflow:hidden;background:#8fbcd4;position:relative"></div>
-      <div class="lbl" style="margin-top:6px">Click the scene to look around · <b>W A S D</b> move · <b>Space / Q</b> up · <b>Shift / E</b> down · scroll to change speed · <b>Esc</b> releases the mouse</div>
+      <div class="lbl" style="margin-top:6px"><b>Drag</b> to look around · <b>W A S D</b> move · <b>Space / Q</b> up · <b>Shift / E</b> down · scroll to change speed</div>
     </div>
   </div>
 
