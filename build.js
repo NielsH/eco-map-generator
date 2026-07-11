@@ -56,12 +56,18 @@ onmessage = function (e) {
   if (m.type === '3d-init') {
     try {
       if (!lastRes) { postMessage({ type: 'v3d-error', message: 'No world generated yet' }); return; }
+      if (vCtx && vCtx._deposits && vGrid) {   // reuse the precomputed layer on reopen (invalidated on regenerate)
+        postMessage({ type: 'v3d-ready', W: vGrid.W, waterLevel: m.cfg.waterLevel, maxGenerationHeight: m.cfg.maxGenerationHeight,
+          gray: vGrid.gray.slice(), biome: vGrid.biome.slice(), biomeNames: vGrid.biomeNames });
+        return;
+      }
       if (!vGrid) vGrid = rasterize(lastRes.polys, lastRes.worldSize, { progress: (ph, f) => postMessage({ type: 'v3d-progress', phase: ph, frac: f }) });
       const cfg = m.cfg;
       vCtx = initTerrain(m.terrain, cfg);
       const W = vGrid.W, names = vGrid.biomeNames, biome = vGrid.biome, gray = vGrid.gray;
       vCtx.grayAt = (x, z) => gray[z * W + x];
       vCtx.biomeAt = (x, z) => names[biome[z * W + x]];
+      computeDeposits(vCtx, vGrid, (ph, f) => postMessage({ type: 'v3d-progress', phase: ph, frac: f }));   // precompute the ore-vein overlay
       vChunks = new Map();
       const grayCopy = gray.slice(), biomeCopy = biome.slice();   // copies so the worker keeps its grids
       postMessage({ type: 'v3d-ready', W: W, waterLevel: cfg.waterLevel, maxGenerationHeight: cfg.maxGenerationHeight,
@@ -1630,7 +1636,12 @@ const SOIL_HIDE = ['Dirt','RockySoil','Grass','WetlandsSoil','FrozenSoil','Sand'
 // Persistent listener for 3D messages only (own types, so generation is never affected).
 function worker3dHandler(e) {
   const m = e.data;
-  if (m.type === 'v3d-progress') { $('view3dStatus').textContent = m.phase === 'blur' ? 'smoothing height…' : m.phase === 'raster' ? 'rasterizing…' : 'building…'; return; }
+  if (m.type === 'v3d-progress') {
+    const pct = m.frac != null ? ' ' + Math.round(m.frac * 100) + '%' : '';
+    $('view3dStatus').textContent = m.phase === 'blur' ? 'smoothing height…' : m.phase === 'raster' ? 'rasterizing…' :
+      m.phase === 'veins-seed' ? 'finding ore veins…' + pct : m.phase === 'veins-grow' ? 'growing ore veins…' + pct : 'building…';
+    return;
+  }
   if (m.type === 'v3d-error') { $('view3dStatus').textContent = 'Error: ' + m.message; return; }
   if (m.type === 'v3d-ready') {
     $('view3dStatus').textContent = m.W + '×' + m.W + ' · drag to look, W A S D to fly';
