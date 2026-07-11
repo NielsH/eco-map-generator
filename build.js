@@ -16,21 +16,28 @@ function strip(src) {
 const core = strip(fs.readFileSync('src/core.js', 'utf8'));
 const geo = strip(fs.readFileSync('src/geo.js', 'utf8'));
 const worldgen = strip(fs.readFileSync('src/worldgen.js', 'utf8'));
+const raster = strip(fs.readFileSync('src/raster.js', 'utf8'));
 const vt = fs.readFileSync('src/vectortable.txt', 'utf8').trim();
 const defaultEco = fs.readFileSync('WorldGenerator.eco', 'utf8').trim();
+// three.js (UMD, sets global THREE) and the main-thread 3D renderer are injected via
+// placeholders AFTER the template literal is built, so their backticks/${} don't need escaping.
+const threeSrc = fs.readFileSync('src/vendor/three.min.js', 'utf8');
+const render3dSrc = fs.readFileSync('src/render3d.js', 'utf8');
 
-const LIB = [core, geo, worldgen,
+const LIB = [core, geo, worldgen, raster,
   `const C = { CsRandom, Perlin, RidgedMulti, ScaleBias, gradientCoherentNoise3D, setVectorTable, NQ };`,
   `const G = { poissonSamples, Voronoi };`
 ].join('\n\n');
 
 const WORKER_GLUE = `
+let lastRes = null;   // keep the last generate() result so the 3D view can request raster grids lazily
 onmessage = function (e) {
   const m = e.data;
   if (m.type === 'init') { setVectorTable(m.vt); postMessage({ type: 'ready' }); return; }
   if (m.type === 'gen') {
     try {
       const res = generate(m.cfg, { progress: s => postMessage({ type: 'progress', phase: s }) });
+      lastRes = res;
       const polys = res.polys.map(p => {
         const pts = new Float32Array(p.points.length * 2);
         for (let i = 0; i < p.points.length; i++) { pts[i*2] = p.points[i].x; pts[i*2+1] = p.points[i].y; }
@@ -40,6 +47,14 @@ onmessage = function (e) {
       const counts = {}; for (const p of res.polys) counts[p.biome.name] = (counts[p.biome.name] || 0) + 1;
       postMessage({ type: 'done', worldSize: res.worldSize, polys, rivers,
         stats: { continents: res.numContinents, islands: res.numSmallIslands, lakes: res.numLakes, rivers: res.numRivers, landPercent: res.landPercent, counts } });
+    } catch (err) { postMessage({ type: 'error', message: String(err && err.stack || err) }); }
+  }
+  if (m.type === 'raster') {
+    try {
+      if (!lastRes) { postMessage({ type: 'error', message: 'No world generated yet' }); return; }
+      const g = rasterize(lastRes.polys, lastRes.worldSize, { progress: (ph, f) => postMessage({ type: 'progress', phase: ph, frac: f }) });
+      postMessage({ type: 'grid', W: g.W, biome: g.biome, gray: g.gray, biomeNames: g.biomeNames },
+        [g.biome.buffer, g.gray.buffer]);
     } catch (err) { postMessage({ type: 'error', message: String(err && err.stack || err) }); }
   }
 };`;
@@ -187,11 +202,22 @@ const html = `<!DOCTYPE html>
     <div class="row">
       <span class="lbl">Layer</span><span class="seg" id="layers"></span>
       <label class="lbl" style="display:inline-flex;align-items:center;gap:5px;margin-left:8px"><input type="checkbox" id="waterToggle" checked> Rivers &amp; lakes</label>
-      <button id="expPng" style="margin-left:auto">Export PNG</button>
+      <button id="view3d" style="margin-left:auto">🧊 3D view</button>
+      <button id="expPng">Export PNG</button>
     </div>
     <div id="canvasWrap"><canvas id="cv"></canvas><div id="tip"></div></div>
     <div id="legend"></div>
     <div id="stats"></div>
+
+    <div id="view3dWrap" style="display:none">
+      <div class="row" style="margin:4px 0 8px">
+        <strong style="font-size:15px">🧊 3D voxel world</strong>
+        <span class="lbl" id="view3dStatus" style="margin-left:6px"></span>
+        <button id="view3dClose" style="margin-left:auto">← Back to map</button>
+      </div>
+      <div id="view3dCanvas" style="width:100%;height:70vh;min-height:420px;border-radius:var(--radius);overflow:hidden;background:#8fbcd4;position:relative"></div>
+      <div class="lbl" style="margin-top:6px">Click the scene to look around · <b>W A S D</b> move · <b>Space / Q</b> up · <b>Shift / E</b> down · scroll to change speed · <b>Esc</b> releases the mouse</div>
+    </div>
   </div>
 
   <div id="chartsPanel">
@@ -278,6 +304,8 @@ ${WORKER_GLUE}
 <script type="text/plain" id="vtsrc">${vt}</script>
 <script type="application/json" id="defaultcfg">${defaultEco}</script>
 
+<script>/*__THREE__*/</script>
+<script>/*__RENDER3D__*/</script>
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
@@ -553,6 +581,7 @@ function generateMap(cfg) {
     if (m.type === 'done') {
       $('progBar').style.width = '100%';
       result = m;
+      grid3d = null;   // invalidate cached 3D raster; the 3D view re-requests on open
       updateMixActuals(m);
       if (terrain) { const ej = buildExportJson(); OreChart.render(ej); BlockChart.render(ej); }   // keep charts' biome present/absent + water line in sync
       $('gen').disabled = false; $('regen').disabled = false;
@@ -1558,6 +1587,51 @@ $('randSeed').onclick = () => {
 };
 $('waterToggle').onchange = e => { showWater = e.target.checked; render(); };
 $('expPng').onclick = () => { const a=document.createElement('a'); a.download='eco-worldgen-'+layer+'.png'; a.href=$('cv').toDataURL('image/png'); a.click(); };
+
+// ---- 3D voxel view ----
+let grid3d = null;           // cached raster grid for the current world (invalidated on regenerate)
+function requestGrid(cb) {
+  if (grid3d) { cb(grid3d); return; }
+  if (!worker) { cb(null, 'Generate a world first.'); return; }
+  const prev = worker.onmessage;
+  worker.onmessage = (e) => {
+    const m = e.data;
+    if (m.type === 'grid') { worker.onmessage = prev; grid3d = m; cb(m); }
+    else if (m.type === 'progress') { $('view3dStatus').textContent = (m.phase === 'blur' ? 'smoothing height…' : 'rasterizing…'); }
+    else if (m.type === 'error') { worker.onmessage = prev; cb(null, m.message); }
+  };
+  worker.postMessage({ type: 'raster' });
+}
+function colorTableFor(grid) {
+  const out = [];
+  for (let i = 0; i < grid.biomeNames.length; i++) {
+    const c = BIOME_COLORS[grid.biomeNames[i]] || [140,140,140];
+    out.push([c[0]/255, c[1]/255, c[2]/255]);
+  }
+  return out;
+}
+function open3D() {
+  $('canvasWrap').style.display = 'none'; $('legend').style.display = 'none'; $('stats').style.display = 'none';
+  $('view3d').style.display = 'none'; $('expPng').style.display = 'none';
+  $('view3dWrap').style.display = 'block';
+  $('view3dStatus').textContent = 'building…';
+  Render3D.init($('view3dCanvas'), THREE);
+  Render3D.resize();
+  requestGrid((grid, err) => {
+    if (err || !grid) { $('view3dStatus').textContent = 'Error: ' + (err || 'no grid'); return; }
+    Render3D.setWorld(grid, cfgUsed, colorTableFor(grid));
+    Render3D.start();
+    $('view3dStatus').textContent = grid.W + '×' + grid.W + ' · fly with W A S D';
+  });
+}
+function close3D() {
+  Render3D.stop();
+  $('view3dWrap').style.display = 'none';
+  $('canvasWrap').style.display = ''; $('legend').style.display = ''; $('stats').style.display = '';
+  $('view3d').style.display = ''; $('expPng').style.display = '';
+}
+$('view3d').onclick = open3D;
+$('view3dClose').onclick = close3D;
 const drop = $('drop');
 ['dragover','dragenter'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('over');}));
 ['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('over');}));
@@ -1573,5 +1647,11 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
 </body>
 </html>`;
 
-fs.writeFileSync('index.html', html);
-console.log('wrote index.html', html.length, 'bytes');
+// inject the vendored three.js and the 3D renderer via replacer functions (not template
+// interpolation) so their backticks and `$` sequences pass through verbatim.
+const finalHtml = html
+  .replace('/*__THREE__*/', () => threeSrc)
+  .replace('/*__RENDER3D__*/', () => render3dSrc);
+
+fs.writeFileSync('index.html', finalHtml);
+console.log('wrote index.html', finalHtml.length, 'bytes');
