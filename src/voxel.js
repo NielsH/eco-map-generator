@@ -112,7 +112,7 @@ function calibrateScatter(sc, fs) {
 }
 
 // .NET Math.Round (banker's) — matches the server's depth-threshold rounding.
-function csRound(x) { const f = Math.floor(x), d = x - f; if (d < 0.5) return f; if (d > 0.5) return f + 1; return (f % 2 === 0) ? f : f + 1; }
+function vRound(x) { const f = Math.floor(x), d = x - f; if (d < 0.5) return f; if (d > 0.5) return f + 1; return (f % 2 === 0) ? f : f + 1; }
 
 // TerrainDepthModule: which BlockDepthRange wins at `depth`, given the column's per-range thresholds.
 function selectBase(T, N, depth) {
@@ -142,7 +142,7 @@ function generateColumn(ctx, x, z, intHeight) {
   const T = new Array(N);
   for (let i = 0; i < N; i++) {
     const nv = clamp01(ranges[i]._depthNoise.getValue(relX, 0, relZ) * 0.5 + 0.5);
-    T[i] = csRound(ranges[i].min + nv * (ranges[i].max - ranges[i].min));
+    T[i] = vRound(ranges[i].min + nv * (ranges[i].max - ranges[i].min));
   }
   for (let y = 0; y <= intHeight; y++) {
     if (y === 0) { out[y] = IMPENETRABLE; continue; }   // server: worldPos.y>0 required; floor is impenetrable-ish
@@ -164,9 +164,62 @@ function generateColumn(ctx, x, z, intHeight) {
 // intHeight for a map cell from the (blurred) heightmap byte, matching TerrainGenerator.
 function heightToInt(grayByte, WL, MH) {
   const elev = (grayByte / 255) * 2 - 1;
-  let ih = elev < 0 ? csRound((elev + 1) * WL) : WL + csRound(elev * (MH - WL));
+  let ih = elev < 0 ? vRound((elev + 1) * WL) : WL + vRound(elev * (MH - WL));
   if (ih < 0) ih = 0; if (ih > MH) ih = MH;
   return ih;
 }
 
-if (typeof module !== 'undefined') module.exports = { initTerrain, generateColumn, parseTerrain, heightToInt, selectBase, bindVoxel, IMPENETRABLE };
+// ---- chunk generation + face-culled meshing (worker side) ----
+// Generate the block columns for a chunk plus a 1-cell apron (for seamless border faces).
+// Returns { S, x0, z0, h:Int16Array(S*S), cols:Array(S*S) of block-type[] }, all wrapped.
+function genChunkColumns(ctx, cx, cz, CHUNK) {
+  const W = ctx.cfg.worldWidth * 10, WL = ctx.cfg.waterLevel, MH = ctx.cfg.maxGenerationHeight;
+  const x0 = cx * CHUNK, z0 = cz * CHUNK, S = CHUNK + 2;
+  const h = new Int16Array(S * S), cols = new Array(S * S);
+  for (let lz = -1; lz <= CHUNK; lz++) {
+    for (let lx = -1; lx <= CHUNK; lx++) {
+      const wx = (((x0 + lx) % W) + W) % W, wz = (((z0 + lz) % W) + W) % W;
+      const ih = heightToInt(ctx.grayAt(wx, wz), WL, MH);
+      const idx = (lz + 1) * S + (lx + 1);
+      h[idx] = ih; cols[idx] = generateColumn(ctx, wx, wz, ih);
+    }
+  }
+  return { S, x0, z0, CHUNK, h, cols };
+}
+
+// Face-cull mesh a generated chunk. hiddenArr = block types treated as air (so interiors show
+// through). sliceTop = highest y to render (voxels above are treated as air, so the terrain is
+// "cut" at that level and the exposed strata get top faces) — used for the descend-to-see cutaway.
+// Returns interleaved geometry + a per-vertex palette index and the palette strings.
+function meshChunkFromCols(chunk, hiddenArr, sliceTop) {
+  const { S, x0, z0, CHUNK, h, cols } = chunk;
+  const hidden = new Set(hiddenArr || []);
+  const cut = (sliceTop == null) ? Infinity : sliceTop;
+  const at = (lx, lz) => (lz + 1) * S + (lx + 1);
+  const visible = (lx, lz, y) => { const i = at(lx, lz); return y >= 0 && y <= h[i] && y <= cut && !hidden.has(cols[i][y]); };
+  const palette = [], palIdx = Object.create(null);
+  const idOf = t => { let i = palIdx[t]; if (i === undefined) { i = palette.length; palette.push(t); palIdx[t] = i; } return i; };
+  const pos = [], nor = [], pal = [];
+  function face(v, nx, ny, nz, id) {
+    pos.push(v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[0], v[1], v[2], v[6], v[7], v[8], v[9], v[10], v[11]);
+    for (let i = 0; i < 6; i++) { nor.push(nx, ny, nz); pal.push(id); }
+  }
+  for (let lz = 0; lz < CHUNK; lz++) {
+    const z = z0 + lz;
+    for (let lx = 0; lx < CHUNK; lx++) {
+      const x = x0 + lx, ci = at(lx, lz), col = cols[ci], top = Math.min(h[ci], cut);
+      for (let y = 0; y <= top; y++) {
+        const t = col[y]; if (hidden.has(t)) continue; const id = idOf(t);
+        if (!visible(lx, lz, y + 1))     face([x, y + 1, z + 1, x + 1, y + 1, z + 1, x + 1, y + 1, z, x, y + 1, z], 0, 1, 0, id);
+        if (y > 0 && !visible(lx, lz, y - 1)) face([x, y, z, x + 1, y, z, x + 1, y, z + 1, x, y, z + 1], 0, -1, 0, id);
+        if (!visible(lx - 1, lz, y))     face([x, y + 1, z, x, y + 1, z + 1, x, y, z + 1, x, y, z], -1, 0, 0, id);
+        if (!visible(lx + 1, lz, y))     face([x + 1, y + 1, z + 1, x + 1, y + 1, z, x + 1, y, z, x + 1, y, z + 1], 1, 0, 0, id);
+        if (!visible(lx, lz - 1, y))     face([x + 1, y + 1, z, x, y + 1, z, x, y, z, x + 1, y, z], 0, 0, -1, id);
+        if (!visible(lx, lz + 1, y))     face([x, y + 1, z + 1, x + 1, y + 1, z + 1, x + 1, y, z + 1, x, y, z + 1], 0, 0, 1, id);
+      }
+    }
+  }
+  return { pos: new Float32Array(pos), nor: new Float32Array(nor), pal: new Uint16Array(pal), palette };
+}
+
+if (typeof module !== 'undefined') module.exports = { initTerrain, generateColumn, parseTerrain, heightToInt, selectBase, bindVoxel, genChunkColumns, meshChunkFromCols, IMPENETRABLE };

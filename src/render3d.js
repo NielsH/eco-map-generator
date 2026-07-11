@@ -1,136 +1,108 @@
-// 3D voxel world view (main thread). Consumes the raster grids (biome + blurred heightmap)
-// and renders the world as simple colored blocks with a fly camera. three.js is a global (UMD).
-//
-// Phase 2: each map column is a solid block stack from bedrock to its surface height, colored by
-// biome; cliffs between columns are meshed as side faces; one translucent water plane sits at the
-// water level. Chunks are streamed around the camera so world size doesn't blow up memory.
-// (Phase 3 will replace the solid fill with real per-voxel block types + visibility toggles.)
+// 3D voxel world view (main thread). The worker generates + face-cull-meshes chunks of real
+// per-voxel blocks; this module streams chunk meshes around a fly camera and colors them by
+// block type. Block-type visibility toggles let you hide surface layers to reveal ore veins.
+// three.js is a global (UMD). Chunk geometry is generated on demand near the camera.
 var Render3D = (function () {
-  var T = null;                 // THREE
+  var T = null;
   var scene, camera, renderer, container, water;
   var running = false, rafId = 0;
-  var world = null;             // { W, biome, gray, names, WL, MH, colors }
-  var chunks = new Map();       // "cx,cz" -> THREE.Mesh
-  var buildQueue = [];          // chunks pending mesh build
-  var CHUNK = 32, RENDER_DIST = 7, MAX_BUILDS_PER_FRAME = 3;
+  var meta = null;              // { W, WL, MH }
+  var chunks = new Map();       // "cx,cz" -> THREE.Mesh (or Object3D placeholder while pending)
+  var pending = new Set();      // chunk keys awaiting worker mesh
+  var wantQueue = [];
+  var hidden = new Set();       // block types hidden from view
+  var colorFor = null;          // fn(blockType) -> THREE.Color
+  var requestChunk = null, dropChunk = null;   // wired to the worker by the glue
+  var CHUNK = 24, RENDER_DIST = 6, MAX_REQ_INFLIGHT = 6;
+  var grayGrid = null, biomeGrid = null, biomeNames = null, Wg = 0, curSlice = null, lastSliceMs = 0, hud = null;   // cutaway + HUD
+
+  // heightmap byte -> surface Y (matches the worker/TerrainGenerator), for underground detection
+  function vRound(x) { var f = Math.floor(x), d = x - f; if (d < 0.5) return f; if (d > 0.5) return f + 1; return (f % 2 === 0) ? f : f + 1; }
+  function idxAt(x, z) { var wx = ((Math.floor(x) % Wg) + Wg) % Wg, wz = ((Math.floor(z) % Wg) + Wg) % Wg; return wz * Wg + wx; }
+  function heightAt(x, z) {
+    if (!grayGrid) return 0;
+    var elev = (grayGrid[idxAt(x, z)] / 255) * 2 - 1;
+    var ih = elev < 0 ? vRound((elev + 1) * meta.WL) : meta.WL + vRound(elev * (meta.MH - meta.WL));
+    return ih < 0 ? 0 : ih > meta.MH ? meta.MH : ih;
+  }
+  function biomeAt(x, z) {
+    if (!biomeGrid || !biomeNames) return '';
+    var n = biomeNames[biomeGrid[idxAt(x, z)]] || '';
+    return n.replace(/([a-z])([A-Z])/g, '$1 $2');   // "ColdForest" -> "Cold Forest"
+  }
 
   // ---- input / fly camera ----
-  var keys = {}, yaw = 0, pitch = -0.5, dragging = false, speed = 40;
-  var tmpF = null, lastT = 0;
-
-  function onKey(e, down) {
-    var k = e.key.toLowerCase();
-    keys[k] = down;
-    if (down && (k === 'w' || k === 'a' || k === 's' || k === 'd' || k === ' ')) e.preventDefault();
-  }
+  var keys = {}, yaw = 0, pitch = -0.5, dragging = false, speed = 40, tmpF = null, lastT = 0;
+  function onKey(e, down) { var k = e.key.toLowerCase(); keys[k] = down; if (down && (k === 'w' || k === 'a' || k === 's' || k === 'd' || k === ' ')) e.preventDefault(); }
   function onMouseMove(e) {
     if (!dragging) return;
-    // "grab the scene": drag right and the view follows your hand (inverse of FPS look)
-    yaw += e.movementX * 0.003;
-    pitch += e.movementY * 0.003;
-    var lim = Math.PI / 2 - 0.02;
-    if (pitch > lim) pitch = lim; if (pitch < -lim) pitch = -lim;
+    yaw += e.movementX * 0.003; pitch += e.movementY * 0.003;   // grab-the-scene
+    var lim = Math.PI / 2 - 0.02; if (pitch > lim) pitch = lim; if (pitch < -lim) pitch = -lim;
   }
   function onWheel(e) { speed = Math.max(6, Math.min(400, speed * (e.deltaY < 0 ? 1.15 : 0.87))); e.preventDefault(); }
-
   function forward() { return tmpF.set(Math.cos(pitch) * Math.sin(yaw), Math.sin(pitch), Math.cos(pitch) * Math.cos(yaw)); }
-
   function updateCamera(dt) {
     var f = forward();
     camera.lookAt(camera.position.x + f.x, camera.position.y + f.y, camera.position.z + f.z);
-    var mv = speed * dt, moved = false;
-    var fx = Math.sin(yaw), fz = Math.cos(yaw);        // horizontal forward
-    var rx = -Math.cos(yaw), rz = Math.sin(yaw);       // camera-right (D strafes right, A left)
-    var p = camera.position;
-    if (keys['w']) { p.x += fx * mv; p.z += fz * mv; moved = true; }
-    if (keys['s']) { p.x -= fx * mv; p.z -= fz * mv; moved = true; }
-    if (keys['d']) { p.x += rx * mv; p.z += rz * mv; moved = true; }
-    if (keys['a']) { p.x -= rx * mv; p.z -= rz * mv; moved = true; }
-    if (keys[' '] || keys['e']) { p.y += mv; moved = true; }
-    if (keys['shift'] || keys['q']) { p.y -= mv; moved = true; }
-    return moved;
+    var mv = speed * dt, fx = Math.sin(yaw), fz = Math.cos(yaw), rx = -Math.cos(yaw), rz = Math.sin(yaw), p = camera.position;
+    if (keys['w']) { p.x += fx * mv; p.z += fz * mv; }
+    if (keys['s']) { p.x -= fx * mv; p.z -= fz * mv; }
+    if (keys['d']) { p.x += rx * mv; p.z += rz * mv; }
+    if (keys['a']) { p.x -= rx * mv; p.z -= rz * mv; }
+    if (keys[' '] || keys['e']) p.y += mv;
+    if (keys['shift'] || keys['q']) p.y -= mv;
   }
 
-  // ---- world sampling ----
-  function colHeight(x, z) {
-    var W = world.W;
-    var g = world.gray[z * W + x];
-    var elev = (g / 255) * 2 - 1;
-    var ih = elev < 0 ? Math.round((elev + 1) * world.WL) : world.WL + Math.round(elev * (world.MH - world.WL));
-    if (ih < 0) ih = 0; if (ih > world.MH) ih = world.MH;
-    return ih;
-  }
-  function colColor(x, z) { return world.colors[world.biome[z * world.W + x]]; }
-
-  // ---- chunk meshing (heightmap surface: top faces + exposed cliff sides) ----
-  function buildChunk(cx, cz) {
-    var W = world.W, x0 = cx * CHUNK, z0 = cz * CHUNK;
-    var pos = [], nor = [], col = [];
-    function quad(ax, ay, az, bx, by, bz, ccx, ccy, ccz, dx, dy, dz, nx, ny, nz, c) {
-      // two triangles a,b,c  and a,c,d
-      pos.push(ax, ay, az, bx, by, bz, ccx, ccy, ccz, ax, ay, az, ccx, ccy, ccz, dx, dy, dz);
-      for (var i = 0; i < 6; i++) { nor.push(nx, ny, nz); col.push(c[0], c[1], c[2]); }
-    }
-    for (var lz = 0; lz < CHUNK; lz++) {
-      var z = z0 + lz; if (z >= W) break;
-      for (var lx = 0; lx < CHUNK; lx++) {
-        var x = x0 + lx; if (x >= W) break;
-        var h = colHeight(x, z), c = colColor(x, z);
-        var top = h + 1;                 // block h occupies [h, h+1)
-        // top face (y = top)
-        quad(x, top, z + 1,  x + 1, top, z + 1,  x + 1, top, z,  x, top, z,  0, 1, 0, c);
-        // exposed sides vs 4 neighbours (wrap sampling for seamless chunk borders)
-        var xm = (x - 1 + W) % W, xp = (x + 1) % W, zm = (z - 1 + W) % W, zp = (z + 1) % W;
-        var hw = colHeight(xm, z), he = colHeight(xp, z), hn = colHeight(x, zm), hs = colHeight(x, zp);
-        if (hw < h) { var b = hw + 1; quad(x, top, z, x, top, z + 1, x, b, z + 1, x, b, z, -1, 0, 0, c); }
-        if (he < h) { var b2 = he + 1; quad(x + 1, top, z + 1, x + 1, top, z, x + 1, b2, z, x + 1, b2, z + 1, 1, 0, 0, c); }
-        if (hn < h) { var b3 = hn + 1; quad(x + 1, top, z, x, top, z, x, b3, z, x + 1, b3, z, 0, 0, -1, c); }
-        if (hs < h) { var b4 = hs + 1; quad(x, top, z + 1, x + 1, top, z + 1, x + 1, b4, z + 1, x, b4, z + 1, 0, 0, 1, c); }
-      }
-    }
-    if (!pos.length) return null;
-    var geo = new T.BufferGeometry();
-    geo.setAttribute('position', new T.Float32BufferAttribute(pos, 3));
-    geo.setAttribute('normal', new T.Float32BufferAttribute(nor, 3));
-    geo.setAttribute('color', new T.Float32BufferAttribute(col, 3));
-    var mesh = new T.Mesh(geo, world.mat);
-    scene.add(mesh);
-    return mesh;
-  }
-
+  // ---- streaming ----
   function streamChunks() {
-    var nC = Math.ceil(world.W / CHUNK);
+    if (!meta) return;
+    var nC = Math.ceil(meta.W / CHUNK);
     var ccx = Math.floor(camera.position.x / CHUNK), ccz = Math.floor(camera.position.z / CHUNK);
-    // queue missing chunks in range, nearest first
     var want = [];
     for (var dz = -RENDER_DIST; dz <= RENDER_DIST; dz++)
       for (var dx = -RENDER_DIST; dx <= RENDER_DIST; dx++) {
         var cx = ccx + dx, cz = ccz + dz;
         if (cx < 0 || cz < 0 || cx >= nC || cz >= nC) continue;
         var key = cx + ',' + cz;
-        if (chunks.has(key)) continue;
+        if (chunks.has(key) || pending.has(key)) continue;
         want.push({ key: key, cx: cx, cz: cz, d: dx * dx + dz * dz });
       }
     want.sort(function (a, b) { return a.d - b.d; });
-    buildQueue = want;
-    // unload far chunks
+    wantQueue = want;
     chunks.forEach(function (mesh, key) {
       var p = key.split(','), cx = +p[0], cz = +p[1];
       if (Math.abs(cx - ccx) > RENDER_DIST + 1 || Math.abs(cz - ccz) > RENDER_DIST + 1) {
-        scene.remove(mesh); mesh.geometry.dispose(); chunks.delete(key);
+        scene.remove(mesh); if (mesh.geometry) mesh.geometry.dispose(); chunks.delete(key);
+        if (dropChunk) dropChunk(cx, cz);
       }
     });
   }
-
-  function drainBuildQueue() {
-    var n = 0;
-    while (buildQueue.length && n < MAX_BUILDS_PER_FRAME) {
-      var c = buildQueue.shift();
-      if (chunks.has(c.key)) continue;
-      var mesh = buildChunk(c.cx, c.cz);
-      chunks.set(c.key, mesh || new T.Object3D());  // store placeholder for empty chunks so we don't retry
-      n++;
+  function pump() {
+    while (pending.size < MAX_REQ_INFLIGHT && wantQueue.length) {
+      var c = wantQueue.shift();
+      if (chunks.has(c.key) || pending.has(c.key)) continue;
+      pending.add(c.key);
+      requestChunk(c.cx, c.cz, CHUNK, Array.from(hidden), curSlice);
     }
+  }
+  // re-request meshes for all loaded chunks (used when the cutaway slice level changes)
+  function remeshLoaded() {
+    chunks.forEach(function (mesh, key) { var p = key.split(','); requestChunk(+p[0], +p[1], CHUNK, Array.from(hidden), curSlice); });
+  }
+
+  // worker delivered a meshed chunk: build the BufferGeometry + colored mesh
+  function onChunkMesh(cx, cz, g) {
+    var key = cx + ',' + cz; pending.delete(key);
+    if (chunks.has(key)) { scene.remove(chunks.get(key)); var old = chunks.get(key); if (old.geometry) old.geometry.dispose(); }
+    if (!g.pos.length) { chunks.set(key, new T.Object3D()); return; }
+    var colors = new Float32Array(g.pal.length * 3);
+    var palCols = g.palette.map(function (t) { return colorFor(t); });
+    for (var i = 0; i < g.pal.length; i++) { var c = palCols[g.pal[i]]; colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b; }
+    var geo = new T.BufferGeometry();
+    geo.setAttribute('position', new T.BufferAttribute(g.pos, 3));
+    geo.setAttribute('normal', new T.BufferAttribute(g.nor, 3));
+    geo.setAttribute('color', new T.BufferAttribute(colors, 3));
+    var mesh = new T.Mesh(geo, meta.mat); scene.add(mesh); chunks.set(key, mesh);
   }
 
   var streamTick = 0;
@@ -139,9 +111,34 @@ var Render3D = (function () {
     rafId = requestAnimationFrame(frame);
     var dt = Math.min(0.05, (now - lastT) / 1000 || 0); lastT = now;
     updateCamera(dt);
+    updateCutaway(now);
     if ((streamTick++ % 6) === 0) streamChunks();
-    drainBuildQueue();
+    pump();
     renderer.render(scene, camera);
+    updateHud();
+  }
+
+  // When the eye drops below the local surface, cut the terrain at the eye height so the strata
+  // around/below become visible (otherwise you're embedded in solid rock and see nothing).
+  function updateCutaway(now) {
+    if (!meta) return;
+    var camY = camera.position.y;
+    var surf = heightAt(camera.position.x, camera.position.z);
+    var underground = camY < surf - 1;
+    // cut a couple blocks BELOW the eye so the exposed strata surface sits under you (visible),
+    // not edge-on at eye level.
+    var desired = underground ? Math.max(0, Math.floor(camY) - 2) : null;   // null = no slice
+    if (desired === curSlice) return;
+    if (now - lastSliceMs < 120) return;   // throttle re-mesh churn while diving
+    curSlice = desired; lastSliceMs = now;
+    remeshLoaded();
+  }
+
+  function updateHud() {
+    if (!hud) return;
+    var p = camera.position, b = biomeAt(p.x, p.z);
+    hud.textContent = 'Y ' + Math.round(p.y) + '   X ' + Math.round(p.x) + '  Z ' + Math.round(p.z) +
+      (b ? '   ·   ' + b : '') + (curSlice != null ? '   ✂ cutaway' : '');
   }
 
   // ---- setup ----
@@ -149,53 +146,69 @@ var Render3D = (function () {
     if (renderer) { container = el; el.appendChild(renderer.domElement); resize(); return; }
     T = THREE; container = el; tmpF = new T.Vector3();
     scene = new T.Scene();
-    scene.background = new T.Color(0x8fbcd4);
-    scene.fog = new T.Fog(0x8fbcd4, CHUNK * RENDER_DIST * 0.6, CHUNK * RENDER_DIST * 1.4);
-    camera = new T.PerspectiveCamera(70, el.clientWidth / Math.max(1, el.clientHeight), 0.1, 4000);
+    scene.background = new T.Color(0x9ec7e0);
+    scene.fog = new T.Fog(0x9ec7e0, CHUNK * RENDER_DIST * 0.7, CHUNK * RENDER_DIST * 1.5);
+    camera = new T.PerspectiveCamera(70, el.clientWidth / Math.max(1, el.clientHeight), 0.1, 5000);
     renderer = new T.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
     el.appendChild(renderer.domElement);
-    var hemi = new T.HemisphereLight(0xffffff, 0x556b2f, 0.9); scene.add(hemi);
-    var sun = new T.DirectionalLight(0xffffff, 0.8); sun.position.set(0.5, 1, 0.3); scene.add(sun);
+    scene.add(new T.HemisphereLight(0xffffff, 0x55503f, 0.95));
+    var sun = new T.DirectionalLight(0xffffff, 0.7); sun.position.set(0.5, 1, 0.3); scene.add(sun);
     resize();
+    // Y/X/Z read-out overlay
+    hud = document.createElement('div');
+    hud.style.cssText = 'position:absolute;top:8px;left:8px;padding:4px 9px;border-radius:6px;font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;color:#fff;background:rgba(0,0,0,.45);pointer-events:none;letter-spacing:.3px;z-index:2';
+    el.appendChild(hud);
     renderer.domElement.style.cursor = 'grab';
     window.addEventListener('resize', resize);
     window.addEventListener('keydown', function (e) { if (running) onKey(e, true); });
     window.addEventListener('keyup', function (e) { if (running) onKey(e, false); });
     window.addEventListener('mousemove', onMouseMove);
-    // click-and-drag to look around (more predictable than pointer lock; cursor stays visible)
     renderer.domElement.addEventListener('mousedown', function (e) { dragging = true; renderer.domElement.style.cursor = 'grabbing'; e.preventDefault(); });
     window.addEventListener('mouseup', function () { if (dragging) { dragging = false; if (renderer) renderer.domElement.style.cursor = 'grab'; } });
     renderer.domElement.addEventListener('wheel', onWheel, { passive: false });
   }
-
   function resize() {
     if (!renderer || !container) return;
     var w = container.clientWidth, h = Math.max(1, container.clientHeight);
     renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
   }
 
-  function setWorld(grid, cfg, colors) {
-    world = { W: grid.W, biome: grid.biome, gray: grid.gray, names: grid.biomeNames,
-      WL: cfg.waterLevel, MH: cfg.maxGenerationHeight,
-      colors: colors, mat: new T.MeshLambertMaterial({ vertexColors: true }) };
-    // clear any existing chunks
-    chunks.forEach(function (m) { if (m.geometry) { scene.remove(m); m.geometry.dispose(); } }); chunks.clear();
-    buildQueue = [];
+  function clearChunks() {
+    chunks.forEach(function (m) { if (m.geometry) { scene.remove(m); m.geometry.dispose(); } else scene.remove(m); });
+    chunks.clear(); pending.clear(); wantQueue = [];
+  }
+
+  // meta = {W, waterLevel, maxGenerationHeight}; colorFn(blockType)->[r,g,b] 0..1;
+  // reqChunk(cx,cz,CHUNK,hiddenArr) asks the worker; dropCb(cx,cz) frees its cache.
+  function setWorld(m, colorFn, reqChunk, dropCb) {
+    clearChunks();
+    colorFor = function (t) { return new T.Color(colorFn(t)); };   // colorFn returns a CSS color string
+    requestChunk = reqChunk; dropChunk = dropCb;
+    grayGrid = m.gray || null; biomeGrid = m.biome || null; biomeNames = m.biomeNames || null;
+    Wg = m.W; curSlice = null; lastSliceMs = 0;
+    meta = { W: m.W, WL: m.waterLevel, MH: m.maxGenerationHeight, mat: new T.MeshLambertMaterial({ vertexColors: true }) };
     if (water) { scene.remove(water); water.geometry.dispose(); water.material.dispose(); }
-    var wp = new T.PlaneGeometry(grid.W, grid.W);
-    water = new T.Mesh(wp, new T.MeshBasicMaterial({ color: 0x3d7fd6, transparent: true, opacity: 0.55, side: T.DoubleSide }));
-    water.rotation.x = -Math.PI / 2; water.position.set(grid.W / 2, cfg.waterLevel + 1, grid.W / 2);
+    var wp = new T.PlaneGeometry(m.W, m.W);
+    water = new T.Mesh(wp, new T.MeshBasicMaterial({ color: 0x3d7fd6, transparent: true, opacity: 0.5, side: T.DoubleSide, depthWrite: false }));
+    water.rotation.x = -Math.PI / 2; water.position.set(m.W / 2, m.waterLevel + 1, m.W / 2); water.renderOrder = 1;
     scene.add(water);
-    // drop the camera above the middle of the map, looking down-ish
-    var cx = grid.W / 2, cz = grid.W / 2;
-    camera.position.set(cx, colHeight(Math.floor(cx), Math.floor(cz)) + 60, cz + 40);
-    yaw = Math.PI; pitch = -0.5;
+    var cx = m.W / 2, cz = m.W / 2;
+    camera.position.set(cx, m.maxGenerationHeight * 0.7 + 30, cz + 40);
+    yaw = Math.PI; pitch = -0.6;
+    streamChunks();
+  }
+
+  // toggle a block type's visibility; re-request all loaded/pending chunks
+  function setHidden(hiddenArr) {
+    hidden = new Set(hiddenArr);
+    clearChunks();
     streamChunks();
   }
 
   function start() { if (running) return; running = true; lastT = performance.now(); rafId = requestAnimationFrame(frame); }
   function stop() { running = false; if (rafId) cancelAnimationFrame(rafId); keys = {}; dragging = false; }
 
-  return { init: init, setWorld: setWorld, start: start, stop: stop, resize: resize, isReady: function () { return !!renderer; }, hasWorld: function () { return !!world; } };
+  return { init: init, setWorld: setWorld, onChunkMesh: onChunkMesh, setHidden: setHidden,
+    start: start, stop: stop, resize: resize, isReady: function () { return !!renderer; } };
 })();
