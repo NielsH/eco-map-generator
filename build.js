@@ -16,21 +16,31 @@ function strip(src) {
 const core = strip(fs.readFileSync('src/core.js', 'utf8'));
 const geo = strip(fs.readFileSync('src/geo.js', 'utf8'));
 const worldgen = strip(fs.readFileSync('src/worldgen.js', 'utf8'));
+const raster = strip(fs.readFileSync('src/raster.js', 'utf8'));
+const voxel = strip(fs.readFileSync('src/voxel.js', 'utf8'));
 const vt = fs.readFileSync('src/vectortable.txt', 'utf8').trim();
 const defaultEco = fs.readFileSync('WorldGenerator.eco', 'utf8').trim();
+// three.js (UMD, sets global THREE) and the main-thread 3D renderer are injected via
+// placeholders AFTER the template literal is built, so their backticks/${} don't need escaping.
+const threeSrc = fs.readFileSync('src/vendor/three.min.js', 'utf8');
+const render3dSrc = fs.readFileSync('src/render3d.js', 'utf8');
 
-const LIB = [core, geo, worldgen,
+const LIB = [core, geo, worldgen, raster, voxel,
   `const C = { CsRandom, Perlin, RidgedMulti, ScaleBias, gradientCoherentNoise3D, setVectorTable, NQ };`,
-  `const G = { poissonSamples, Voronoi };`
+  `const G = { poissonSamples, Voronoi };`,
+  `bindVoxel(C);`
 ].join('\n\n');
 
 const WORKER_GLUE = `
+let lastRes = null;   // keep the last generate() result so the 3D view can request raster grids lazily
+let vGrid = null, vCtx = null, vChunks = null;   // 3D voxel view: raster grid, terrain ctx, per-chunk column cache
 onmessage = function (e) {
   const m = e.data;
   if (m.type === 'init') { setVectorTable(m.vt); postMessage({ type: 'ready' }); return; }
   if (m.type === 'gen') {
     try {
       const res = generate(m.cfg, { progress: s => postMessage({ type: 'progress', phase: s }) });
+      lastRes = res; vGrid = null; vCtx = null; vChunks = null;   // stale 3D caches
       const polys = res.polys.map(p => {
         const pts = new Float32Array(p.points.length * 2);
         for (let i = 0; i < p.points.length; i++) { pts[i*2] = p.points[i].x; pts[i*2+1] = p.points[i].y; }
@@ -42,6 +52,41 @@ onmessage = function (e) {
         stats: { continents: res.numContinents, islands: res.numSmallIslands, lakes: res.numLakes, rivers: res.numRivers, landPercent: res.landPercent, counts } });
     } catch (err) { postMessage({ type: 'error', message: String(err && err.stack || err) }); }
   }
+  // ---- 3D voxel view (its own message types so it never clashes with generation) ----
+  if (m.type === '3d-init') {
+    try {
+      if (!lastRes) { postMessage({ type: 'v3d-error', message: 'No world generated yet' }); return; }
+      if (vCtx && vCtx._deposits && vGrid) {   // reuse the precomputed layer on reopen (invalidated on regenerate)
+        postMessage({ type: 'v3d-ready', W: vGrid.W, waterLevel: m.cfg.waterLevel, maxGenerationHeight: m.cfg.maxGenerationHeight,
+          gray: vGrid.gray.slice(), biome: vGrid.biome.slice(), biomeNames: vGrid.biomeNames });
+        return;
+      }
+      if (!vGrid) vGrid = rasterize(lastRes.polys, lastRes.worldSize, { progress: (ph, f) => postMessage({ type: 'v3d-progress', phase: ph, frac: f }) });
+      const cfg = m.cfg;
+      vCtx = initTerrain(m.terrain, cfg);
+      const W = vGrid.W, names = vGrid.biomeNames, biome = vGrid.biome, gray = vGrid.gray;
+      vCtx.grayAt = (x, z) => gray[z * W + x];
+      vCtx.biomeAt = (x, z) => names[biome[z * W + x]];
+      computeDeposits(vCtx, vGrid, (ph, f) => postMessage({ type: 'v3d-progress', phase: ph, frac: f }));   // precompute the ore-vein overlay
+      vChunks = new Map();
+      const grayCopy = gray.slice(), biomeCopy = biome.slice();   // copies so the worker keeps its grids
+      postMessage({ type: 'v3d-ready', W: W, waterLevel: cfg.waterLevel, maxGenerationHeight: cfg.maxGenerationHeight,
+        gray: grayCopy, biome: biomeCopy, biomeNames: names },
+        [grayCopy.buffer, biomeCopy.buffer]);
+    } catch (err) { postMessage({ type: 'v3d-error', message: String(err && err.stack || err) }); }
+  }
+  if (m.type === 'chunk') {
+    try {
+      if (!vCtx) { postMessage({ type: 'v3d-error', message: '3D not initialized' }); return; }
+      const key = m.cx + ',' + m.cz;
+      let ch = vChunks.get(key);
+      if (!ch) { ch = genChunkColumns(vCtx, m.cx, m.cz, m.CHUNK); vChunks.set(key, ch); }
+      const g = meshChunkFromCols(ch, m.hidden, m.sliceTop);
+      postMessage({ type: 'v3d-chunkmesh', cx: m.cx, cz: m.cz, pos: g.pos, nor: g.nor, pal: g.pal, palette: g.palette },
+        [g.pos.buffer, g.nor.buffer, g.pal.buffer]);
+    } catch (err) { postMessage({ type: 'v3d-error', message: String(err && err.stack || err) }); }
+  }
+  if (m.type === 'chunkdrop') { if (vChunks) vChunks.delete(m.cx + ',' + m.cz); }
 };`;
 
 const html = `<!DOCTYPE html>
@@ -187,11 +232,30 @@ const html = `<!DOCTYPE html>
     <div class="row">
       <span class="lbl">Layer</span><span class="seg" id="layers"></span>
       <label class="lbl" style="display:inline-flex;align-items:center;gap:5px;margin-left:8px"><input type="checkbox" id="waterToggle" checked> Rivers &amp; lakes</label>
-      <button id="expPng" style="margin-left:auto">Export PNG</button>
+      <button id="view3d" style="margin-left:auto">🧊 3D view</button>
+      <button id="expPng">Export PNG</button>
     </div>
     <div id="canvasWrap"><canvas id="cv"></canvas><div id="tip"></div></div>
     <div id="legend"></div>
     <div id="stats"></div>
+
+    <div id="view3dWrap" style="display:none">
+      <div class="row" style="margin:4px 0 8px">
+        <strong style="font-size:15px">🧊 3D voxel world</strong>
+        <span class="lbl" id="view3dStatus" style="margin-left:6px"></span>
+        <button id="view3dClose" style="margin-left:auto">← Back to map</button>
+      </div>
+      <div id="view3dCanvas" style="width:100%;height:70vh;min-height:420px;border-radius:var(--radius);overflow:hidden;background:#8fbcd4;position:relative"></div>
+      <div class="lbl" style="margin-top:6px"><b>Drag</b> to look around · <b>W A S D</b> move · <b>Space / Q</b> up · <b>Shift / E</b> down · scroll to change speed</div>
+      <div class="row" style="margin:8px 0 2px;align-items:baseline">
+        <strong style="font-size:13px">Blocks</strong>
+        <span class="lbl">— untick to hide a block type and see through it</span>
+        <button id="view3dHideSoil" style="margin-left:auto;font-size:12px;padding:4px 9px">Hide surface soils</button>
+        <button id="view3dHideAll" style="font-size:12px;padding:4px 9px">Hide all</button>
+        <button id="view3dShowAll" style="font-size:12px;padding:4px 9px">Show all</button>
+      </div>
+      <div id="view3dBlocks" style="display:flex;flex-wrap:wrap;gap:5px 14px;font-size:12.5px"></div>
+    </div>
   </div>
 
   <div id="chartsPanel">
@@ -278,6 +342,8 @@ ${WORKER_GLUE}
 <script type="text/plain" id="vtsrc">${vt}</script>
 <script type="application/json" id="defaultcfg">${defaultEco}</script>
 
+<script>/*__THREE__*/</script>
+<script>/*__RENDER3D__*/</script>
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
@@ -552,7 +618,7 @@ function generateMap(cfg) {
     if (m.type === 'error') { $('err').textContent = 'Generation failed: ' + m.message; $('gen').disabled = false; $('regen').disabled = false; $('prog').style.display='none'; return; }
     if (m.type === 'done') {
       $('progBar').style.width = '100%';
-      result = m;
+      result = m;   // 3D voxel caches (grid/terrain/chunks) are invalidated worker-side on each 'gen'
       updateMixActuals(m);
       if (terrain) { const ej = buildExportJson(); OreChart.render(ej); BlockChart.render(ej); }   // keep charts' biome present/absent + water line in sync
       $('gen').disabled = false; $('regen').disabled = false;
@@ -1558,6 +1624,77 @@ $('randSeed').onclick = () => {
 };
 $('waterToggle').onchange = e => { showWater = e.target.checked; render(); };
 $('expPng').onclick = () => { const a=document.createElement('a'); a.download='eco-worldgen-'+layer+'.png'; a.href=$('cv').toDataURL('image/png'); a.click(); };
+
+// ---- 3D voxel view ----
+// The worker generates + meshes real per-voxel block chunks on demand; we stream them into
+// Render3D and colour them by block type (reusing the ore chart's palette). Untick a block
+// type to hide it and see through to the strata/ore veins beneath.
+let seenBlocks = {}, hiddenBlocks = new Set(), worker3dBound = false;
+const block3dColor = t => blockColorRaw(t);   // CSS colour string; THREE.Color parses it
+const SOIL_HIDE = ['Dirt','RockySoil','Grass','WetlandsSoil','FrozenSoil','Sand','DesertSand','Snow','Grass Block'];
+
+// Persistent listener for 3D messages only (own types, so generation is never affected).
+function worker3dHandler(e) {
+  const m = e.data;
+  if (m.type === 'v3d-progress') {
+    const pct = m.frac != null ? ' ' + Math.round(m.frac * 100) + '%' : '';
+    $('view3dStatus').textContent = m.phase === 'blur' ? 'smoothing height…' : m.phase === 'raster' ? 'rasterizing…' :
+      m.phase === 'veins-seed' ? 'finding ore veins…' + pct : m.phase === 'veins-grow' ? 'growing ore veins…' + pct : 'building…';
+    return;
+  }
+  if (m.type === 'v3d-error') { $('view3dStatus').textContent = 'Error: ' + m.message; return; }
+  if (m.type === 'v3d-ready') {
+    $('view3dStatus').textContent = m.W + '×' + m.W + ' · drag to look, W A S D to fly';
+    Render3D.setWorld(m, block3dColor,
+      (cx, cz, CH, hid, slice) => worker.postMessage({ type: 'chunk', cx, cz, CHUNK: CH, hidden: hid, sliceTop: slice }),
+      (cx, cz) => worker.postMessage({ type: 'chunkdrop', cx, cz }));
+    Render3D.start();
+    return;
+  }
+  if (m.type === 'v3d-chunkmesh') {
+    let added = false;
+    for (const t of m.palette) if (!seenBlocks[t]) { seenBlocks[t] = true; added = true; }
+    if (added) buildBlockToggles();
+    Render3D.onChunkMesh(m.cx, m.cz, { pos: m.pos, nor: m.nor, pal: m.pal, palette: m.palette });
+    return;
+  }
+}
+function buildBlockToggles() {
+  const types = Object.keys(seenBlocks).sort((a, b) => (blockRank(a) - blockRank(b)) || shortBlock(a).localeCompare(shortBlock(b)));
+  $('view3dBlocks').innerHTML = types.map(t => {
+    const on = !hiddenBlocks.has(t);
+    return '<label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer">' +
+      '<input type="checkbox" data-blk="' + t.replace(/"/g, '&quot;') + '"' + (on ? ' checked' : '') + '>' +
+      '<span class="sw" style="display:inline-block;width:11px;height:11px;border-radius:2px;background:' + blockColorRaw(t) + '"></span>' +
+      prettyName(shortBlock(t)) + '</label>';
+  }).join('');
+  $('view3dBlocks').querySelectorAll('input[data-blk]').forEach(cb => {
+    cb.onchange = () => { const t = cb.getAttribute('data-blk'); if (cb.checked) hiddenBlocks.delete(t); else hiddenBlocks.add(t); Render3D.setHidden(Array.from(hiddenBlocks)); };
+  });
+}
+function open3D() {
+  if (!result || !terrain || !cfgUsed) { $('err').textContent = 'Wait for the world to finish generating first.'; return; }
+  $('canvasWrap').style.display = 'none'; $('legend').style.display = 'none'; $('stats').style.display = 'none';
+  $('view3d').style.display = 'none'; $('expPng').style.display = 'none';
+  $('view3dWrap').style.display = 'block';
+  $('view3dStatus').textContent = 'initializing…';
+  seenBlocks = {}; hiddenBlocks = new Set(); buildBlockToggles();
+  Render3D.init($('view3dCanvas'), THREE);
+  if (!worker3dBound) { worker.addEventListener('message', worker3dHandler); worker3dBound = true; }
+  requestAnimationFrame(() => Render3D.resize());   // size after the container is visible
+  worker.postMessage({ type: '3d-init', terrain: terrain, cfg: cfgUsed });
+}
+function close3D() {
+  Render3D.stop();
+  $('view3dWrap').style.display = 'none';
+  $('canvasWrap').style.display = ''; $('legend').style.display = ''; $('stats').style.display = '';
+  $('view3d').style.display = ''; $('expPng').style.display = '';
+}
+$('view3d').onclick = open3D;
+$('view3dClose').onclick = close3D;
+$('view3dHideSoil').onclick = () => { SOIL_HIDE.forEach(s => { for (const t in seenBlocks) if (shortBlock(t) === s || prettyName(shortBlock(t)) === s) hiddenBlocks.add(t); }); buildBlockToggles(); Render3D.setHidden(Array.from(hiddenBlocks)); };
+$('view3dHideAll').onclick = () => { hiddenBlocks = new Set(Object.keys(seenBlocks)); buildBlockToggles(); Render3D.setHidden(Array.from(hiddenBlocks)); };
+$('view3dShowAll').onclick = () => { hiddenBlocks = new Set(); buildBlockToggles(); Render3D.setHidden([]); };
 const drop = $('drop');
 ['dragover','dragenter'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('over');}));
 ['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('over');}));
@@ -1573,5 +1710,11 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
 </body>
 </html>`;
 
-fs.writeFileSync('index.html', html);
-console.log('wrote index.html', html.length, 'bytes');
+// inject the vendored three.js and the 3D renderer via replacer functions (not template
+// interpolation) so their backticks and `$` sequences pass through verbatim.
+const finalHtml = html
+  .replace('/*__THREE__*/', () => threeSrc)
+  .replace('/*__RENDER3D__*/', () => render3dSrc);
+
+fs.writeFileSync('index.html', finalHtml);
+console.log('wrote index.html', finalHtml.length, 'bytes');
