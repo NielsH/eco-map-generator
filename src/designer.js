@@ -321,12 +321,19 @@
     cfg.landPercentRange = { min: +L.toFixed(3), max: +L.toFixed(3) };
     for (const k of WEIGHT_KEYS) if (cfg[k] > 0) cfg[k] = +wob(cfg[k]).toFixed(4);
   }
+  // Combine the weight-independent similarity components into a score for the current layoutWeight.
+  // (prop/soft/iou/exact are computed by the worker at the best toroidal shift and don't depend on w,
+  // so re-weighting the whole pool is pure arithmetic — no re-scoring of grids on the main thread.)
+  function combine(c, w) {
+    const layout = 0.5 * c.soft + 0.3 * c.iou + 0.2 * c.exact;
+    return { score: (1 - w) * c.prop + w * layout, layout: layout, prop: c.prop, soft: c.soft, iou: c.iou, exact: c.exact };
+  }
   function recordCandidate(m) {
     const grid = new Uint8Array(m.grid);
-    // re-score on the main thread against the *current* layout weight so the pool stays consistent
-    const s = scoreGrids(target, grid, G, { layoutWeight: layoutWeight });
+    const comp = { prop: m.prop, soft: m.soft, iou: m.iou, exact: m.exact };
+    const s = combine(comp, layoutWeight);
     const cfg = cfgBySeed[m.seed]; delete cfgBySeed[m.seed];
-    const item = { seed: m.seed, grid: grid, s: s, cfg: cfg };
+    const item = { seed: m.seed, grid: grid, comp: comp, s: s, cfg: cfg };
     // insert sorted desc by score
     let lo = 0, hi = pool.length;
     while (lo < hi) { const mid = (lo + hi) >> 1; if (pool[mid].s.score < s.score) hi = mid; else lo = mid + 1; }
@@ -353,9 +360,9 @@
     renderGallery(); updateStatus();
   }
   function rescorePool() {
-    for (const it of pool) it.s = scoreGrids(target, it.grid, G, { layoutWeight: layoutWeight });
+    // pure arithmetic re-weight of the stored components — instant, no grid work
+    for (const it of pool) it.s = combine(it.comp, layoutWeight);
     pool.sort((a, b) => b.s.score - a.s.score);
-    if (workers.length) for (const w of workers) w.postMessage({ type: 'search-init', target: target, G: G, layoutWeight: layoutWeight });
     renderGallery(); updateStatus();
   }
 
