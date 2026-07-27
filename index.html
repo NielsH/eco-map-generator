@@ -9070,7 +9070,8 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
   let pool = [];                         // kept candidates: { seed, grid, s }  (s = score breakdown)
   const POOL_MAX = 120, SHOW = 12;
   let workers = [], running = false, evaluated = 0, tStart = 0, seedSet = new Set(), lastUiPaint = 0;
-  let classgridBound = false, painting = false, built = false;
+  let classgridBound = false, painting = false, built = false, cfgBySeed = {}, poolTargetSig = null;
+  let undoStack = [], lastGX = -1, lastGY = -1;
 
   // ================================================================= styling
   function injectStyle() {
@@ -9121,6 +9122,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
           '<div class="dsnTools">' +
             '<span class="dsnRange" style="width:190px">Brush <input type="range" id="dsnBrush" min="1" max="16" value="' + brushSize + '"><span id="dsnBrushV" class="dsnMini">' + brushSize + '</span></span>' +
             '<label class="dsnMini" style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="dsnFill"> flood fill</label>' +
+            '<button id="dsnUndo" title="Undo (Ctrl+Z)">↶ Undo</button>' +
             '<button id="dsnSeedFromMap">Seed from current map</button>' +
             '<button id="dsnClear">Clear</button>' +
           '</div>' +
@@ -9133,9 +9135,17 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
           '<div class="dsnCard" id="dsnSearchCard" style="opacity:.5;pointer-events:none"><h4>2 · Search</h4>' +
             '<div class="dsnRange" style="margin-bottom:8px">Match&nbsp;<span class="dsnMini">mix</span><input type="range" id="dsnWeight" min="0" max="100" value="' + Math.round(layoutWeight * 100) + '"><span class="dsnMini">layout</span></div>' +
             '<div class="row" style="margin:2px 0"><button id="dsnStart" class="primary">▶ Start search</button><button id="dsnStop" disabled>■ Stop</button>' +
-              '<label class="dsnMini" style="display:inline-flex;align-items:center;gap:4px;margin-left:4px"><input type="checkbox" id="dsnJitter"> vary knobs</label></div>' +
-            '<div id="dsnStatus" style="margin-top:8px">idle</div></div>' +
-          '<div class="dsnCard"><h4>3 · Closest worlds <span class="dsnMini" id="dsnGalCount"></span></h4>' +
+              '<label class="dsnMini" style="display:inline-flex;align-items:center;gap:4px;margin-left:4px" title="Also wobble land% and biome weights ±6% while searching, to explore around the inversion"><input type="checkbox" id="dsnJitter"> vary knobs</label></div>' +
+            '<div id="dsnStatus" style="margin-top:8px">idle</div>' +
+            '<div class="dsnMini" id="dsnSpeedHint" style="margin-top:6px"></div></div>' +
+          '<div class="dsnCard"><h4 style="margin:0 0 6px">3 · Closest worlds <span class="dsnMini" id="dsnGalCount"></span></h4>' +
+            '<div id="dsnCompare" style="display:flex;gap:12px;align-items:center;justify-content:center;margin:2px 0 8px">' +
+              '<div style="text-align:center"><canvas id="dsnTargetRef" width="' + G + '" height="' + G + '" style="width:88px;height:88px;border-radius:6px;image-rendering:pixelated;border:0.5px solid var(--border)"></canvas><div class="dsnMini">your drawing</div></div>' +
+              '<div style="font-size:22px;color:var(--muted)">→</div>' +
+              '<div style="text-align:center"><canvas id="dsnBestRef" width="' + G + '" height="' + G + '" style="width:88px;height:88px;border-radius:6px;image-rendering:pixelated;border:0.5px solid var(--border)"></canvas><div class="dsnMini" id="dsnBestLbl">best match</div></div>' +
+            '</div>' +
+            '<div class="dsnMini" style="margin:2px 0 2px">click any card to apply it as your real world · scores are relative — even the best is an approximation</div>' +
+            '<div class="dsnMini" style="margin:0 0 8px"><b>mix</b> = biome proportions · <b>shape</b> = land-mass overlap · <b>fit</b> = biome-type agreement</div>' +
             '<div class="dsnGallery" id="dsnGallery"><div class="dsnMini">No candidates yet — run a search.</div></div></div>' +
         '</div>' +
       '</div>';
@@ -9151,7 +9161,8 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
 
     // tools + wiring
     $('dsnBrush').oninput = e => { brushSize = +e.target.value; $('dsnBrushV').textContent = brushSize; };
-    $('dsnClear').onclick = () => { target.fill(SC.Ocean); renderPaint(); };
+    $('dsnClear').onclick = () => { pushUndo(); target.fill(SC.Ocean); renderPaint(); };
+    $('dsnUndo').onclick = undo;
     $('dsnSeedFromMap').onclick = seedFromMap;
     $('dsnClose').onclick = close;
     $('dsnAnalyze').onclick = analyze;
@@ -9160,9 +9171,10 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     $('dsnWeight').oninput = e => { layoutWeight = +e.target.value / 100; rescorePool(); };
     const cv = $('dsnCanvas');
     cv.addEventListener('contextmenu', e => e.preventDefault());
-    cv.addEventListener('pointerdown', onPointer);
+    cv.addEventListener('pointerdown', e => { pushUndo(); onPointer(e); });
     cv.addEventListener('pointermove', e => { if (painting) onPointer(e); });
-    window.addEventListener('pointerup', () => { painting = false; });
+    window.addEventListener('pointerup', () => { painting = false; lastGX = -1; lastGY = -1; });
+    window.addEventListener('keydown', e => { if ($('designWrap').style.display === 'none') return; if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); undo(); } });
     built = true;
   }
   function markPalette() { $('dsnPal').querySelectorAll('button').forEach(b => b.classList.toggle('on', +b.dataset.c === brushClass)); }
@@ -9185,6 +9197,8 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     ctx.putImageData(img, 0, 0);
   }
   function renderPaint() { drawGrid($('dsnCanvas'), target, true); }
+  function pushUndo() { undoStack.push(target.slice()); if (undoStack.length > 40) undoStack.shift(); }
+  function undo() { if (!undoStack.length) return; target = undoStack.pop(); renderPaint(); }
   function onPointer(e) {
     const cv = $('dsnCanvas'), r = cv.getBoundingClientRect();
     const dispX = Math.floor((e.clientX - r.left) / r.width * G);
@@ -9194,9 +9208,15 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     const erase = (e.buttons & 2) === 2 || e.button === 2;
     const cls = erase ? SC.Ocean : brushClass;
     if ($('dsnFill').checked && !painting) { floodFill(gx, gy, cls); renderPaint(); return; }
-    painting = true;
-    stampBrush(gx, gy, cls);
+    // interpolate along the drag so fast strokes don't leave gaps between discrete stamps
+    if (painting && lastGX >= 0) stampLine(lastGX, lastGY, gx, gy, cls); else stampBrush(gx, gy, cls);
+    painting = true; lastGX = gx; lastGY = gy;
     renderPaint();
+  }
+  function stampLine(x0, y0, x1, y1, cls) {
+    const steps = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0));
+    if (steps === 0) { stampBrush(x1, y1, cls); return; }
+    for (let s = 0; s <= steps; s++) stampBrush(Math.round(x0 + (x1 - x0) * s / steps), Math.round(y0 + (y1 - y0) * s / steps), cls);
   }
   function stampBrush(cx, cy, cls) {
     const rad = brushSize - 1, r2 = (rad + 0.5) * (rad + 0.5);
@@ -9222,6 +9242,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
   }
   function seedFromMap() {
     if (typeof result === 'undefined' || !result) { $('dsnAnalysis').textContent = 'Generate a map first, then seed from it.'; return; }
+    pushUndo();
     if (!classgridBound) { worker.addEventListener('message', ev => { if (ev.data && ev.data.type === 'classgrid' && ev.data.grid) { target = new Uint8Array(ev.data.grid); renderPaint(); flashAnalysis('Seeded from the current map. Edit it, then analyze.'); } }); classgridBound = true; }
     worker.postMessage({ type: 'classgrid', G: G });
   }
@@ -9245,10 +9266,11 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     return sizes.sort((a, b) => b - a);
   }
   function analyze() {
+    invBase = null;                              // cleared until a valid analysis succeeds
     const total = G * G;
     const h = histogram(target);                 // fraction per class
     const landFrac = (() => { let s = 0; for (let c = SC.Grassland; c < NC; c++) s += h[c]; return s; })();
-    if (landFrac < 0.005) { flashAnalysis('Almost no land drawn — paint some biomes first.'); return; }
+    if (landFrac < 0.005) { flashAnalysis('Almost no land drawn — paint some biomes first.'); setSearchEnabled(false); return; }
 
     // shares of land -> weights (reuse the app's exact biome-mix math)
     const need = name => h[SC[name]] / landFrac;
@@ -9288,6 +9310,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     cfg.islandWeight = +Math.max(0, Math.min(0.6, islandArea / totalLand)).toFixed(3);
 
     invBase = cfg;
+    updateSpeedHint();
 
     // summary UI
     const parts = [];
@@ -9301,9 +9324,10 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     $('dsnAnalysis').innerHTML =
       'Land <b>' + (landFrac * 100).toFixed(0) + '%</b> · <b>' + Math.max(1, nc) + '</b> continent(s), <b>' + Math.max(1, ni) + '</b> island group(s)<br>' +
       '<span class="dsnMini">mix (of land): ' + parts.slice(0, 6).map(([n, f]) => LABEL[n] + ' ' + (f / landFrac * 100).toFixed(0) + '%').join(' · ') + '</span>';
-    const card = $('dsnSearchCard'); card.style.opacity = ''; card.style.pointerEvents = '';
+    setSearchEnabled(true);
     $('dsnStatus').textContent = 'ready — press Start search';
   }
+  function setSearchEnabled(on) { const c = $('dsnSearchCard'); c.style.opacity = on ? '' : '.5'; c.style.pointerEvents = on ? '' : 'none'; }
 
   // ================================================================= search pool
   function poolWorkerCount() { return Math.max(2, Math.min(8, (navigator.hardwareConcurrency || 4) - 1)); }
@@ -9338,34 +9362,52 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     const seed = randSeed(); seedSet.add(seed);
     const cfg = JSON.parse(JSON.stringify(invBase)); cfg.seed = seed;
     if ($('dsnJitter').checked) jitter(cfg);
+    cfgBySeed[seed] = cfg;               // remember the exact cfg so Apply reproduces this candidate (esp. with jitter)
     w._busy = true;
     w.postMessage({ type: 'search-eval', cfg: cfg });
   }
   function jitter(cfg) {
-    // small multiplicative wobble on land% and the biome weights, to explore near the inversion
-    const j = () => 1 + (Math.random() - 0.5) * 0.24;
-    const L = Math.max(0.03, Math.min(0.97, cfg.landPercentRange.min * j));
+    // gentle ±6% multiplicative wobble on land% and each biome weight, to explore near the inversion
+    const wob = v => Math.max(0, v * (1 + (Math.random() - 0.5) * 0.12));
+    const L = Math.max(0.03, Math.min(0.97, wob(cfg.landPercentRange.min)));
     cfg.landPercentRange = { min: +L.toFixed(3), max: +L.toFixed(3) };
-    for (const k of WEIGHT_KEYS) if (cfg[k] > 0) cfg[k] = +Math.max(0, cfg[k] * j).toFixed(4);
+    for (const k of WEIGHT_KEYS) if (cfg[k] > 0) cfg[k] = +wob(cfg[k]).toFixed(4);
+  }
+  // Combine the weight-independent similarity components into a score for the current layoutWeight.
+  // (prop/soft/iou/exact are computed by the worker at the best toroidal shift and don't depend on w,
+  // so re-weighting the whole pool is pure arithmetic — no re-scoring of grids on the main thread.)
+  function combine(c, w) {
+    const layout = 0.5 * c.soft + 0.3 * c.iou + 0.2 * c.exact;
+    return { score: (1 - w) * c.prop + w * layout, layout: layout, prop: c.prop, soft: c.soft, iou: c.iou, exact: c.exact };
   }
   function recordCandidate(m) {
     const grid = new Uint8Array(m.grid);
-    // re-score on the main thread against the *current* layout weight so the pool stays consistent
-    const s = scoreGrids(target, grid, G, { layoutWeight: layoutWeight });
-    const item = { seed: m.seed, grid: grid, s: s };
+    const comp = { prop: m.prop, soft: m.soft, iou: m.iou, exact: m.exact };
+    const s = combine(comp, layoutWeight);
+    const cfg = cfgBySeed[m.seed]; delete cfgBySeed[m.seed];
+    const item = { seed: m.seed, grid: grid, comp: comp, s: s, cfg: cfg };
     // insert sorted desc by score
     let lo = 0, hi = pool.length;
     while (lo < hi) { const mid = (lo + hi) >> 1; if (pool[mid].s.score < s.score) hi = mid; else lo = mid + 1; }
     pool.splice(lo, 0, item);
-    if (pool.length > POOL_MAX) pool.length = POOL_MAX;
+    if (pool.length > POOL_MAX) { const dropped = pool.splice(POOL_MAX); for (const d of dropped) if (d.cfg && d.cfg.seed != null) delete cfgBySeed[d.cfg.seed]; }
+  }
+  function targetSig() {                // cheap FNV-1a hash so we can tell if the drawing changed
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < target.length; i++) { h ^= target[i]; h = Math.imul(h, 16777619) >>> 0; }
+    return h;
   }
   function startSearch() {
-    if (!invBase) { analyze(); if (!invBase) return; }
     if (running) return;
-    running = true; tStart = performance.now();
+    analyze();                          // always re-derive invBase from the current drawing (keeps it in sync)
+    if (!invBase) return;
+    const sig = targetSig();            // if the drawing changed, the old pool was scored vs a different target
+    if (sig !== poolTargetSig) { pool = []; seedSet = new Set(); cfgBySeed = {}; poolTargetSig = sig; renderGallery(); }
+    running = true; tStart = performance.now(); evaluated = 0;
     $('dsnStart').disabled = true; $('dsnStop').disabled = false;
     $('dsnStatus').textContent = 'starting workers…';
     ensureWorkers(() => {
+      if (!running) return;             // user may have stopped/closed during worker spin-up
       // (re)sync each worker's target + weight in case the drawing/weight changed since last run
       for (const w of workers) w.postMessage({ type: 'search-init', target: target, G: G, layoutWeight: layoutWeight });
       for (const w of workers) dispatch(w);
@@ -9374,12 +9416,12 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
   function stopSearch() {
     running = false;
     $('dsnStart').disabled = false; $('dsnStop').disabled = true;
-    updateStatus();
+    renderGallery(); updateStatus();
   }
   function rescorePool() {
-    for (const it of pool) it.s = scoreGrids(target, it.grid, G, { layoutWeight: layoutWeight });
+    // pure arithmetic re-weight of the stored components — instant, no grid work
+    for (const it of pool) it.s = combine(it.comp, layoutWeight);
     pool.sort((a, b) => b.s.score - a.s.score);
-    if (workers.length) for (const w of workers) w.postMessage({ type: 'search-init', target: target, G: G, layoutWeight: layoutWeight });
     renderGallery(); updateStatus();
   }
 
@@ -9389,6 +9431,13 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     if (now - lastUiPaint < 250) return;
     lastUiPaint = now;
     renderGallery(); updateStatus();
+  }
+  function updateSpeedHint() {
+    const el = $('dsnSpeedHint'); if (!el) return;
+    const ww = (invBase && invBase.worldWidth) || (typeof baseCfg !== 'undefined' && baseCfg ? baseCfg.worldWidth : 72);
+    const m = ww * 10;
+    const note = ww <= 90 ? 'fast — many candidates/second' : ww <= 130 ? 'moderate — a few candidates/second' : 'slow — big worlds take ~seconds per candidate; let it run longer';
+    el.innerHTML = 'World <b>' + m + '×' + m + ' m</b> · ' + poolWorkerCount() + ' parallel workers · ' + note + '.<br>More candidates = better matches. Leave it running and pick from the best.';
   }
   function updateStatus() {
     const secs = (performance.now() - tStart) / 1000;
@@ -9401,6 +9450,9 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
   }
   function renderGallery() {
     const gal = $('dsnGallery');
+    const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target, true);   // keep the "your drawing" thumbnail in sync
+    const bestRef = $('dsnBestRef'), bestLbl = $('dsnBestLbl');
+    if (bestRef) { if (pool.length) { drawGrid(bestRef, pool[0].grid, true); if (bestLbl) bestLbl.textContent = 'best match · ' + (pool[0].s.score * 100).toFixed(1) + '%'; } else { bestRef.getContext('2d').clearRect(0, 0, G, G); if (bestLbl) bestLbl.textContent = 'best match'; } }
     $('dsnGalCount').textContent = pool.length ? '(' + pool.length + ' kept)' : '';
     if (!pool.length) { gal.innerHTML = '<div class="dsnMini">No candidates yet — run a search.</div>'; return; }
     const show = pool.slice(0, SHOW);
@@ -9417,11 +9469,12 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     gal.querySelectorAll('canvas[data-i]').forEach(c => c.onclick = () => applyCandidate(show[+c.dataset.i]));
   }
   function applyCandidate(item) {
-    const cfg = JSON.parse(JSON.stringify(invBase)); cfg.seed = item.seed;
-    baseCfg = cfg;                        // reassign the main script's lexical global so readForm() derives from it
-    populateForm(cfg);
+    // the candidate's exact cfg (jitter-safe); fall back to invBase+seed for older pool items
+    const src = item.cfg || Object.assign(JSON.parse(JSON.stringify(invBase)), { seed: item.seed });
+    const cfg = JSON.parse(JSON.stringify(src));
+    populateForm(cfg);                    // fills every form field incl. weights + seed; readForm() will reproduce cfg
     close();
-    generateMap(cfg);
+    generateMap(cfg);                     // baseCfg is left as the loaded config so "Reset to loaded" still works
   }
 
   // ================================================================= open / close
@@ -9435,6 +9488,11 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     if (cp) { cp._dsnPrev = cp.style.display; cp.style.display = 'none'; }
     if (cfp) { cfp._dsnPrev = cfp.style.display; cfp.style.display = 'none'; }
     $('designWrap').style.display = 'block';
+    // first time in: seed the canvas from the current map so there's something to edit (not blank ocean)
+    let empty = true; for (let i = 0; i < target.length; i++) if (target[i] !== SC.Ocean) { empty = false; break; }
+    if (empty && typeof result !== 'undefined' && result) seedFromMap();
+    updateSpeedHint();
+    const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target, true);
     renderPaint();
   }
   function close() {
