@@ -37,7 +37,7 @@
   let pool = [];                         // kept candidates: { seed, grid, s }  (s = score breakdown)
   const POOL_MAX = 120, SHOW = 12;
   let workers = [], running = false, evaluated = 0, tStart = 0, seedSet = new Set(), lastUiPaint = 0;
-  let classgridBound = false, painting = false, built = false, cfgBySeed = {};
+  let classgridBound = false, painting = false, built = false, cfgBySeed = {}, poolTargetSig = null;
 
   // ================================================================= styling
   function injectStyle() {
@@ -219,7 +219,7 @@
     const total = G * G;
     const h = histogram(target);                 // fraction per class
     const landFrac = (() => { let s = 0; for (let c = SC.Grassland; c < NC; c++) s += h[c]; return s; })();
-    if (landFrac < 0.005) { flashAnalysis('Almost no land drawn — paint some biomes first.'); return; }
+    if (landFrac < 0.005) { flashAnalysis('Almost no land drawn — paint some biomes first.'); setSearchEnabled(false); return; }
 
     // shares of land -> weights (reuse the app's exact biome-mix math)
     const need = name => h[SC[name]] / landFrac;
@@ -273,9 +273,10 @@
     $('dsnAnalysis').innerHTML =
       'Land <b>' + (landFrac * 100).toFixed(0) + '%</b> · <b>' + Math.max(1, nc) + '</b> continent(s), <b>' + Math.max(1, ni) + '</b> island group(s)<br>' +
       '<span class="dsnMini">mix (of land): ' + parts.slice(0, 6).map(([n, f]) => LABEL[n] + ' ' + (f / landFrac * 100).toFixed(0) + '%').join(' · ') + '</span>';
-    const card = $('dsnSearchCard'); card.style.opacity = ''; card.style.pointerEvents = '';
+    setSearchEnabled(true);
     $('dsnStatus').textContent = 'ready — press Start search';
   }
+  function setSearchEnabled(on) { const c = $('dsnSearchCard'); c.style.opacity = on ? '' : '.5'; c.style.pointerEvents = on ? '' : 'none'; }
 
   // ================================================================= search pool
   function poolWorkerCount() { return Math.max(2, Math.min(8, (navigator.hardwareConcurrency || 4) - 1)); }
@@ -340,10 +341,17 @@
     pool.splice(lo, 0, item);
     if (pool.length > POOL_MAX) { const dropped = pool.splice(POOL_MAX); for (const d of dropped) if (d.cfg && d.cfg.seed != null) delete cfgBySeed[d.cfg.seed]; }
   }
+  function targetSig() {                // cheap FNV-1a hash so we can tell if the drawing changed
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < target.length; i++) { h ^= target[i]; h = Math.imul(h, 16777619) >>> 0; }
+    return h;
+  }
   function startSearch() {
     if (running) return;
     analyze();                          // always re-derive invBase from the current drawing (keeps it in sync)
     if (!invBase) return;
+    const sig = targetSig();            // if the drawing changed, the old pool was scored vs a different target
+    if (sig !== poolTargetSig) { pool = []; seedSet = new Set(); cfgBySeed = {}; poolTargetSig = sig; renderGallery(); }
     running = true; tStart = performance.now(); evaluated = 0;
     $('dsnStart').disabled = true; $('dsnStop').disabled = false;
     $('dsnStatus').textContent = 'starting workers…';
