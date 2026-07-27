@@ -103,8 +103,12 @@
               '<label class="dsnMini" style="display:inline-flex;align-items:center;gap:4px;margin-left:4px" title="Also wobble land% and biome weights ±6% while searching, to explore around the inversion"><input type="checkbox" id="dsnJitter"> vary knobs</label></div>' +
             '<div id="dsnStatus" style="margin-top:8px">idle</div>' +
             '<div class="dsnMini" id="dsnSpeedHint" style="margin-top:6px"></div></div>' +
-          '<div class="dsnCard"><div style="display:flex;align-items:center;gap:8px"><h4 style="margin:0">3 · Closest worlds <span class="dsnMini" id="dsnGalCount"></span></h4>' +
-            '<span class="dsnMini" style="margin-left:auto">target</span><canvas id="dsnTargetRef" width="' + G + '" height="' + G + '" style="width:34px;height:34px;border-radius:4px;image-rendering:pixelated;border:0.5px solid var(--border)"></canvas></div>' +
+          '<div class="dsnCard"><h4 style="margin:0 0 6px">3 · Closest worlds <span class="dsnMini" id="dsnGalCount"></span></h4>' +
+            '<div id="dsnCompare" style="display:flex;gap:12px;align-items:center;justify-content:center;margin:2px 0 8px">' +
+              '<div style="text-align:center"><canvas id="dsnTargetRef" width="' + G + '" height="' + G + '" style="width:88px;height:88px;border-radius:6px;image-rendering:pixelated;border:0.5px solid var(--border)"></canvas><div class="dsnMini">your drawing</div></div>' +
+              '<div style="font-size:22px;color:var(--muted)">→</div>' +
+              '<div style="text-align:center"><canvas id="dsnBestRef" width="' + G + '" height="' + G + '" style="width:88px;height:88px;border-radius:6px;image-rendering:pixelated;border:0.5px solid var(--border)"></canvas><div class="dsnMini" id="dsnBestLbl">best match</div></div>' +
+            '</div>' +
             '<div class="dsnMini" style="margin:2px 0 8px">click any card to apply it as your real world · scores are relative — even the best is an approximation</div>' +
             '<div class="dsnGallery" id="dsnGallery"><div class="dsnMini">No candidates yet — run a search.</div></div></div>' +
         '</div>' +
@@ -399,7 +403,9 @@
   }
   function renderGallery() {
     const gal = $('dsnGallery');
-    const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target, true);   // keep the target thumbnail in sync
+    const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target, true);   // keep the "your drawing" thumbnail in sync
+    const bestRef = $('dsnBestRef'), bestLbl = $('dsnBestLbl');
+    if (bestRef) { if (pool.length) { drawGrid(bestRef, pool[0].grid, true); if (bestLbl) bestLbl.textContent = 'best match · ' + (pool[0].s.score * 100).toFixed(1) + '%'; } else { bestRef.getContext('2d').clearRect(0, 0, G, G); if (bestLbl) bestLbl.textContent = 'best match'; } }
     $('dsnGalCount').textContent = pool.length ? '(' + pool.length + ' kept)' : '';
     if (!pool.length) { gal.innerHTML = '<div class="dsnMini">No candidates yet — run a search.</div>'; return; }
     const show = pool.slice(0, SHOW);
