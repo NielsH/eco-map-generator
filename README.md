@@ -13,6 +13,8 @@ A default Eco world is generated on load. Drop, upload, or paste your own `World
 - **Biome mix editor** — a *Simple* mode where you set each biome's **share of land** (with a live budget bar and a Grassland "leftover" that can't be over-allocated), and an *Advanced* mode with the raw Voronoi weights. After a generate it shows **intended vs. actual** per biome.
 - **Block & ore composition editor** — per biome, edit the base-rock strata, ore **veins** (deposits) and **scatter** blocks. Two ways to work: a **Visual editor** that draws the whole underground as one 100%-stacked column at real **world height** (surface at its true Y, air above) — drag a block to move it, its top/bottom edges to resize its depth, its inner edge to change abundance, or a rock boundary to move where a layer ends; and a **Manual knobs** mode with sliders for every value (block type, spawn chance, depth, vein size, noise frequency). Add/remove any block per biome.
 - **Live composition charts** — a **Block composition** chart (100%-stacked block mix by biome and world height) and an **Ore distribution** violin chart of where each material concentrates, both updating as you edit — plus an **Open in ore visualizer** hand-off to the standalone [eco-biome-visualizer](https://github.com/NielsH/eco-biome-visualizer).
+- **3D voxel world** — a fly-through view of the real per-voxel blocks (base strata, scatter, and faithful ore veins), streamed in chunks with block-type toggles and a cutaway slice.
+- **Design a map (inverse search)** — instead of tuning knobs to *discover* a world, **draw the biome layout you want** and let the tool search for a real, playable world that resembles it. Paint biomes (or seed the canvas from the current map), and it (1) **inverts** the drawing into a starting config — biome mix → weights, land fraction, continent/island and per-biome blob counts — then (2) runs a **parallel best-of-N seed search** across Web Workers, scoring each candidate by a wrap-invariant similarity to your drawing, and shows a **ranked gallery of live previews**. Click any result to apply it as your real config and regenerate. A *mix ↔ layout* slider trades biome-proportion fidelity against spatial-layout fidelity. **Honest scope:** the generator has no way to place a biome at a spot you choose — layout is a chaotic function of the seed — so this can't reproduce a drawing exactly; it matches the biome mix and macro land-shape well and approximates placement. Every result is a genuine, exportable `.eco`.
 - **Export** — **Download .eco** writes your edits back into a valid `WorldGenerator.eco` (preserving everything you didn't touch), and **Export PNG** saves the current map layer.
 
 ## How faithful is it?
@@ -53,6 +55,11 @@ then open http://localhost:8000/.
 src/core.js        .NET Random + SharpNoise port (runs in the worker)
 src/geo.js         Poisson sampler + Fortune's-algorithm Voronoi
 src/worldgen.js    VoronoiWorldGenerator.Generate port (biomes/elevation/rivers/lakes)
+src/raster.js      surface polygons -> per-voxel biome + heightmap grids
+src/voxel.js       per-voxel underground block generation (strata/scatter/ore veins)
+src/render3d.js    main-thread 3D voxel renderer (three.js)
+src/search.js      inverse-design search core (class grid + wrap-invariant similarity)
+src/designer.js    "Design a map" UI: painter, config inversion, worker search pool, gallery
 src/vectortable.txt  SharpNoise's 1024-entry gradient table (extracted from the DLL)
 build.js           inlines src/* + vectortable + WorldGenerator.eco into index.html
 WorldGenerator.eco default world, embedded as the on-load example
