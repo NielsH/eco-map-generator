@@ -37,7 +37,7 @@
   let pool = [];                         // kept candidates: { seed, grid, s }  (s = score breakdown)
   const POOL_MAX = 120, SHOW = 12;
   let workers = [], running = false, evaluated = 0, tStart = 0, seedSet = new Set(), lastUiPaint = 0;
-  let classgridBound = false, painting = false, built = false;
+  let classgridBound = false, painting = false, built = false, cfgBySeed = {};
 
   // ================================================================= styling
   function injectStyle() {
@@ -212,6 +212,7 @@
     return sizes.sort((a, b) => b - a);
   }
   function analyze() {
+    invBase = null;                              // cleared until a valid analysis succeeds
     const total = G * G;
     const h = histogram(target);                 // fraction per class
     const landFrac = (() => { let s = 0; for (let c = SC.Grassland; c < NC; c++) s += h[c]; return s; })();
@@ -305,34 +306,38 @@
     const seed = randSeed(); seedSet.add(seed);
     const cfg = JSON.parse(JSON.stringify(invBase)); cfg.seed = seed;
     if ($('dsnJitter').checked) jitter(cfg);
+    cfgBySeed[seed] = cfg;               // remember the exact cfg so Apply reproduces this candidate (esp. with jitter)
     w._busy = true;
     w.postMessage({ type: 'search-eval', cfg: cfg });
   }
   function jitter(cfg) {
-    // small multiplicative wobble on land% and the biome weights, to explore near the inversion
-    const j = () => 1 + (Math.random() - 0.5) * 0.24;
-    const L = Math.max(0.03, Math.min(0.97, cfg.landPercentRange.min * j));
+    // gentle ±6% multiplicative wobble on land% and each biome weight, to explore near the inversion
+    const wob = v => Math.max(0, v * (1 + (Math.random() - 0.5) * 0.12));
+    const L = Math.max(0.03, Math.min(0.97, wob(cfg.landPercentRange.min)));
     cfg.landPercentRange = { min: +L.toFixed(3), max: +L.toFixed(3) };
-    for (const k of WEIGHT_KEYS) if (cfg[k] > 0) cfg[k] = +Math.max(0, cfg[k] * j).toFixed(4);
+    for (const k of WEIGHT_KEYS) if (cfg[k] > 0) cfg[k] = +wob(cfg[k]).toFixed(4);
   }
   function recordCandidate(m) {
     const grid = new Uint8Array(m.grid);
     // re-score on the main thread against the *current* layout weight so the pool stays consistent
     const s = scoreGrids(target, grid, G, { layoutWeight: layoutWeight });
-    const item = { seed: m.seed, grid: grid, s: s };
+    const cfg = cfgBySeed[m.seed]; delete cfgBySeed[m.seed];
+    const item = { seed: m.seed, grid: grid, s: s, cfg: cfg };
     // insert sorted desc by score
     let lo = 0, hi = pool.length;
     while (lo < hi) { const mid = (lo + hi) >> 1; if (pool[mid].s.score < s.score) hi = mid; else lo = mid + 1; }
     pool.splice(lo, 0, item);
-    if (pool.length > POOL_MAX) pool.length = POOL_MAX;
+    if (pool.length > POOL_MAX) { const dropped = pool.splice(POOL_MAX); for (const d of dropped) if (d.cfg && d.cfg.seed != null) delete cfgBySeed[d.cfg.seed]; }
   }
   function startSearch() {
-    if (!invBase) { analyze(); if (!invBase) return; }
     if (running) return;
-    running = true; tStart = performance.now();
+    analyze();                          // always re-derive invBase from the current drawing (keeps it in sync)
+    if (!invBase) return;
+    running = true; tStart = performance.now(); evaluated = 0;
     $('dsnStart').disabled = true; $('dsnStop').disabled = false;
     $('dsnStatus').textContent = 'starting workers…';
     ensureWorkers(() => {
+      if (!running) return;             // user may have stopped/closed during worker spin-up
       // (re)sync each worker's target + weight in case the drawing/weight changed since last run
       for (const w of workers) w.postMessage({ type: 'search-init', target: target, G: G, layoutWeight: layoutWeight });
       for (const w of workers) dispatch(w);
@@ -341,7 +346,7 @@
   function stopSearch() {
     running = false;
     $('dsnStart').disabled = false; $('dsnStop').disabled = true;
-    updateStatus();
+    renderGallery(); updateStatus();
   }
   function rescorePool() {
     for (const it of pool) it.s = scoreGrids(target, it.grid, G, { layoutWeight: layoutWeight });
@@ -384,11 +389,12 @@
     gal.querySelectorAll('canvas[data-i]').forEach(c => c.onclick = () => applyCandidate(show[+c.dataset.i]));
   }
   function applyCandidate(item) {
-    const cfg = JSON.parse(JSON.stringify(invBase)); cfg.seed = item.seed;
-    baseCfg = cfg;                        // reassign the main script's lexical global so readForm() derives from it
-    populateForm(cfg);
+    // the candidate's exact cfg (jitter-safe); fall back to invBase+seed for older pool items
+    const src = item.cfg || Object.assign(JSON.parse(JSON.stringify(invBase)), { seed: item.seed });
+    const cfg = JSON.parse(JSON.stringify(src));
+    populateForm(cfg);                    // fills every form field incl. weights + seed; readForm() will reproduce cfg
     close();
-    generateMap(cfg);
+    generateMap(cfg);                     // baseCfg is left as the loaded config so "Reset to loaded" still works
   }
 
   // ================================================================= open / close
