@@ -109,7 +109,8 @@
               '<div style="font-size:22px;color:var(--muted)">→</div>' +
               '<div style="text-align:center"><canvas id="dsnBestRef" width="' + G + '" height="' + G + '" style="width:88px;height:88px;border-radius:6px;image-rendering:pixelated;border:0.5px solid var(--border)"></canvas><div class="dsnMini" id="dsnBestLbl">best match</div></div>' +
             '</div>' +
-            '<div class="dsnMini" style="margin:2px 0 8px">click any card to apply it as your real world · scores are relative — even the best is an approximation</div>' +
+            '<div class="dsnMini" style="margin:2px 0 2px">click any card to apply it as your real world · scores are relative — even the best is an approximation</div>' +
+            '<div class="dsnMini" style="margin:0 0 8px"><b>mix</b> = biome proportions · <b>shape</b> = land-mass overlap · <b>fit</b> = biome-type agreement</div>' +
             '<div class="dsnGallery" id="dsnGallery"><div class="dsnMini">No candidates yet — run a search.</div></div></div>' +
         '</div>' +
       '</div>';
