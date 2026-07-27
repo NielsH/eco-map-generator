@@ -38,6 +38,7 @@
   const POOL_MAX = 120, SHOW = 12;
   let workers = [], running = false, evaluated = 0, tStart = 0, seedSet = new Set(), lastUiPaint = 0;
   let classgridBound = false, painting = false, built = false, cfgBySeed = {}, poolTargetSig = null;
+  let undoStack = [];
 
   // ================================================================= styling
   function injectStyle() {
@@ -88,6 +89,7 @@
           '<div class="dsnTools">' +
             '<span class="dsnRange" style="width:190px">Brush <input type="range" id="dsnBrush" min="1" max="16" value="' + brushSize + '"><span id="dsnBrushV" class="dsnMini">' + brushSize + '</span></span>' +
             '<label class="dsnMini" style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="dsnFill"> flood fill</label>' +
+            '<button id="dsnUndo" title="Undo (Ctrl+Z)">↶ Undo</button>' +
             '<button id="dsnSeedFromMap">Seed from current map</button>' +
             '<button id="dsnClear">Clear</button>' +
           '</div>' +
@@ -126,7 +128,8 @@
 
     // tools + wiring
     $('dsnBrush').oninput = e => { brushSize = +e.target.value; $('dsnBrushV').textContent = brushSize; };
-    $('dsnClear').onclick = () => { target.fill(SC.Ocean); renderPaint(); };
+    $('dsnClear').onclick = () => { pushUndo(); target.fill(SC.Ocean); renderPaint(); };
+    $('dsnUndo').onclick = undo;
     $('dsnSeedFromMap').onclick = seedFromMap;
     $('dsnClose').onclick = close;
     $('dsnAnalyze').onclick = analyze;
@@ -135,9 +138,10 @@
     $('dsnWeight').oninput = e => { layoutWeight = +e.target.value / 100; rescorePool(); };
     const cv = $('dsnCanvas');
     cv.addEventListener('contextmenu', e => e.preventDefault());
-    cv.addEventListener('pointerdown', onPointer);
+    cv.addEventListener('pointerdown', e => { pushUndo(); onPointer(e); });
     cv.addEventListener('pointermove', e => { if (painting) onPointer(e); });
     window.addEventListener('pointerup', () => { painting = false; });
+    window.addEventListener('keydown', e => { if ($('designWrap').style.display === 'none') return; if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); undo(); } });
     built = true;
   }
   function markPalette() { $('dsnPal').querySelectorAll('button').forEach(b => b.classList.toggle('on', +b.dataset.c === brushClass)); }
@@ -160,6 +164,8 @@
     ctx.putImageData(img, 0, 0);
   }
   function renderPaint() { drawGrid($('dsnCanvas'), target, true); }
+  function pushUndo() { undoStack.push(target.slice()); if (undoStack.length > 40) undoStack.shift(); }
+  function undo() { if (!undoStack.length) return; target = undoStack.pop(); renderPaint(); }
   function onPointer(e) {
     const cv = $('dsnCanvas'), r = cv.getBoundingClientRect();
     const dispX = Math.floor((e.clientX - r.left) / r.width * G);
@@ -197,6 +203,7 @@
   }
   function seedFromMap() {
     if (typeof result === 'undefined' || !result) { $('dsnAnalysis').textContent = 'Generate a map first, then seed from it.'; return; }
+    pushUndo();
     if (!classgridBound) { worker.addEventListener('message', ev => { if (ev.data && ev.data.type === 'classgrid' && ev.data.grid) { target = new Uint8Array(ev.data.grid); renderPaint(); flashAnalysis('Seeded from the current map. Edit it, then analyze.'); } }); classgridBound = true; }
     worker.postMessage({ type: 'classgrid', G: G });
   }
