@@ -18,14 +18,16 @@ const geo = strip(fs.readFileSync('src/geo.js', 'utf8'));
 const worldgen = strip(fs.readFileSync('src/worldgen.js', 'utf8'));
 const raster = strip(fs.readFileSync('src/raster.js', 'utf8'));
 const voxel = strip(fs.readFileSync('src/voxel.js', 'utf8'));
+const search = strip(fs.readFileSync('src/search.js', 'utf8'));   // inverse-design search core (worker + main thread)
 const vt = fs.readFileSync('src/vectortable.txt', 'utf8').trim();
 const defaultEco = fs.readFileSync('WorldGenerator.eco', 'utf8').trim();
 // three.js (UMD, sets global THREE) and the main-thread 3D renderer are injected via
 // placeholders AFTER the template literal is built, so their backticks/${} don't need escaping.
 const threeSrc = fs.readFileSync('src/vendor/three.min.js', 'utf8');
 const render3dSrc = fs.readFileSync('src/render3d.js', 'utf8');
+const designerSrc = fs.readFileSync('src/designer.js', 'utf8');   // "Design a map" (main thread; injected raw)
 
-const LIB = [core, geo, worldgen, raster, voxel,
+const LIB = [core, geo, worldgen, raster, voxel, search,
   `const C = { CsRandom, Perlin, RidgedMulti, ScaleBias, gradientCoherentNoise3D, setVectorTable, NQ };`,
   `const G = { poissonSamples, Voronoi };`,
   `bindVoxel(C);`
@@ -87,7 +89,27 @@ onmessage = function (e) {
     } catch (err) { postMessage({ type: 'v3d-error', message: String(err && err.stack || err) }); }
   }
   if (m.type === 'chunkdrop') { if (vChunks) vChunks.delete(m.cx + ',' + m.cz); }
-};`;
+  // ---- inverse-design search (own message types) ----
+  if (m.type === 'classgrid') {   // coarse class-grid signature of the current map (for "seed from current map")
+    try {
+      if (!lastRes) { postMessage({ type: 'classgrid', grid: null }); return; }
+      const grid = classGridAt(lastRes.polys, lastRes.worldSize, m.G);
+      postMessage({ type: 'classgrid', G: m.G, grid }, [grid.buffer]);
+    } catch (err) { postMessage({ type: 'search-error', message: String(err && err.stack || err) }); }
+  }
+  if (m.type === 'search-init') { sTarget = m.target; sG = m.G; sW = m.layoutWeight; postMessage({ type: 'search-ready' }); }
+  if (m.type === 'search-eval') {   // generate one candidate (biomes only), rasterize + score vs the target
+    try {
+      const res = generate(m.cfg, { biomesOnly: true });
+      const grid = classGridAt(res.polys, res.worldSize, sG);
+      const s = scoreGrids(sTarget, grid, sG, { layoutWeight: sW });
+      postMessage({ type: 'search-result', seed: m.cfg.seed, jobId: m.jobId, grid,
+        score: s.score, prop: s.prop, soft: s.soft, exact: s.exact, iou: s.iou, layout: s.layout, shift: s.shift,
+        landPercent: res.landPercent }, [grid.buffer]);
+    } catch (err) { postMessage({ type: 'search-error', jobId: m.jobId, message: String(err && err.stack || err) }); }
+  }
+};
+let sTarget = null, sG = 64, sW = 0.6;`;
 
 const html = `<!DOCTYPE html>
 <html lang="en">
@@ -232,7 +254,8 @@ const html = `<!DOCTYPE html>
     <div class="row">
       <span class="lbl">Layer</span><span class="seg" id="layers"></span>
       <label class="lbl" style="display:inline-flex;align-items:center;gap:5px;margin-left:8px"><input type="checkbox" id="waterToggle" checked> Rivers &amp; lakes</label>
-      <button id="view3d" style="margin-left:auto">🧊 3D view</button>
+      <button id="designOpen" style="margin-left:auto">🎨 Design a map</button>
+      <button id="view3d">🧊 3D view</button>
       <button id="expPng">Export PNG</button>
     </div>
     <div id="canvasWrap"><canvas id="cv"></canvas><div id="tip"></div></div>
@@ -256,6 +279,8 @@ const html = `<!DOCTYPE html>
       </div>
       <div id="view3dBlocks" style="display:flex;flex-wrap:wrap;gap:5px 14px;font-size:12.5px"></div>
     </div>
+
+    <div id="designWrap" style="display:none"></div>
   </div>
 
   <div id="chartsPanel">
@@ -344,6 +369,7 @@ ${WORKER_GLUE}
 
 <script>/*__THREE__*/</script>
 <script>/*__RENDER3D__*/</script>
+<script>/*__SEARCH__*/</script>
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
@@ -1707,6 +1733,7 @@ function readFile(f){ const r=new FileReader(); r.onload=()=>{ $('paste').value=
 const DEFAULT_ECO = ($('defaultcfg').textContent || '').trim();
 if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
 </script>
+<script>/*__DESIGNER__*/</script>
 </body>
 </html>`;
 
@@ -1714,7 +1741,9 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
 // interpolation) so their backticks and `$` sequences pass through verbatim.
 const finalHtml = html
   .replace('/*__THREE__*/', () => threeSrc)
-  .replace('/*__RENDER3D__*/', () => render3dSrc);
+  .replace('/*__RENDER3D__*/', () => render3dSrc)
+  .replace('/*__SEARCH__*/', () => search)   // same search core on the main thread (rescoring, previews, inversion)
+  .replace('/*__DESIGNER__*/', () => designerSrc);
 
 fs.writeFileSync('index.html', finalHtml);
 console.log('wrote index.html', finalHtml.length, 'bytes');
