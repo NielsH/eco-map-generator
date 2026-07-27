@@ -100,9 +100,12 @@
           '<div class="dsnCard" id="dsnSearchCard" style="opacity:.5;pointer-events:none"><h4>2 · Search</h4>' +
             '<div class="dsnRange" style="margin-bottom:8px">Match&nbsp;<span class="dsnMini">mix</span><input type="range" id="dsnWeight" min="0" max="100" value="' + Math.round(layoutWeight * 100) + '"><span class="dsnMini">layout</span></div>' +
             '<div class="row" style="margin:2px 0"><button id="dsnStart" class="primary">▶ Start search</button><button id="dsnStop" disabled>■ Stop</button>' +
-              '<label class="dsnMini" style="display:inline-flex;align-items:center;gap:4px;margin-left:4px"><input type="checkbox" id="dsnJitter"> vary knobs</label></div>' +
-            '<div id="dsnStatus" style="margin-top:8px">idle</div></div>' +
-          '<div class="dsnCard"><h4>3 · Closest worlds <span class="dsnMini" id="dsnGalCount"></span></h4>' +
+              '<label class="dsnMini" style="display:inline-flex;align-items:center;gap:4px;margin-left:4px" title="Also wobble land% and biome weights ±6% while searching, to explore around the inversion"><input type="checkbox" id="dsnJitter"> vary knobs</label></div>' +
+            '<div id="dsnStatus" style="margin-top:8px">idle</div>' +
+            '<div class="dsnMini" id="dsnSpeedHint" style="margin-top:6px"></div></div>' +
+          '<div class="dsnCard"><div style="display:flex;align-items:center;gap:8px"><h4 style="margin:0">3 · Closest worlds <span class="dsnMini" id="dsnGalCount"></span></h4>' +
+            '<span class="dsnMini" style="margin-left:auto">target</span><canvas id="dsnTargetRef" width="' + G + '" height="' + G + '" style="width:34px;height:34px;border-radius:4px;image-rendering:pixelated;border:0.5px solid var(--border)"></canvas></div>' +
+            '<div class="dsnMini" style="margin:2px 0 8px">click any card to apply it as your real world · scores are relative — even the best is an approximation</div>' +
             '<div class="dsnGallery" id="dsnGallery"><div class="dsnMini">No candidates yet — run a search.</div></div></div>' +
         '</div>' +
       '</div>';
@@ -256,6 +259,7 @@
     cfg.islandWeight = +Math.max(0, Math.min(0.6, islandArea / totalLand)).toFixed(3);
 
     invBase = cfg;
+    updateSpeedHint();
 
     // summary UI
     const parts = [];
@@ -362,6 +366,13 @@
     lastUiPaint = now;
     renderGallery(); updateStatus();
   }
+  function updateSpeedHint() {
+    const el = $('dsnSpeedHint'); if (!el) return;
+    const ww = (invBase && invBase.worldWidth) || (typeof baseCfg !== 'undefined' && baseCfg ? baseCfg.worldWidth : 72);
+    const m = ww * 10;
+    const note = ww <= 90 ? 'fast — many candidates/second' : ww <= 130 ? 'moderate — a few candidates/second' : 'slow — big worlds take ~seconds per candidate; let it run longer';
+    el.innerHTML = 'World <b>' + m + '×' + m + ' m</b> · ' + poolWorkerCount() + ' parallel workers · ' + note + '.<br>More candidates = better matches. Leave it running and pick from the best.';
+  }
   function updateStatus() {
     const secs = (performance.now() - tStart) / 1000;
     const rate = running && secs > 0 ? (evaluated / secs) : 0;
@@ -373,6 +384,7 @@
   }
   function renderGallery() {
     const gal = $('dsnGallery');
+    const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target, true);   // keep the target thumbnail in sync
     $('dsnGalCount').textContent = pool.length ? '(' + pool.length + ' kept)' : '';
     if (!pool.length) { gal.innerHTML = '<div class="dsnMini">No candidates yet — run a search.</div>'; return; }
     const show = pool.slice(0, SHOW);
@@ -408,6 +420,11 @@
     if (cp) { cp._dsnPrev = cp.style.display; cp.style.display = 'none'; }
     if (cfp) { cfp._dsnPrev = cfp.style.display; cfp.style.display = 'none'; }
     $('designWrap').style.display = 'block';
+    // first time in: seed the canvas from the current map so there's something to edit (not blank ocean)
+    let empty = true; for (let i = 0; i < target.length; i++) if (target[i] !== SC.Ocean) { empty = false; break; }
+    if (empty && typeof result !== 'undefined' && result) seedFromMap();
+    updateSpeedHint();
+    const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target, true);
     renderPaint();
   }
   function close() {
