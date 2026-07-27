@@ -38,7 +38,7 @@
   const POOL_MAX = 120, SHOW = 12;
   let workers = [], running = false, evaluated = 0, tStart = 0, seedSet = new Set(), lastUiPaint = 0;
   let classgridBound = false, painting = false, built = false, cfgBySeed = {}, poolTargetSig = null;
-  let undoStack = [];
+  let undoStack = [], lastGX = -1, lastGY = -1;
 
   // ================================================================= styling
   function injectStyle() {
@@ -140,7 +140,7 @@
     cv.addEventListener('contextmenu', e => e.preventDefault());
     cv.addEventListener('pointerdown', e => { pushUndo(); onPointer(e); });
     cv.addEventListener('pointermove', e => { if (painting) onPointer(e); });
-    window.addEventListener('pointerup', () => { painting = false; });
+    window.addEventListener('pointerup', () => { painting = false; lastGX = -1; lastGY = -1; });
     window.addEventListener('keydown', e => { if ($('designWrap').style.display === 'none') return; if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); undo(); } });
     built = true;
   }
@@ -175,9 +175,15 @@
     const erase = (e.buttons & 2) === 2 || e.button === 2;
     const cls = erase ? SC.Ocean : brushClass;
     if ($('dsnFill').checked && !painting) { floodFill(gx, gy, cls); renderPaint(); return; }
-    painting = true;
-    stampBrush(gx, gy, cls);
+    // interpolate along the drag so fast strokes don't leave gaps between discrete stamps
+    if (painting && lastGX >= 0) stampLine(lastGX, lastGY, gx, gy, cls); else stampBrush(gx, gy, cls);
+    painting = true; lastGX = gx; lastGY = gy;
     renderPaint();
+  }
+  function stampLine(x0, y0, x1, y1, cls) {
+    const steps = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0));
+    if (steps === 0) { stampBrush(x1, y1, cls); return; }
+    for (let s = 0; s <= steps; s++) stampBrush(Math.round(x0 + (x1 - x0) * s / steps), Math.round(y0 + (y1 - y0) * s / steps), cls);
   }
   function stampBrush(cx, cy, cls) {
     const rad = brushSize - 1, r2 = (rad + 0.5) * (rad + 0.5);
