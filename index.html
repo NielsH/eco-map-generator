@@ -9617,12 +9617,23 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
   }
   async function buildBundleFiles() {
     const cfg = buildExportJson();              // the WorldGenerator.eco (main-thread), current form values
+    // Raw maps (what the mod actually reads — unambiguous, no PNG decode). Generation orientation, row-major.
+    const biomeBin = new Uint8Array(G * G);     // per-cell score-class index (matches the mod's BIOME_BY_INDEX)
+    const heightBin = new Uint8Array(G * G);    // per-cell height byte 0..255 (mod maps to [-1,1])
+    for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) {
+      const i = y * G + x;
+      biomeBin[i] = target[i];
+      heightBin[i] = Math.max(0, Math.min(255, Math.round(heightAt(x, y) * 255)));
+    }
+    // PNGs kept for human inspection only (not read by the mod).
     const biomePng = await gridToPng((x, y) => ECO_BIOME_COLOR[CN[target[y * G + x]]] || ECO_BIOME_COLOR.Ocean);
-    const heightPng = await gridToPng((x, y) => { const b = Math.max(0, Math.min(255, Math.round(heightAt(x, y) * 255))); return [b, b, b]; });
+    const heightPng = await gridToPng((x, y) => { const b = heightBin[y * G + x]; return [b, b, b]; });
     return {
       size: (cfg && findWorldWidth(cfg)) || 72,
       files: [
         { name: 'WorldGenerator.eco', data: strBytes(JSON.stringify(cfg, null, 2)) },
+        { name: 'biome.bin', data: biomeBin },
+        { name: 'height.bin', data: heightBin },
         { name: 'biome.png', data: biomePng },
         { name: 'height.png', data: heightPng },
         { name: 'authored.json', data: strBytes('{ "enabled": true, "source": "eco-map-generator" }') },
