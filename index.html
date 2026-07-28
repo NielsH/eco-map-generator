@@ -9065,6 +9065,23 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
 
   let target = new Uint8Array(G * G);    // painted target (generation orientation; y=0 is array row 0)
   let brushClass = SC.Grassland, brushSize = 5, tool = 'paint';
+  // authored-world layers (for the "export a real world" flow, distinct from the seed search)
+  let elev = new Float32Array(G * G);          // painted elevation [0..1], 0.5 = sea level
+  let elevPainted = new Uint8Array(G * G);     // 1 where the user painted elevation (else biome-derived default)
+  let paintMode = 'biome';                     // 'biome' | 'elevation'
+  let elevValue = 0.66;                        // current elevation brush value
+
+  // Exact Eco biome colors (System.Drawing names, ARGB) for the exported biome map, keyed by score class.
+  const ECO_BIOME_COLOR = {
+    Ocean: [70, 130, 180], Coast: [250, 250, 210], Grassland: [144, 238, 144], WarmForest: [184, 134, 11],
+    ColdForest: [34, 139, 34], RainForest: [32, 178, 170], Desert: [244, 164, 96], Taiga: [107, 142, 35],
+    Tundra: [189, 183, 107], Ice: [255, 255, 255], Wetland: [0, 100, 0],
+  };
+  // Default elevation per biome (0.5 = sea level) — used where the user hasn't painted elevation.
+  const ECO_BIOME_ELEV = {
+    Ocean: 0.30, Coast: 0.50, Grassland: 0.60, WarmForest: 0.62, ColdForest: 0.64, RainForest: 0.60,
+    Desert: 0.56, Taiga: 0.70, Tundra: 0.74, Ice: 0.82, Wetland: 0.52,
+  };
   let layoutWeight = 0.6;
   let invBase = null;                    // inverted starting config (all fields), seed varied per candidate
   let pool = [];                         // kept candidates: { seed, grid, s }  (s = score breakdown)
@@ -9126,7 +9143,11 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
             '<button id="dsnSeedFromMap">Seed from current map</button>' +
             '<button id="dsnClear">Clear</button>' +
           '</div>' +
-          '<div class="dsnMini">Left-drag paints the selected biome · right-drag erases to ocean · toggle <b>flood fill</b> to bucket-fill a region.</div>' +
+          '<div class="dsnTools" style="margin-top:0">' +
+            '<span class="dsnMini">Paint</span><span class="seg" id="dsnPaintMode"><button type="button" data-pm="biome" class="on">Biomes</button><button type="button" data-pm="elevation">Elevation</button></span>' +
+            '<span class="dsnRange" id="dsnElevWrap" style="width:210px;display:none">Height <input type="range" id="dsnElev" min="0" max="100" value="' + Math.round(elevValue * 100) + '"><span id="dsnElevV" class="dsnMini"></span></span>' +
+          '</div>' +
+          '<div class="dsnMini">Left-drag paints · right-drag erases (to ocean / to default height) · <b>flood fill</b> bucket-fills a biome region. In <b>Elevation</b> mode you sculpt height; unpainted areas use a biome-appropriate default.</div>' +
         '</div>' +
         '<div class="dsnRight">' +
           '<div class="dsnCard"><h4>1 · Target</h4><div id="dsnAnalysis" class="dsnMini">Draw a layout (or seed it from the current map), then analyze it.</div>' +
@@ -9147,6 +9168,10 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
             '<div class="dsnMini" style="margin:2px 0 2px">click any card to apply it as your real world · scores are relative — even the best is an approximation</div>' +
             '<div class="dsnMini" style="margin:0 0 8px"><b>mix</b> = biome proportions · <b>shape</b> = land-mass overlap · <b>fit</b> = biome-type agreement</div>' +
             '<div class="dsnGallery" id="dsnGallery"><div class="dsnMini">No candidates yet — run a search.</div></div></div>' +
+          '<div class="dsnCard"><h4 style="margin:0 0 4px">4 · Authored world <span class="dsnMini">(exact — no search)</span></h4>' +
+            '<div class="dsnMini" style="margin:0 0 8px">Export your drawing as a real world: the biome + height maps + config become a bundle for the <code>EcoWorldGenCLI</code> tool, which generates a stock-loadable <code>.eco</code> save whose biomes match your drawing <b>exactly</b> (needs the C# tool + an Eco server build).</div>' +
+            '<button id="dsnExport" class="primary">⬇ Export authored world (.zip)</button>' +
+            '<div class="dsnMini" id="dsnExportStatus" style="margin-top:8px"></div></div>' +
         '</div>' +
       '</div>';
 
@@ -9169,6 +9194,15 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     $('dsnStart').onclick = startSearch;
     $('dsnStop').onclick = stopSearch;
     $('dsnWeight').oninput = e => { layoutWeight = +e.target.value / 100; rescorePool(); };
+    $('dsnExport').onclick = exportBundle;
+    $('dsnPaintMode').querySelectorAll('button').forEach(b => b.onclick = () => {
+      paintMode = b.dataset.pm;
+      $('dsnPaintMode').querySelectorAll('button').forEach(x => x.classList.toggle('on', x.dataset.pm === paintMode));
+      $('dsnElevWrap').style.display = paintMode === 'elevation' ? '' : 'none';
+      renderPaint();
+    });
+    $('dsnElev').oninput = e => { elevValue = +e.target.value / 100; $('dsnElevV').textContent = elevLabel(elevValue); };
+    $('dsnElevV').textContent = elevLabel(elevValue);
     const cv = $('dsnCanvas');
     cv.addEventListener('contextmenu', e => e.preventDefault());
     cv.addEventListener('pointerdown', e => { pushUndo(); onPointer(e); });
@@ -9178,6 +9212,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     built = true;
   }
   function markPalette() { $('dsnPal').querySelectorAll('button').forEach(b => b.classList.toggle('on', +b.dataset.c === brushClass)); }
+  function elevLabel(v) { return v < 0.45 ? 'deep water' : v < 0.52 ? 'sea level' : v < 0.65 ? 'lowland' : v < 0.8 ? 'hills' : 'peaks'; }
 
   // ================================================================= painter
   // Everything is stored in generation orientation; we DISPLAY flipped-Y to match the map view.
@@ -9196,9 +9231,12 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     }
     ctx.putImageData(img, 0, 0);
   }
-  function renderPaint() { drawGrid($('dsnCanvas'), target, true); }
-  function pushUndo() { undoStack.push(target.slice()); if (undoStack.length > 40) undoStack.shift(); }
-  function undo() { if (!undoStack.length) return; target = undoStack.pop(); renderPaint(); }
+  function renderPaint() {
+    if (paintMode === 'elevation') drawHeight($('dsnCanvas'));
+    else drawGrid($('dsnCanvas'), target, true);
+  }
+  function pushUndo() { undoStack.push({ t: target.slice(), e: elev.slice(), p: elevPainted.slice() }); if (undoStack.length > 40) undoStack.shift(); }
+  function undo() { if (!undoStack.length) return; const s = undoStack.pop(); target = s.t; elev = s.e; elevPainted = s.p; renderPaint(); }
   function onPointer(e) {
     const cv = $('dsnCanvas'), r = cv.getBoundingClientRect();
     const dispX = Math.floor((e.clientX - r.left) / r.width * G);
@@ -9206,6 +9244,11 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     if (dispX < 0 || dispX >= G || dispY < 0 || dispY >= G) return;
     const gx = dispX, gy = G - 1 - dispY;   // flip display->grid
     const erase = (e.buttons & 2) === 2 || e.button === 2;
+    if (paintMode === 'elevation') {
+      const v = erase ? -1 : elevValue;     // right-drag reverts to the biome-derived default
+      if (painting && lastGX >= 0) stampLine(lastGX, lastGY, gx, gy, v, stampElev); else stampElev(gx, gy, v);
+      painting = true; lastGX = gx; lastGY = gy; renderPaint(); return;
+    }
     const cls = erase ? SC.Ocean : brushClass;
     if ($('dsnFill').checked && !painting) { floodFill(gx, gy, cls); renderPaint(); return; }
     // interpolate along the drag so fast strokes don't leave gaps between discrete stamps
@@ -9213,10 +9256,36 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     painting = true; lastGX = gx; lastGY = gy;
     renderPaint();
   }
-  function stampLine(x0, y0, x1, y1, cls) {
+  function stampElev(cx, cy, v) {
+    const rad = brushSize - 1, r2 = (rad + 0.5) * (rad + 0.5);
+    for (let dy = -rad; dy <= rad; dy++) for (let dx = -rad; dx <= rad; dx++) {
+      if (dx * dx + dy * dy > r2) continue;
+      const x = cx + dx, y = cy + dy; if (x < 0 || x >= G || y < 0 || y >= G) continue;
+      const i = y * G + x;
+      if (v < 0) { elevPainted[i] = 0; } else { elev[i] = v; elevPainted[i] = 1; }
+    }
+  }
+  // biome-derived default elevation (0.5 = sea level) where the user hasn't painted, else the painted value
+  function heightAt(x, y) {
+    const i = y * G + x;
+    if (elevPainted[i]) return elev[i];
+    return ECO_BIOME_ELEV[CN[target[i]]] != null ? ECO_BIOME_ELEV[CN[target[i]]] : 0.5;
+  }
+  function drawHeight(canvas) {
+    const ctx = canvas.getContext('2d'), W = canvas.width, img = ctx.createImageData(W, W), d = img.data;
+    for (let y = 0; y < W; y++) { const gy = G - 1 - y; for (let x = 0; x < W; x++) {
+      const b = Math.max(0, Math.min(255, Math.round(heightAt(x, gy) * 255))), o = (y * W + x) * 4;
+      // tint water blue-ish, land by grayscale, so it reads as terrain
+      const water = target[gy * G + x] === SC.Ocean;
+      d[o] = water ? 40 : b; d[o + 1] = water ? 70 : b; d[o + 2] = water ? 120 : b; d[o + 3] = 255;
+    } }
+    ctx.putImageData(img, 0, 0);
+  }
+  function stampLine(x0, y0, x1, y1, val, fn) {
+    fn = fn || stampBrush;
     const steps = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0));
-    if (steps === 0) { stampBrush(x1, y1, cls); return; }
-    for (let s = 0; s <= steps; s++) stampBrush(Math.round(x0 + (x1 - x0) * s / steps), Math.round(y0 + (y1 - y0) * s / steps), cls);
+    if (steps === 0) { fn(x1, y1, val); return; }
+    for (let s = 0; s <= steps; s++) fn(Math.round(x0 + (x1 - x0) * s / steps), Math.round(y0 + (y1 - y0) * s / steps), val);
   }
   function stampBrush(cx, cy, cls) {
     const rad = brushSize - 1, r2 = (rad + 0.5) * (rad + 0.5);
@@ -9505,7 +9574,80 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     if (cfp) cfp.style.display = cfp._dsnPrev != null ? cfp._dsnPrev : '';
   }
 
-  window.Designer = { open, close };
+  // ================================================================= authored-world export
+  // Render a G x G grid to a PNG (generation orientation, no flip — the mod reads pixel (x,y) as world
+  // (x,z)). Returns a Uint8Array of PNG bytes. `pix(x,y)` -> [r,g,b].
+  function gridToPng(pix) {
+    return new Promise(resolve => {
+      const cv = document.createElement('canvas'); cv.width = G; cv.height = G;
+      const ctx = cv.getContext('2d'), img = ctx.createImageData(G, G), d = img.data;
+      for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) { const c = pix(x, y), o = (y * G + x) * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = 255; }
+      ctx.putImageData(img, 0, 0);
+      cv.toBlob(b => b.arrayBuffer().then(ab => resolve(new Uint8Array(ab))), 'image/png');
+    });
+  }
+  // minimal STORE-method zip (no compression; PNGs are already compressed)
+  const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); t[n] = c >>> 0; } return t; })();
+  function crc32(buf) { let c = 0xFFFFFFFF; for (let i = 0; i < buf.length; i++) c = CRC[(c ^ buf[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+  function strBytes(s) { return new TextEncoder().encode(s); }
+  function makeZip(files) {                       // files: [{name, data:Uint8Array}]
+    const chunks = [], central = []; let offset = 0;
+    const u16 = v => [v & 255, (v >> 8) & 255], u32 = v => [v & 255, (v >> 8) & 255, (v >> 16) & 255, (v >>> 24) & 255];
+    for (const f of files) {
+      const name = strBytes(f.name), crc = crc32(f.data), sz = f.data.length;
+      const local = [].concat([0x50, 0x4b, 0x03, 0x04], u16(20), u16(0), u16(0), u16(0), u16(0), u32(crc), u32(sz), u32(sz), u16(name.length), u16(0));
+      const lh = new Uint8Array(local.length + name.length + sz); lh.set(local, 0); lh.set(name, local.length); lh.set(f.data, local.length + name.length);
+      chunks.push(lh);
+      const cen = [].concat([0x50, 0x4b, 0x01, 0x02], u16(20), u16(20), u16(0), u16(0), u16(0), u16(0), u32(crc), u32(sz), u32(sz), u16(name.length), u16(0), u16(0), u16(0), u16(0), u32(0), u32(offset));
+      const ch = new Uint8Array(cen.length + name.length); ch.set(cen, 0); ch.set(name, cen.length); central.push(ch);
+      offset += lh.length;
+    }
+    const cenSize = central.reduce((a, c) => a + c.length, 0);
+    const end = new Uint8Array([].concat([0x50, 0x4b, 0x05, 0x06], u16(0), u16(0), u16(files.length), u16(files.length), u32(cenSize), u32(offset), u16(0)));
+    const total = offset + cenSize + end.length, out = new Uint8Array(total); let p = 0;
+    for (const c of chunks) { out.set(c, p); p += c.length; }
+    for (const c of central) { out.set(c, p); p += c.length; }
+    out.set(end, p);
+    return out;
+  }
+  function downloadBlob(bytes, name, type) {
+    const blob = new Blob([bytes], { type: type || 'application/octet-stream' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  }
+  async function buildBundleFiles() {
+    const cfg = buildExportJson();              // the WorldGenerator.eco (main-thread), current form values
+    const biomePng = await gridToPng((x, y) => ECO_BIOME_COLOR[CN[target[y * G + x]]] || ECO_BIOME_COLOR.Ocean);
+    const heightPng = await gridToPng((x, y) => { const b = Math.max(0, Math.min(255, Math.round(heightAt(x, y) * 255))); return [b, b, b]; });
+    return {
+      size: (cfg && findWorldWidth(cfg)) || 72,
+      files: [
+        { name: 'WorldGenerator.eco', data: strBytes(JSON.stringify(cfg, null, 2)) },
+        { name: 'biome.png', data: biomePng },
+        { name: 'height.png', data: heightPng },
+        { name: 'authored.json', data: strBytes('{ "enabled": true, "source": "eco-map-generator" }') },
+      ],
+    };
+  }
+  async function exportBundle() {
+    if (typeof baseCfg === 'undefined' || !baseCfg) { $('dsnExportStatus').textContent = 'Load a config first.'; return; }
+    $('dsnExportStatus').textContent = 'building bundle…';
+    try {
+      const b = await buildBundleFiles();
+      downloadBlob(makeZip(b.files), 'authored-world-' + b.size + 'x' + b.size + '.zip', 'application/zip');
+      $('dsnExportStatus').innerHTML = '<b>Exported authored-world-' + b.size + 'x' + b.size + '.zip</b> — unzip, then run: EcoWorldGenCLI --server &lt;server&gt; --bundle &lt;dir&gt; --out Game.eco';
+    } catch (e) { $('dsnExportStatus').textContent = 'Export error: ' + e.message; }
+  }
+  function findWorldWidth(j) { let r = null; (function w(o) { if (!o || typeof o !== 'object' || r) return; if (Object.prototype.hasOwnProperty.call(o, 'WorldWidth')) { r = o.WorldWidth; return; } for (const k in o) w(o[k]); })(j); return r; }
+
+  // test/automation hook: returns the bundle files base64-encoded (no download prompt)
+  async function bundleBase64() {
+    const b = await buildBundleFiles();
+    const b64 = u8 => { let s = ''; for (let i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]); return btoa(s); };
+    const out = { size: b.size }; for (const f of b.files) out[f.name] = b64(f.data); return out;
+  }
+
+  window.Designer = { open, close, bundleBase64 };
   const btn = document.getElementById('designOpen');
   if (btn) btn.onclick = open;
 })();
