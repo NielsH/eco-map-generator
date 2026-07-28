@@ -137,6 +137,28 @@ scoring similarity. It matches the biome *mix* and *macro land-shape* well; exac
   candidate's exact cfg (`cfgBySeed`) so it reproduces the previewed map even with jitter, and does **not**
   overwrite `baseCfg` (so "Reset to loaded" still returns to the file).
 
+## Authored-world export (exact match, via a companion C# tool)
+
+Alongside the seed search, the Design-a-map tab can export the drawing as a **real world** that matches
+*exactly* (the search's ceiling is layout-approximate; this isn't). It does NOT run in-browser — it hands
+off to a C# tool in the Eco repo (`~/Documents/GitHub/Eco/Tools/`, not in git):
+
+- **`src/designer.js` (`buildBundleFiles`)** builds a bundle: `WorldGenerator.eco` (from `buildExportJson`),
+  `biome.bin` (one score-class index per cell, row-major, generation orientation), `height.bin` (one 0–255
+  byte per cell), plus `biome.png`/`height.png` for humans, zipped (minimal STORE zip + PNG via canvas).
+  The **Export** button downloads it; `Designer.bundleBase64()` is a test hook.
+- **Elevation layer**: a paint-mode toggle adds an `elev`/`elevPainted` layer; `heightAt()` uses the painted
+  value or a biome-derived default (`ECO_BIOME_ELEV`). `ECO_BIOME_COLOR` holds the exact Eco biome colors.
+- **The C# side** (`Eco/Tools/EcoAuthoredWorldGen` mod + `Eco/Tools/EcoWorldGenCLI`): the mod sets
+  `Biome.BiomeData` from `biome.bin` + swaps the SharpNoise height/water/rainfall/temperature modules for
+  authored ones (bypassing Voronoi); the CLI stages the bundle + mod into a headless server and runs
+  `EcoServer -generateDefault -nonetwork` → a stock-loadable `Game.eco`. See that folder's README.
+- **Why `.bin` not PNG**: `System.Drawing` misreads some canvas PNGs (indexed/tRNS) as transparent → the
+  mod's nearest-color fallback mapped everything to Wetland. Raw `.bin` is unambiguous; keep the biome index
+  order in sync between `search.js` SCLASS and the mod's `BIOME_BY_INDEX`.
+- **Orientation**: export is generation-orientation (no flip); it matches the mod (`biome.png` pixel (x,y) →
+  world (x,z)) and the in-game flipped editor lines up with the tool's flipped display.
+
 ## Gotchas (learned the hard way)
 
 - **`build.js` is one big template literal.** Any backtick or `${` inside the emitted HTML/JS must be
