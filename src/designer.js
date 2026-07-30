@@ -69,6 +69,9 @@
   const MAX_LEGEND = 12;         // cap on distinct source colors offered for remapping
   let importMode = 'colors';     // 'colors' (nearest hue) | 'brightness' (luminance ramp — better for photos)
   let lastImgData = null;        // last decoded G*G RGBA, so switching import mode re-maps without re-loading
+  let importedImg = null;        // the decoded source Image, kept so export can resample it at high resolution
+  let paintedSinceImport = false; // once the user hand-edits an import, export falls back to the 64² grid
+  const IMPORT_RES = 320;        // biome/height resolution exported for a pure image import (vs the 64² paint grid)
   // dark -> light biome ramp for brightness mode (low/dark = deep water, high/light = snow), reads as terrain
   const BRIGHT_RAMP = ['Ocean', 'Wetland', 'ColdForest', 'Taiga', 'RainForest', 'Grassland', 'WarmForest', 'Desert', 'Tundra', 'Coast', 'Ice'];
 
@@ -331,7 +334,40 @@
     });
     $('lgAuto').onclick = () => { pushUndo(); legend.forEach(e => e.cls = e.def); renderLegend(); flashMix(applyLegend()); };
   }
-  function hideLegend() { legend = []; imgLegendIdx = null; lastImgData = null; const w = $('dsnLegendWrap'); if (w) { w.style.display = 'none'; w.innerHTML = ''; } }
+  function hideLegend() { legend = []; imgLegendIdx = null; lastImgData = null; importedImg = null; paintedSinceImport = false; const w = $('dsnLegendWrap'); if (w) { w.style.display = 'none'; w.innerHTML = ''; } }
+  // Resample the ORIGINAL imported image at a higher resolution and produce aligned biome + height maps
+  // (bypassing the coarse 64² paint grid) so a photo/portrait exports with far sharper features. Uses the
+  // current legend + mode; height follows the picture (dark/low = deep water, light/high = land) so the
+  // land/water outline stays crisp and matched to the biome tint.
+  function imageToMaps(res) {
+    const c = document.createElement('canvas'); c.width = res; c.height = res;
+    const cx = c.getContext('2d'); cx.imageSmoothingEnabled = true; cx.drawImage(importedImg, 0, 0, res, res);
+    const d = cx.getImageData(0, 0, res, res).data, n = res * res;
+    const biome = new Uint8Array(n), height = new Uint8Array(n);
+    const put = (x, y, cls, h01) => { const j = (res - 1 - y) * res + x; biome[j] = cls; height[j] = Math.max(0, Math.min(255, Math.round(h01 * 255))); };  // flip Y like the 64² path
+    if (importMode === 'brightness') {
+      const lum = new Float32Array(n), trans = new Uint8Array(n), op = [];
+      for (let i = 0; i < n; i++) { const o = i * 4; if (d[o + 3] < 128) { trans[i] = 1; continue; } const L = 0.299 * d[o] + 0.587 * d[o + 1] + 0.114 * d[o + 2]; lum[i] = L; op.push(L); }
+      op.sort((a, b) => a - b); const N = op.length || 1, nB = legend.length;
+      const rank = L => { let lo = 0, hi = op.length; while (lo < hi) { const m = (lo + hi) >> 1; if (op[m] < L) lo = m + 1; else hi = m; } return lo; };
+      for (let y = 0; y < res; y++) for (let x = 0; x < res; x++) {
+        const i = y * res + x;
+        if (trans[i]) { put(x, y, SC.Ocean, 0.30); continue; }
+        const rf = rank(lum[i]) / N; let b = Math.floor(rf * nB); if (b >= nB) b = nB - 1;
+        put(x, y, legend[b].cls, 0.32 + 0.53 * rf);          // dark→deep water .. light→peaks
+      }
+    } else {
+      for (let y = 0; y < res; y++) for (let x = 0; x < res; x++) {
+        const o = (y * res + x) * 4;
+        let cls;
+        if (d[o + 3] < 128) cls = SC.Ocean;
+        else { let bi = 0, bd = Infinity; for (let k = 0; k < legend.length; k++) { const p = legend[k].rgb, dr = d[o] - p[0], dg = d[o + 1] - p[1], db = d[o + 2] - p[2], dd = dr * dr + dg * dg + db * db; if (dd < bd) { bd = dd; bi = k; } } cls = legend[bi].cls; }
+        const band = ECO_BIOME_ELEV[CN[cls]] || [0.52, 0.62];
+        put(x, y, cls, cls === SC.Ocean ? 0.30 : (band[0] + band[1]) / 2);
+      }
+    }
+    return { res, biome, height };
+  }
   // Load an image, stretch it to the world grid, cluster its colors, and map each color to a biome
   // (nearest by default — the user can then remap any color via the legend below the canvas).
   function importImage(file) {
@@ -342,7 +378,7 @@
       const cx = c.getContext('2d'); cx.imageSmoothingEnabled = true;
       cx.drawImage(img, 0, 0, G, G);                          // stretch to the square world grid
       const d = cx.getImageData(0, 0, G, G).data;
-      lastImgData = d;
+      lastImgData = d; importedImg = img; paintedSinceImport = false;
       mapImage(d);
       paintMode = 'biome'; markPaintMode();
       const count = applyLegend();
@@ -392,6 +428,7 @@
     const dispX = Math.floor((e.clientX - r.left) / r.width * G);
     const dispY = Math.floor((e.clientY - r.top) / r.height * G);
     if (dispX < 0 || dispX >= G || dispY < 0 || dispY >= G) return;
+    paintedSinceImport = true;              // hand edits win over the imported image at export time
     const gx = dispX, gy = G - 1 - dispY;   // flip display->grid
     const erase = (e.buttons & 2) === 2 || e.button === 2;
     if (paintMode === 'elevation') {
@@ -845,19 +882,23 @@
       waterBin[i] = Math.max(0, Math.min(255, Math.round(terrain.waterVal[i] * 255)));
       if (water[i]) anyWater = true;
     }
+    // A pure image import exports hi-res biome + height straight from the source image (the coarse 64²
+    // paint grid would waste an ~11-block chunk per pixel). Hand-painting over the import opts back out.
+    let biomeOut = biomeBin, heightOut = heightBin, hi = null;
+    if (importedImg && !paintedSinceImport) { hi = imageToMaps(IMPORT_RES); biomeOut = hi.biome; heightOut = hi.height; anyWater = false; }
     // PNGs kept for human inspection only (not read by the mod).
     const biomePng = await gridToPng((x, y) => water[y * G + x] ? [40, 90, 200] : (ECO_BIOME_COLOR[CN[target[y * G + x]]] || ECO_BIOME_COLOR.Ocean));
     const heightPng = await gridToPng((x, y) => { const b = heightBin[y * G + x]; return [b, b, b]; });
     const files = [
       { name: 'WorldGenerator.eco', data: strBytes(JSON.stringify(cfg, null, 2)) },
-      { name: 'biome.bin', data: biomeBin },
-      { name: 'height.bin', data: heightBin },
+      { name: 'biome.bin', data: biomeOut },
+      { name: 'height.bin', data: heightOut },
       { name: 'biome.png', data: biomePng },
       { name: 'height.png', data: heightPng },
       { name: 'authored.json', data: strBytes('{ "enabled": true, "source": "eco-map-generator" }') },
     ];
     if (anyWater) files.push({ name: 'water.bin', data: waterBin });   // only when rivers/lakes were painted
-    return { size: (cfg && findWorldWidth(cfg)) || 72, files: files };
+    return { size: (cfg && findWorldWidth(cfg)) || 72, files: files, hiRes: hi ? hi.res : 0 };
   }
   async function exportBundle() {
     if (typeof baseCfg === 'undefined' || !baseCfg) { $('dsnExportStatus').textContent = 'Load a config first.'; return; }
@@ -865,7 +906,8 @@
     try {
       const b = await buildBundleFiles();
       downloadBlob(makeZip(b.files), 'authored-world-' + b.size + 'x' + b.size + '.zip', 'application/zip');
-      $('dsnExportStatus').innerHTML = '<b>Exported authored-world-' + b.size + 'x' + b.size + '.zip</b> — unzip, then run: EcoWorldGenCLI --server &lt;server&gt; --bundle &lt;dir&gt; --out Game.eco';
+      const hi = b.hiRes ? ' · biome/height at <b>' + b.hiRes + '²</b> (hi-res from the imported image)' : '';
+      $('dsnExportStatus').innerHTML = '<b>Exported authored-world-' + b.size + 'x' + b.size + '.zip</b>' + hi + ' — unzip, then run: EcoWorldGenCLI --server &lt;server&gt; --bundle &lt;dir&gt; --out Game.eco';
     } catch (e) { $('dsnExportStatus').textContent = 'Export error: ' + e.message; }
   }
   function findWorldWidth(j) { let r = null; (function w(o) { if (!o || typeof o !== 'object' || r) return; if (Object.prototype.hasOwnProperty.call(o, 'WorldWidth')) { r = o.WorldWidth; return; } for (const k in o) w(o[k]); })(j); return r; }
