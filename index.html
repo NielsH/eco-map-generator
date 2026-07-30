@@ -9068,8 +9068,10 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
   // authored-world layers (for the "export a real world" flow, distinct from the seed search)
   let elev = new Float32Array(G * G);          // painted elevation [0..1], 0.5 = sea level
   let elevPainted = new Uint8Array(G * G);     // 1 where the user painted elevation (else biome-derived default)
-  let paintMode = 'biome';                     // 'biome' | 'elevation'
+  let water = new Uint8Array(G * G);           // 1 where the user painted a river/lake (carved + water-filled)
+  let paintMode = 'biome';                     // 'biome' | 'elevation' | 'water'
   let elevValue = 0.66;                        // current elevation brush value
+  const RIVER_CARVE = 0.045, RIVER_LIP = 0.012; // channel depth + how far the water sits below the banks (in [0,1] height)
 
   // Exact Eco biome colors (System.Drawing names, ARGB) for the exported biome map, keyed by score class.
   const ECO_BIOME_COLOR = {
@@ -9149,10 +9151,10 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
             '<button id="dsnClear">Clear</button>' +
           '</div>' +
           '<div class="dsnTools" style="margin-top:0">' +
-            '<span class="dsnMini">Paint</span><span class="seg" id="dsnPaintMode"><button type="button" data-pm="biome" class="on">Biomes</button><button type="button" data-pm="elevation">Elevation</button></span>' +
+            '<span class="dsnMini">Paint</span><span class="seg" id="dsnPaintMode"><button type="button" data-pm="biome" class="on">Biomes</button><button type="button" data-pm="elevation">Elevation</button><button type="button" data-pm="water">Water</button></span>' +
             '<span class="dsnRange" id="dsnElevWrap" style="width:210px;display:none">Height <input type="range" id="dsnElev" min="0" max="100" value="' + Math.round(elevValue * 100) + '"><span id="dsnElevV" class="dsnMini"></span></span>' +
           '</div>' +
-          '<div class="dsnMini">Left-drag paints · right-drag erases (to ocean / to default height) · <b>flood fill</b> bucket-fills a biome region. In <b>Elevation</b> mode you sculpt height; unpainted areas use a biome-appropriate default.</div>' +
+          '<div class="dsnMini">Left-drag paints · right-drag erases · <b>flood fill</b> bucket-fills a biome region. <b>Elevation</b>: sculpt height (unpainted areas use a natural biome-based default). <b>Water</b>: paint rivers/lakes — they carve a channel and fill with water (route them downhill along your terrain).</div>' +
         '</div>' +
         '<div class="dsnRight">' +
           '<div class="dsnCard"><h4>1 · Target</h4><div id="dsnAnalysis" class="dsnMini">Draw a layout (or seed it from the current map), then analyze it.</div>' +
@@ -9191,7 +9193,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
 
     // tools + wiring
     $('dsnBrush').oninput = e => { brushSize = +e.target.value; $('dsnBrushV').textContent = brushSize; };
-    $('dsnClear').onclick = () => { pushUndo(); target.fill(SC.Ocean); renderPaint(); };
+    $('dsnClear').onclick = () => { pushUndo(); target.fill(SC.Ocean); elevPainted.fill(0); water.fill(0); renderPaint(); };
     $('dsnUndo').onclick = undo;
     $('dsnSeedFromMap').onclick = seedFromMap;
     $('dsnClose').onclick = close;
@@ -9238,10 +9240,18 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
   }
   function renderPaint() {
     if (paintMode === 'elevation') drawHeight($('dsnCanvas'));
+    else if (paintMode === 'water') drawWaterView($('dsnCanvas'));
     else drawGrid($('dsnCanvas'), target, true);
   }
-  function pushUndo() { undoStack.push({ t: target.slice(), e: elev.slice(), p: elevPainted.slice() }); if (undoStack.length > 40) undoStack.shift(); }
-  function undo() { if (!undoStack.length) return; const s = undoStack.pop(); target = s.t; elev = s.e; elevPainted = s.p; renderPaint(); }
+  // biomes with the painted rivers/lakes overlaid in blue
+  function drawWaterView(canvas) {
+    drawGrid(canvas, target, true);
+    const ctx = canvas.getContext('2d'), W = canvas.width, img = ctx.getImageData(0, 0, W, W), d = img.data;
+    for (let y = 0; y < W; y++) { const gy = G - 1 - y; for (let x = 0; x < W; x++) { if (water[gy * G + x]) { const o = (y * W + x) * 4; d[o] = 30; d[o + 1] = 110; d[o + 2] = 230; } } }
+    ctx.putImageData(img, 0, 0);
+  }
+  function pushUndo() { undoStack.push({ t: target.slice(), e: elev.slice(), p: elevPainted.slice(), w: water.slice() }); if (undoStack.length > 40) undoStack.shift(); }
+  function undo() { if (!undoStack.length) return; const s = undoStack.pop(); target = s.t; elev = s.e; elevPainted = s.p; water = s.w; renderPaint(); }
   function onPointer(e) {
     const cv = $('dsnCanvas'), r = cv.getBoundingClientRect();
     const dispX = Math.floor((e.clientX - r.left) / r.width * G);
@@ -9252,6 +9262,11 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     if (paintMode === 'elevation') {
       const v = erase ? -1 : elevValue;     // right-drag reverts to the biome-derived default
       if (painting && lastGX >= 0) stampLine(lastGX, lastGY, gx, gy, v, stampElev); else stampElev(gx, gy, v);
+      painting = true; lastGX = gx; lastGY = gy; renderPaint(); return;
+    }
+    if (paintMode === 'water') {
+      const v = erase ? 0 : 1;              // right-drag erases the river/lake
+      if (painting && lastGX >= 0) stampLine(lastGX, lastGY, gx, gy, v, stampWater); else stampWater(gx, gy, v);
       painting = true; lastGX = gx; lastGY = gy; renderPaint(); return;
     }
     const cls = erase ? SC.Ocean : brushClass;
@@ -9268,6 +9283,14 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
       const x = cx + dx, y = cy + dy; if (x < 0 || x >= G || y < 0 || y >= G) continue;
       const i = y * G + x;
       if (v < 0) { elevPainted[i] = 0; } else { elev[i] = v; elevPainted[i] = 1; }
+    }
+  }
+  function stampWater(cx, cy, v) {
+    const rad = brushSize - 1, r2 = (rad + 0.5) * (rad + 0.5);
+    for (let dy = -rad; dy <= rad; dy++) for (let dx = -rad; dx <= rad; dx++) {
+      if (dx * dx + dy * dy > r2) continue;
+      const x = cx + dx, y = cy + dy; if (x < 0 || x >= G || y < 0 || y >= G) continue;
+      water[y * G + x] = v;
     }
   }
   // Smooth value-noise (2 octaves, deterministic) for gentle within-biome roll.
@@ -9316,13 +9339,26 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     }
     return a;
   }
+  // Final terrain for export + height preview: the base field, with painted rivers/lakes carved into a
+  // channel and a matching water-surface value per cell (0 elsewhere). height/water are both [0,1].
+  function computeTerrain() {
+    const height = computeHeightField();               // f_land (fresh array; safe to carve in place)
+    const waterVal = new Float32Array(G * G);
+    for (let i = 0; i < G * G; i++) {
+      if (!water[i]) continue;
+      const fLand = height[i];
+      waterVal[i] = Math.max(0, Math.min(1, 2 * (fLand - RIVER_LIP) - 1));   // water surface, just below the banks
+      height[i] = Math.max(0.02, fLand - RIVER_CARVE);                       // carve the channel bottom
+    }
+    return { height, waterVal };
+  }
   function drawHeight(canvas) {
-    const f = computeHeightField();
+    const t = computeTerrain();
     const ctx = canvas.getContext('2d'), W = canvas.width, img = ctx.createImageData(W, W), d = img.data;
     for (let y = 0; y < W; y++) { const gy = G - 1 - y; for (let x = 0; x < W; x++) {
-      const b = Math.max(0, Math.min(255, Math.round(f[gy * G + x] * 255))), o = (y * W + x) * 4;
-      const water = target[gy * G + x] === SC.Ocean;   // tint water so it reads as terrain
-      d[o] = water ? 40 : b; d[o + 1] = water ? 70 : b; d[o + 2] = water ? 120 : b; d[o + 3] = 255;
+      const i = gy * G + x, b = Math.max(0, Math.min(255, Math.round(t.height[i] * 255))), o = (y * W + x) * 4;
+      const isWater = target[i] === SC.Ocean || water[i];   // tint water (ocean + rivers/lakes) so it reads as terrain
+      d[o] = isWater ? 40 : b; d[o + 1] = isWater ? 70 : b; d[o + 2] = isWater ? 120 : b; d[o + 3] = 255;
     } }
     ctx.putImageData(img, 0, 0);
   }
@@ -9663,27 +9699,30 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
   async function buildBundleFiles() {
     const cfg = buildExportJson();              // the WorldGenerator.eco (main-thread), current form values
     // Raw maps (what the mod actually reads — unambiguous, no PNG decode). Generation orientation, row-major.
-    const field = computeHeightField();
+    const terrain = computeTerrain();           // carved height + water-surface per cell
     const biomeBin = new Uint8Array(G * G);     // per-cell score-class index (matches the mod's BIOME_BY_INDEX)
     const heightBin = new Uint8Array(G * G);    // per-cell height byte 0..255 (mod maps to [-1,1], then bilinear-upscales)
+    const waterBin = new Uint8Array(G * G);     // per-cell water surface as waterValue*255 (0 = sea level; mod fills to it)
+    let anyWater = false;
     for (let i = 0; i < G * G; i++) {
       biomeBin[i] = target[i];
-      heightBin[i] = Math.max(0, Math.min(255, Math.round(field[i] * 255)));
+      heightBin[i] = Math.max(0, Math.min(255, Math.round(terrain.height[i] * 255)));
+      waterBin[i] = Math.max(0, Math.min(255, Math.round(terrain.waterVal[i] * 255)));
+      if (water[i]) anyWater = true;
     }
     // PNGs kept for human inspection only (not read by the mod).
-    const biomePng = await gridToPng((x, y) => ECO_BIOME_COLOR[CN[target[y * G + x]]] || ECO_BIOME_COLOR.Ocean);
+    const biomePng = await gridToPng((x, y) => water[y * G + x] ? [40, 90, 200] : (ECO_BIOME_COLOR[CN[target[y * G + x]]] || ECO_BIOME_COLOR.Ocean));
     const heightPng = await gridToPng((x, y) => { const b = heightBin[y * G + x]; return [b, b, b]; });
-    return {
-      size: (cfg && findWorldWidth(cfg)) || 72,
-      files: [
-        { name: 'WorldGenerator.eco', data: strBytes(JSON.stringify(cfg, null, 2)) },
-        { name: 'biome.bin', data: biomeBin },
-        { name: 'height.bin', data: heightBin },
-        { name: 'biome.png', data: biomePng },
-        { name: 'height.png', data: heightPng },
-        { name: 'authored.json', data: strBytes('{ "enabled": true, "source": "eco-map-generator" }') },
-      ],
-    };
+    const files = [
+      { name: 'WorldGenerator.eco', data: strBytes(JSON.stringify(cfg, null, 2)) },
+      { name: 'biome.bin', data: biomeBin },
+      { name: 'height.bin', data: heightBin },
+      { name: 'biome.png', data: biomePng },
+      { name: 'height.png', data: heightPng },
+      { name: 'authored.json', data: strBytes('{ "enabled": true, "source": "eco-map-generator" }') },
+    ];
+    if (anyWater) files.push({ name: 'water.bin', data: waterBin });   // only when rivers/lakes were painted
+    return { size: (cfg && findWorldWidth(cfg)) || 72, files: files };
   }
   async function exportBundle() {
     if (typeof baseCfg === 'undefined' || !baseCfg) { $('dsnExportStatus').textContent = 'Load a config first.'; return; }
