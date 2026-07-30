@@ -44,14 +44,16 @@
     ColdForest: [34, 139, 34], RainForest: [32, 178, 170], Desert: [244, 164, 96], Taiga: [107, 142, 35],
     Tundra: [189, 183, 107], Ice: [255, 255, 255], Wetland: [0, 100, 0],
   };
-  // Default elevation per biome (0.5 = sea level) — used where the user hasn't painted elevation.
-  // Kept in a fairly tight land band so biome-to-biome height steps are gentle; the field is then
-  // noise-varied + blurred (see computeHeightField) so transitions are fluent, not walls.
+  // Default elevation BAND per biome as [low, high] (0.5 = sea level), derived from Eco's own biome
+  // elevation ranges. Unpainted land is placed within its band by distance-to-ocean (coast=low,
+  // interior=high) + noise, mirroring a regular server: coastal lowlands rising to interior hills, with
+  // cold/mountain biomes taller. Blurred so biome edges are slopes.
   const ECO_BIOME_ELEV = {
-    Ocean: 0.32, Coast: 0.50, Grassland: 0.57, WarmForest: 0.585, ColdForest: 0.60, RainForest: 0.575,
-    Desert: 0.56, Wetland: 0.53, Taiga: 0.63, Tundra: 0.66, Ice: 0.72,
+    Ocean: [0.18, 0.44], Coast: [0.50, 0.54], Grassland: [0.52, 0.66], WarmForest: [0.54, 0.70],
+    ColdForest: [0.54, 0.74], RainForest: [0.53, 0.68], Desert: [0.51, 0.60], Wetland: [0.51, 0.60],
+    Taiga: [0.60, 0.80], Tundra: [0.64, 0.85], Ice: [0.70, 0.88],
   };
-  const HEIGHT_BLUR_PASSES = 4;   // box-blur passes over the 64-grid; ramps biome-height transitions
+  const HEIGHT_BLUR_PASSES = 2;   // box-blur passes; enough to soften biome-height steps without washing out relief
   let layoutWeight = 0.6;
   let invBase = null;                    // inverted starting config (all fields), seed varied per candidate
   let pool = [];                         // kept candidates: { seed, grid, s }  (s = score breakdown)
@@ -238,22 +240,40 @@
   // Smooth value-noise (2 octaves, deterministic) for gentle within-biome roll.
   function h2(x, y) { let n = (Math.imul(x, 374761393) + Math.imul(y, 668265263)) | 0; n = Math.imul(n ^ (n >>> 13), 1274126177) | 0; return ((n ^ (n >>> 16)) >>> 0) / 4294967295; }
   function vn(x, y) { const x0 = Math.floor(x), y0 = Math.floor(y), tx = x - x0, ty = y - y0; const a = h2(x0, y0), b = h2(x0 + 1, y0), c = h2(x0, y0 + 1), d = h2(x0 + 1, y0 + 1); const sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty); return (a + (b - a) * sx) * (1 - sy) + (c + (d - c) * sx) * sy; }
-  function vnoise(x, y) { return 0.6 * vn(x * 0.16, y * 0.16) + 0.4 * vn(x * 0.42 + 7.3, y * 0.42 + 2.1); }
+  // fractal (multi-octave) noise: broad landforms + finer detail
+  function fbm(x, y) { return 0.5 * vn(x * 0.08, y * 0.08) + 0.3 * vn(x * 0.19 + 11.5, y * 0.19 + 5.2) + 0.2 * vn(x * 0.44 + 3.1, y * 0.44 + 9.7); }
+  // distance (in cells) from each cell to the nearest ocean cell — a 2-pass chamfer transform
+  function oceanDistField() {
+    const INF = 1e6, d = new Float32Array(G * G);
+    for (let i = 0; i < G * G; i++) d[i] = target[i] === SC.Ocean ? 0 : INF;
+    const rel = (i, j, w) => { if (d[j] + w < d[i]) d[i] = d[j] + w; };
+    for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) { const i = y * G + x; if (x > 0) rel(i, i - 1, 1); if (y > 0) rel(i, i - G, 1); if (x > 0 && y > 0) rel(i, i - G - 1, 1.414); if (x < G - 1 && y > 0) rel(i, i - G + 1, 1.414); }
+    for (let y = G - 1; y >= 0; y--) for (let x = G - 1; x >= 0; x--) { const i = y * G + x; if (x < G - 1) rel(i, i + 1, 1); if (y < G - 1) rel(i, i + G, 1); if (x < G - 1 && y < G - 1) rel(i, i + G + 1, 1.414); if (x > 0 && y < G - 1) rel(i, i + G - 1, 1.414); }
+    return d;
+  }
 
-  // Full-field height in [0,1]: painted value, or a biome-default + gentle noise; then blurred so
-  // biome-to-biome height changes become slopes rather than cliffs. Recomputed each call (cheap at 64²).
+  // Full-field height in [0,1]. Unpainted land is placed within its biome's [low,high] band by distance
+  // to the coast (shore=low, interior=high) plus multi-octave rolling relief; ocean stays below sea
+  // level. Painted values override. Blurred so biome edges are slopes, not cliffs.
+  const OCEAN_FALLOFF = 16, RELIEF_AMP = 0.10;
   function computeHeightField() {
+    const dist = oceanDistField();
     let a = new Float32Array(G * G);
     for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) {
       const i = y * G + x;
-      a[i] = elevPainted[i] ? elev[i] : ((ECO_BIOME_ELEV[CN[target[i]]] != null ? ECO_BIOME_ELEV[CN[target[i]]] : 0.55) + (vnoise(x, y) - 0.5) * 0.06);
+      if (elevPainted[i]) { a[i] = elev[i]; continue; }
+      const band = ECO_BIOME_ELEV[CN[target[i]]] || [0.52, 0.62], lo = band[0], hi = band[1];
+      if (target[i] === SC.Ocean) { a[i] = lo + (hi - lo) * fbm(x, y); continue; }           // below sea level -> water
+      const fall = Math.min(1, dist[i] / OCEAN_FALLOFF), s = fall * fall * (3 - 2 * fall);    // smoothstep coast->inland
+      const base = lo + (hi - lo) * s;                                                        // rise from shore to interior
+      a[i] = Math.max(0.505, base + (fbm(x, y) - 0.5) * RELIEF_AMP * (0.4 + 0.6 * s));         // rolling hills, gentler near shore
     }
     let b = new Float32Array(G * G);
     for (let p = 0; p < HEIGHT_BLUR_PASSES; p++) {
       for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) {
-        let s = 0, c = 0;
-        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const xx = x + dx, yy = y + dy; if (xx < 0 || xx >= G || yy < 0 || yy >= G) continue; s += a[yy * G + xx]; c++; }
-        b[y * G + x] = s / c;
+        let sum = 0, c = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const xx = x + dx, yy = y + dy; if (xx < 0 || xx >= G || yy < 0 || yy >= G) continue; sum += a[yy * G + xx]; c++; }
+        b[y * G + x] = sum / c;
       }
       const t = a; a = b; b = t;
     }
