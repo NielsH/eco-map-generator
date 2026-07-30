@@ -67,6 +67,10 @@
   let legend = [];               // [{ rgb:[r,g,b], count, cls }]
   let imgLegendIdx = null;       // Int16Array(G*G) legend index per image cell (-1 = transparent -> ocean)
   const MAX_LEGEND = 12;         // cap on distinct source colors offered for remapping
+  let importMode = 'colors';     // 'colors' (nearest hue) | 'brightness' (luminance ramp — better for photos)
+  let lastImgData = null;        // last decoded G*G RGBA, so switching import mode re-maps without re-loading
+  // dark -> light biome ramp for brightness mode (low/dark = deep water, high/light = snow), reads as terrain
+  const BRIGHT_RAMP = ['Ocean', 'Wetland', 'ColdForest', 'Taiga', 'RainForest', 'Grassland', 'WarmForest', 'Desert', 'Tundra', 'Coast', 'Ice'];
 
   // ================================================================= styling
   function injectStyle() {
@@ -234,8 +238,37 @@
       for (let k = 0; k < kept.length; k++) { const p = kept[k].rgb, dr = e.rgb[0] - p[0], dg = e.rgb[1] - p[1], db = e.rgb[2] - p[2], dd = dr * dr + dg * dg + db * db; if (dd < bd) { bd = dd; bi = k; } }
       kept[bi].count += e.count;
     }
-    for (const e of kept) e.cls = nearestClass(e.rgb[0], e.rgb[1], e.rgb[2]);   // default assignment = nearest biome
+    for (const e of kept) { e.cls = nearestClass(e.rgb[0], e.rgb[1], e.rgb[2]); e.def = e.cls; }   // default = nearest biome
     return kept;
+  }
+  // Brightness mode: map each pixel's luminance onto the dark->light biome ramp, histogram-equalized so
+  // a low-contrast/dark image still uses the full ramp. Preserves tonal structure (best for photos).
+  // Sets `legend` (one gray band per ramp step) + `imgLegendIdx` (band per cell) directly.
+  function buildBrightness(d) {
+    const nB = BRIGHT_RAMP.length, lum = new Float32Array(G * G), idx = new Int16Array(G * G), opaque = [];
+    for (let i = 0; i < G * G; i++) {
+      const o = i * 4;
+      if (d[o + 3] < 128) { idx[i] = -1; lum[i] = -1; continue; }
+      const L = 0.299 * d[o] + 0.587 * d[o + 1] + 0.114 * d[o + 2];
+      lum[i] = L; opaque.push(L);
+    }
+    opaque.sort((a, b) => a - b);
+    const N = opaque.length || 1;
+    const rankOf = L => { let lo = 0, hi = opaque.length; while (lo < hi) { const m = (lo + hi) >> 1; if (opaque[m] < L) lo = m + 1; else hi = m; } return lo; };
+    const counts = new Array(nB).fill(0);
+    for (let i = 0; i < G * G; i++) {
+      if (idx[i] === -1) continue;
+      let b = Math.floor(rankOf(lum[i]) / N * nB); if (b >= nB) b = nB - 1;
+      idx[i] = b; counts[b]++;
+    }
+    imgLegendIdx = idx;
+    legend = [];
+    for (let b = 0; b < nB; b++) { const g = Math.round(255 * b / (nB - 1)), cls = SC[BRIGHT_RAMP[b]]; legend.push({ rgb: [g, g, g], count: counts[b], cls: cls, def: cls }); }
+  }
+  // Build the legend + per-cell assignment for the current import mode.
+  function mapImage(d) {
+    if (importMode === 'brightness') buildBrightness(d);
+    else { legend = buildLegend(d); imgLegendIdx = assignLegendIdx(d); }
   }
   // Per-cell legend index (which dominant color each pixel belongs to); -1 = transparent.
   function assignLegendIdx(d) {
@@ -264,17 +297,26 @@
   }
   function flashMix(count) {
     const top = Object.keys(count).map(k => [LABEL[CN[+k]], count[k]]).sort((a, b) => b[1] - a[1]).slice(0, 5).map(e => e[0]).join(', ');
-    flashAnalysis('Imported image → biomes (' + top + '). Remap any color below, edit, or Analyze — then export.');
+    flashAnalysis('Imported image → biomes (' + top + '). Remap any band below, edit, or Analyze — then export.');
   }
-  // The color→biome legend UI: one row per dominant color, with a biome dropdown that re-maps live.
+  // Re-run the mapping in a different mode on the already-loaded image (no re-decode), then refresh.
+  function setImportMode(m) {
+    if (!lastImgData || importMode === m) { importMode = m; return; }
+    pushUndo(); importMode = m; mapImage(lastImgData); renderLegend(); flashMix(applyLegend());
+  }
+  // Legend UI: one row per source color (or brightness band) with a live biome dropdown, plus a
+  // Colors/Brightness mode toggle — Brightness maps luminance onto a terrain ramp (best for photos).
   function renderLegend() {
     const wrap = $('dsnLegendWrap'); if (!wrap) return;
     if (!legend.length) { wrap.style.display = 'none'; wrap.innerHTML = ''; return; }
-    const total = G * G;
+    const total = G * G, bright = importMode === 'brightness';
     const opts = PALETTE.map(n => '<option value="' + SC[n] + '">' + LABEL[n] + '</option>').join('');
     wrap.innerHTML =
-      '<div class="lgHead"><b>Image colors → biomes</b><span class="dsnMini">pick a biome for each color — the map updates live</span>' +
-      '<button id="lgAuto" style="margin-left:auto" title="Reset every color to its nearest biome">Auto (nearest)</button></div>' +
+      '<div class="lgHead"><b>' + (bright ? 'Brightness → biomes' : 'Image colors → biomes') + '</b>' +
+      '<span class="seg" id="lgMode"><button type="button" data-im="colors"' + (bright ? '' : ' class="on"') + '>Colors</button>' +
+      '<button type="button" data-im="brightness"' + (bright ? ' class="on"' : '') + '>Brightness</button></span>' +
+      '<span class="dsnMini">' + (bright ? 'dark→light mapped to a terrain ramp' : 'nearest hue per color') + ' · <b>Brightness</b> suits photos</span>' +
+      '<button id="lgAuto" style="margin-left:auto" title="Reset every entry to its default biome">Auto</button></div>' +
       '<div class="lgRows">' + legend.map((e, i) => {
         const pct = Math.round(e.count / total * 100);
         return '<div class="lgRow"><span class="lgSw" style="background:rgb(' + e.rgb[0] + ',' + e.rgb[1] + ',' + e.rgb[2] + ')"></span>' +
@@ -282,13 +324,14 @@
           '<select data-i="' + i + '">' + opts + '</select></div>';
       }).join('') + '</div>';
     wrap.style.display = '';
+    wrap.querySelectorAll('#lgMode button').forEach(b => b.onclick = () => setImportMode(b.dataset.im));
     wrap.querySelectorAll('select').forEach(sel => {
       sel.value = legend[+sel.dataset.i].cls;
       sel.onchange = () => { pushUndo(); legend[+sel.dataset.i].cls = +sel.value; flashMix(applyLegend()); };
     });
-    $('lgAuto').onclick = () => { pushUndo(); legend.forEach(e => e.cls = nearestClass(e.rgb[0], e.rgb[1], e.rgb[2])); renderLegend(); flashMix(applyLegend()); };
+    $('lgAuto').onclick = () => { pushUndo(); legend.forEach(e => e.cls = e.def); renderLegend(); flashMix(applyLegend()); };
   }
-  function hideLegend() { legend = []; imgLegendIdx = null; const w = $('dsnLegendWrap'); if (w) { w.style.display = 'none'; w.innerHTML = ''; } }
+  function hideLegend() { legend = []; imgLegendIdx = null; lastImgData = null; const w = $('dsnLegendWrap'); if (w) { w.style.display = 'none'; w.innerHTML = ''; } }
   // Load an image, stretch it to the world grid, cluster its colors, and map each color to a biome
   // (nearest by default — the user can then remap any color via the legend below the canvas).
   function importImage(file) {
@@ -299,8 +342,8 @@
       const cx = c.getContext('2d'); cx.imageSmoothingEnabled = true;
       cx.drawImage(img, 0, 0, G, G);                          // stretch to the square world grid
       const d = cx.getImageData(0, 0, G, G).data;
-      legend = buildLegend(d);
-      imgLegendIdx = assignLegendIdx(d);
+      lastImgData = d;
+      mapImage(d);
       paintMode = 'biome'; markPaintMode();
       const count = applyLegend();
       renderLegend();
