@@ -38,6 +38,7 @@
   let water = new Uint8Array(G * G);           // 1 where the user painted a river/lake (carved + water-filled)
   let paintMode = 'biome';                     // 'biome' | 'elevation' | 'water'
   let elevValue = 0.66;                        // current elevation brush value
+  let paintRoughness = 0.08;                   // natural micro-relief added to painted areas (0 = perfectly flat)
   const RIVER_CARVE = 0.045, RIVER_LIP = 0.012; // channel depth + how far the water sits below the banks (in [0,1] height)
 
   // Exact Eco biome colors (System.Drawing names, ARGB) for the exported biome map, keyed by score class.
@@ -141,7 +142,10 @@
           '</div>' +
           '<div class="dsnTools" style="margin-top:0">' +
             '<span class="dsnMini">Paint</span><span class="seg" id="dsnPaintMode"><button type="button" data-pm="biome" class="on">Biomes</button><button type="button" data-pm="elevation">Elevation</button><button type="button" data-pm="water">Water</button></span>' +
-            '<span class="dsnRange" id="dsnElevWrap" style="width:210px;display:none">Height <input type="range" id="dsnElev" min="0" max="100" value="' + Math.round(elevValue * 100) + '"><span id="dsnElevV" class="dsnMini"></span></span>' +
+            '<span class="dsnRange" id="dsnElevWrap" style="display:none;gap:14px;flex-wrap:wrap">' +
+              '<span class="dsnRange" style="gap:6px">Height <input type="range" id="dsnElev" min="0" max="100" value="' + Math.round(elevValue * 100) + '" style="width:120px"><span id="dsnElevV" class="dsnMini"></span></span>' +
+              '<span class="dsnRange" style="gap:6px" title="How much natural, gently-rolling variation painted areas get, like a default map. 0 = perfectly flat.">Roughness <input type="range" id="dsnRough" min="0" max="100" value="' + Math.round(paintRoughness / 0.16 * 100) + '" style="width:100px"><span id="dsnRoughV" class="dsnMini"></span></span>' +
+            '</span>' +
           '</div>' +
           '<div id="dsnElevLegend" style="display:none;margin:2px 0 0;max-width:320px">' +
             '<div class="dsnMini" id="dsnElevRead" style="margin-bottom:4px"></div>' +
@@ -209,6 +213,8 @@
     $('dsnPaintMode').querySelectorAll('button').forEach(b => b.onclick = () => { paintMode = b.dataset.pm; markPaintMode(); renderPaint(); });
     $('dsnElev').oninput = e => { elevValue = +e.target.value / 100; $('dsnElevV').textContent = elevLabel(elevValue); drawElevLegend(); };
     $('dsnElevV').textContent = elevLabel(elevValue);
+    $('dsnRough').oninput = e => { paintRoughness = +e.target.value / 100 * 0.16; $('dsnRoughV').textContent = roughLabel(paintRoughness); if (paintMode === 'elevation') renderPaint(); };
+    $('dsnRoughV').textContent = roughLabel(paintRoughness);
     const cv = $('dsnCanvas');
     cv.addEventListener('contextmenu', e => e.preventDefault());
     cv.addEventListener('pointerdown', e => { pushUndo(); onPointer(e); });
@@ -221,6 +227,7 @@
   function markPalette() { $('dsnPal').querySelectorAll('button').forEach(b => b.classList.toggle('on', +b.dataset.c === brushClass)); }
   function elevLabel(v) { return v < 0.45 ? 'deep water' : v < 0.52 ? 'sea level' : v < 0.65 ? 'lowland' : v < 0.8 ? 'hills' : 'peaks'; }
   function formatElev(v) { return Math.round(v * 100) + ' · ' + elevLabel(v); }
+  function roughLabel(r) { return r < 0.005 ? 'flat' : r < 0.05 ? 'subtle' : r < 0.11 ? 'natural' : 'rugged'; }
   // Draw the hypsometric scale bar (matches the map's ramp) with a sea-level tick + a marker at the brush.
   function drawElevLegend() {
     const cv = $('dsnElevBar'); if (!cv) return;
@@ -539,7 +546,11 @@
     let a = new Float32Array(G * G);
     for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) {
       const i = y * G + x;
-      if (elevPainted[i]) { a[i] = elev[i]; continue; }
+      if (elevPainted[i]) {                                             // painted: add natural micro-relief (not dead flat)
+        const v = elev[i] + (fbm(x, y) - 0.5) * paintRoughness;
+        a[i] = elev[i] >= 0.505 ? Math.max(0.505, v) : v;               // painted land stays above sea (no accidental puddles)
+        continue;
+      }
       const band = ECO_BIOME_ELEV[CN[target[i]]] || [0.52, 0.62], lo = band[0], hi = band[1];
       if (target[i] === SC.Ocean) { a[i] = lo + (hi - lo) * fbm(x, y); continue; }           // below sea level -> water
       const fall = Math.min(1, dist[i] / OCEAN_FALLOFF), s = fall * fall * (3 - 2 * fall);    // smoothstep coast->inland
