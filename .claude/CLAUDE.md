@@ -149,6 +149,11 @@ off to a C# tool in the Eco repo (`~/Documents/GitHub/Eco/Tools/`, not in git):
   The **Export** button downloads it; `Designer.bundleBase64()` is a test hook.
 - **Elevation layer**: a paint-mode toggle adds an `elev`/`elevPainted` layer; `heightAt()` uses the painted
   value or a biome-derived default (`ECO_BIOME_ELEV`). `ECO_BIOME_COLOR` holds the exact Eco biome colors.
+  The elevation *view* (`drawHeight`) is a relief map, not flat grayscale: a hypsometric colour ramp
+  (`landColor`/`waterColor`, sea at `SEA_LEVEL`=0.5) tells absolute height, NW **hillshade** (`HS_Z`) +
+  **contour** lines (`CONTOUR` spacing) reveal shape and make edits visible. A `#dsnElevBar` scale bar
+  (`drawElevLegend`) shows the ramp + a brush marker, and a hover readout (`updateElevReadout`, off the
+  cached `lastTerrain`) reads the elevation under the cursor.
 - **The C# side** (`Eco/Tools/EcoAuthoredWorldGen` mod + `Eco/Tools/EcoWorldGenCLI`): the mod sets
   `Biome.BiomeData` from `biome.bin` + swaps the SharpNoise height/water/rainfall/temperature modules for
   authored ones (bypassing Voronoi); the CLI stages the bundle + mod into a headless server and runs

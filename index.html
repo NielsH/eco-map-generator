@@ -9096,6 +9096,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
   let workers = [], running = false, evaluated = 0, tStart = 0, seedSet = new Set(), lastUiPaint = 0;
   let classgridBound = false, painting = false, built = false, cfgBySeed = {}, poolTargetSig = null;
   let undoStack = [], lastGX = -1, lastGY = -1;
+  let lastTerrain = null;                       // last computed {height,waterVal} — for the elevation hover readout
   // image-import color legend: dominant source colors + their (user-overridable) biome assignment
   let legend = [];               // [{ rgb:[r,g,b], count, cls }]
   let imgLegendIdx = null;       // Int16Array(G*G) legend index per image cell (-1 = transparent -> ocean)
@@ -9175,6 +9176,14 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
             '<span class="dsnMini">Paint</span><span class="seg" id="dsnPaintMode"><button type="button" data-pm="biome" class="on">Biomes</button><button type="button" data-pm="elevation">Elevation</button><button type="button" data-pm="water">Water</button></span>' +
             '<span class="dsnRange" id="dsnElevWrap" style="width:210px;display:none">Height <input type="range" id="dsnElev" min="0" max="100" value="' + Math.round(elevValue * 100) + '"><span id="dsnElevV" class="dsnMini"></span></span>' +
           '</div>' +
+          '<div id="dsnElevLegend" style="display:none;margin:2px 0 0;max-width:320px">' +
+            '<div class="dsnMini" id="dsnElevRead" style="margin-bottom:4px"></div>' +
+            '<div style="position:relative">' +
+              '<canvas id="dsnElevBar" width="280" height="16" style="width:100%;height:16px;display:block;border-radius:4px;border:0.5px solid var(--border)"></canvas>' +
+              '<div id="dsnElevMark" style="position:absolute;top:-3px;left:0;width:2px;height:22px;background:var(--text);box-shadow:0 0 0 1px rgba(0,0,0,.45)"></div>' +
+            '</div>' +
+            '<div class="dsnMini" style="display:flex;justify-content:space-between;margin-top:1px"><span>deep</span><span>◄ sea</span><span>hills</span><span>peak</span></div>' +
+          '</div>' +
           '<div class="dsnMini">Left-drag paints · right-drag erases · <b>flood fill</b> bucket-fills a biome region. <b>Elevation</b>: sculpt height (unpainted areas use a natural biome-based default). <b>Water</b>: paint rivers/lakes — they carve a channel and fill with water (route them downhill along your terrain).</div>' +
           '<div id="dsnLegendWrap" class="dsnLegend" style="display:none"></div>' +
           '<div id="dsnWrapPrev" style="margin-top:8px">' +
@@ -9230,24 +9239,41 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     $('dsnStop').onclick = stopSearch;
     $('dsnWeight').oninput = e => { layoutWeight = +e.target.value / 100; rescorePool(); };
     $('dsnExport').onclick = exportBundle;
-    $('dsnPaintMode').querySelectorAll('button').forEach(b => b.onclick = () => {
-      paintMode = b.dataset.pm;
-      $('dsnPaintMode').querySelectorAll('button').forEach(x => x.classList.toggle('on', x.dataset.pm === paintMode));
-      $('dsnElevWrap').style.display = paintMode === 'elevation' ? '' : 'none';
-      renderPaint();
-    });
-    $('dsnElev').oninput = e => { elevValue = +e.target.value / 100; $('dsnElevV').textContent = elevLabel(elevValue); };
+    $('dsnPaintMode').querySelectorAll('button').forEach(b => b.onclick = () => { paintMode = b.dataset.pm; markPaintMode(); renderPaint(); });
+    $('dsnElev').oninput = e => { elevValue = +e.target.value / 100; $('dsnElevV').textContent = elevLabel(elevValue); drawElevLegend(); };
     $('dsnElevV').textContent = elevLabel(elevValue);
     const cv = $('dsnCanvas');
     cv.addEventListener('contextmenu', e => e.preventDefault());
     cv.addEventListener('pointerdown', e => { pushUndo(); onPointer(e); });
-    cv.addEventListener('pointermove', e => { if (painting) onPointer(e); });
+    cv.addEventListener('pointermove', e => { if (painting) onPointer(e); updateElevReadout(e); });
+    cv.addEventListener('pointerleave', () => { if (paintMode === 'elevation') drawElevLegend(); });
     window.addEventListener('pointerup', () => { painting = false; lastGX = -1; lastGY = -1; });
     window.addEventListener('keydown', e => { if ($('designWrap').style.display === 'none') return; if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); undo(); } });
     built = true;
   }
   function markPalette() { $('dsnPal').querySelectorAll('button').forEach(b => b.classList.toggle('on', +b.dataset.c === brushClass)); }
   function elevLabel(v) { return v < 0.45 ? 'deep water' : v < 0.52 ? 'sea level' : v < 0.65 ? 'lowland' : v < 0.8 ? 'hills' : 'peaks'; }
+  function formatElev(v) { return Math.round(v * 100) + ' · ' + elevLabel(v); }
+  // Draw the hypsometric scale bar (matches the map's ramp) with a sea-level tick + a marker at the brush.
+  function drawElevLegend() {
+    const cv = $('dsnElevBar'); if (!cv) return;
+    const ctx = cv.getContext('2d'), W = cv.width, H = cv.height;
+    for (let x = 0; x < W; x++) { const hh = x / (W - 1), c = hh < SEA_LEVEL ? waterColor(hh) : landColor(hh); ctx.fillStyle = 'rgb(' + (c[0] | 0) + ',' + (c[1] | 0) + ',' + (c[2] | 0) + ')'; ctx.fillRect(x, 0, 1, H); }
+    ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fillRect(Math.round(SEA_LEVEL * W), 0, 1, H);   // sea line
+    const mk = $('dsnElevMark'); if (mk) mk.style.left = 'calc(' + (elevValue * 100) + '% - 1px)';
+    const rd = $('dsnElevRead'); if (rd) rd.innerHTML = 'Brush paints <b>' + formatElev(elevValue) + '</b> — hover the map to read a spot';
+  }
+  // Live readout of the elevation under the cursor while in elevation mode (reads the last rendered field).
+  function updateElevReadout(e) {
+    if (paintMode !== 'elevation' || !lastTerrain) return;
+    const cv = $('dsnCanvas'), r = cv.getBoundingClientRect();
+    const dispX = Math.floor((e.clientX - r.left) / r.width * G), dispY = Math.floor((e.clientY - r.top) / r.height * G);
+    const rd = $('dsnElevRead'); if (!rd) return;
+    if (dispX < 0 || dispX >= G || dispY < 0 || dispY >= G) return;
+    const i = (G - 1 - dispY) * G + dispX, hv = lastTerrain.height[i];
+    const isW = target[i] === SC.Ocean || water[i] || hv < SEA_LEVEL;
+    rd.innerHTML = 'Here: <b>' + formatElev(hv) + (isW ? ' · underwater' : '') + '</b> &nbsp;·&nbsp; brush: <b>' + formatElev(elevValue) + '</b>';
+  }
 
   // ================================================================= image import
   // nearest biome (by weighted RGB distance) to a source color — green-weighted like human vision
@@ -9428,7 +9454,12 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     reader.onload = () => { img.src = reader.result; };
     reader.readAsDataURL(file);
   }
-  function markPaintMode() { const t = $('dsnPaintMode'); if (t) t.querySelectorAll('button').forEach(x => x.classList.toggle('on', x.dataset.pm === paintMode)); const w = $('dsnElevWrap'); if (w) w.style.display = paintMode === 'elevation' ? '' : 'none'; }
+  function markPaintMode() {
+    const t = $('dsnPaintMode'); if (t) t.querySelectorAll('button').forEach(x => x.classList.toggle('on', x.dataset.pm === paintMode));
+    const isElev = paintMode === 'elevation';
+    const w = $('dsnElevWrap'); if (w) w.style.display = isElev ? '' : 'none';
+    const lg = $('dsnElevLegend'); if (lg) { lg.style.display = isElev ? '' : 'none'; if (isElev) drawElevLegend(); }
+  }
 
   // ================================================================= painter
   // Everything is stored in generation orientation; we DISPLAY flipped-Y to match the map view.
@@ -9572,13 +9603,35 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     }
     return { height, waterVal };
   }
+  // ---- elevation visualization: hypsometric tint + hillshade + contours ----------------------------
+  // Sea level in the [0,1] height field; below is water, above is land (matches computeHeightField).
+  const SEA_LEVEL = 0.5, HS_Z = 22, CONTOUR = 0.05;    // HS_Z exaggerates slope for shading; CONTOUR = isoline spacing
+  function lerp3(a, b, t) { return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]; }
+  // hypsometric land ramp keyed by height ABOVE sea, normalized to [0,1]: sand→green→tan→brown→rock→snow
+  const LAND_RAMP = [[0, [236, 226, 170]], [0.08, [186, 208, 128]], [0.20, [120, 178, 96]], [0.38, [176, 172, 96]], [0.55, [156, 120, 72]], [0.74, [120, 92, 72]], [0.90, [198, 196, 198]], [1, [255, 255, 255]]];
+  function landColor(h, sea) { sea = sea == null ? SEA_LEVEL : sea; let t = (h - sea) / (1 - sea); t = t < 0 ? 0 : t > 1 ? 1 : t; for (let k = 1; k < LAND_RAMP.length; k++) { if (t <= LAND_RAMP[k][0]) { const a = LAND_RAMP[k - 1], b = LAND_RAMP[k], u = (t - a[0]) / ((b[0] - a[0]) || 1); return lerp3(a[1], b[1], u); } } return LAND_RAMP[LAND_RAMP.length - 1][1]; }
+  function waterColor(h, sea) { sea = sea == null ? SEA_LEVEL : sea; let dd = (sea - h) / sea; dd = dd < 0 ? 0 : dd > 1 ? 1 : dd; return lerp3([120, 175, 215], [16, 38, 86], Math.pow(dd, 0.6)); }  // shallow→deep blue
+  // A relief-shaded, colour-graded height view: colour tells absolute height, shading + contour lines
+  // reveal the shape (and make small paint changes visible). One backing pixel per grid cell.
   function drawHeight(canvas) {
-    const t = computeTerrain();
+    const t = computeTerrain(); lastTerrain = t; const h = t.height;
     const ctx = canvas.getContext('2d'), W = canvas.width, img = ctx.createImageData(W, W), d = img.data;
+    const hAt = (dx, dy) => h[(((G - 1 - dy) % G + G) % G) * G + ((dx % G + G) % G)];   // display→grid, wrapped (toroidal)
     for (let y = 0; y < W; y++) { const gy = G - 1 - y; for (let x = 0; x < W; x++) {
-      const i = gy * G + x, b = Math.max(0, Math.min(255, Math.round(t.height[i] * 255))), o = (y * W + x) * 4;
-      const isWater = target[i] === SC.Ocean || water[i];   // tint water (ocean + rivers/lakes) so it reads as terrain
-      d[o] = isWater ? 40 : b; d[o + 1] = isWater ? 70 : b; d[o + 2] = isWater ? 120 : b; d[o + 3] = 255;
+      const i = gy * G + x, hv = h[i], o = (y * W + x) * 4;
+      const isW = target[i] === SC.Ocean || water[i] || hv < SEA_LEVEL;
+      const c = isW ? waterColor(hv) : landColor(hv);
+      // hillshade: surface normal vs a NW light; flat ground stays at the base tint (shade≈1)
+      const dzdx = (hAt(x + 1, y) - hAt(x - 1, y)) * HS_Z, dzdy = (hAt(x, y + 1) - hAt(x, y - 1)) * HS_Z;
+      const nz = 1 / Math.sqrt(dzdx * dzdx + dzdy * dzdy + 1);
+      let sh = (0.5206 * (dzdx + dzdy) + 0.6767) * nz / 0.6767;
+      sh = sh < 0.42 ? 0.42 : sh > 1.6 ? 1.6 : sh;
+      let r = c[0] * sh, g = c[1] * sh, bl = c[2] * sh;
+      if (!isW) {   // contour line where the height band changes (darken slightly) — quantitative + shows edits
+        const a0 = Math.floor((hv - SEA_LEVEL) / CONTOUR);
+        if (a0 !== Math.floor((hAt(x + 1, y) - SEA_LEVEL) / CONTOUR) || a0 !== Math.floor((hAt(x, y + 1) - SEA_LEVEL) / CONTOUR)) { r *= 0.72; g *= 0.72; bl *= 0.72; }
+      }
+      d[o] = r > 255 ? 255 : r; d[o + 1] = g > 255 ? 255 : g; d[o + 2] = bl > 255 ? 255 : bl; d[o + 3] = 255;
     } }
     ctx.putImageData(img, 0, 0);
   }
