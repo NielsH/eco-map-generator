@@ -156,6 +156,11 @@ off to a C# tool in the Eco repo (`~/Documents/GitHub/Eco/Tools/`, not in git):
   **contour** lines (`CONTOUR` spacing) reveal shape and make edits visible. A `#dsnElevBar` scale bar
   (`drawElevLegend`) shows the ramp + a brush marker, and a hover readout (`updateElevReadout`, off the
   cached `lastTerrain`) reads the elevation under the cursor.
+- **3D preview** (`designer.preview3D`/`post3D` → worker `3d-authored`): the designer's "🧊 3D preview"
+  button hands the painted biome + carved-height maps to the voxel worker, which upscales them to world
+  size (nearest biome, bilinear+toroidal height — matching the mod), maps painter classes → `RASTER_BIOMES`,
+  builds `vGrid`/`vCtx`, and reuses the exact same chunk mesher as the map's 3D view. Panel swap +
+  `threeDFrom` route "← Back to design"/close back to the designer; a "⟳ Refresh" button rebuilds.
 - **The C# side** (`Eco/Tools/EcoAuthoredWorldGen` mod + `Eco/Tools/EcoWorldGenCLI`): the mod sets
   `Biome.BiomeData` from `biome.bin` + swaps the SharpNoise height/water/rainfall/temperature modules for
   authored ones (bypassing Voronoi); the CLI stages the bundle + mod into a headless server and runs

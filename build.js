@@ -77,6 +77,36 @@ onmessage = function (e) {
         [grayCopy.buffer, biomeCopy.buffer]);
     } catch (err) { postMessage({ type: 'v3d-error', message: String(err && err.stack || err) }); }
   }
+  // Authored design -> 3D: build the voxel grids straight from the painted biome + height maps
+  // (upscaled to world size, painter classes mapped to real biomes), then reuse the same chunk mesher.
+  if (m.type === '3d-authored') {
+    try {
+      const cfg = m.cfg, Gg = m.G, W = cfg.worldWidth * 10;
+      const src = m.biome, hsrc = m.height;
+      const CLS2RB = [RB_ID.DeepOcean, RB_ID.WarmCoast, RB_ID.Grassland, RB_ID.WarmForest, RB_ID.ColdForest, RB_ID.RainForest, RB_ID.Desert, RB_ID.Taiga, RB_ID.Tundra, RB_ID.Ice, RB_ID.Wetland];
+      const biome = new Uint8Array(W * W), gray = new Uint8Array(W * W);
+      const wrap = (v, n) => ((v % n) + n) % n;
+      for (let z = 0; z < W; z++) for (let x = 0; x < W; x++) {
+        const xc = (x * Gg / W) | 0, zc = (z * Gg / W) | 0, cls = src[zc * Gg + xc];        // biome: nearest upscale
+        biome[z * W + x] = cls < CLS2RB.length ? CLS2RB[cls] : RB_ID.DeepOcean;
+        const fx = (x + 0.5) * Gg / W - 0.5, fz = (z + 0.5) * Gg / W - 0.5;                  // height: bilinear + toroidal (matches the mod)
+        const x0 = Math.floor(fx), z0 = Math.floor(fz), tx = fx - x0, tz = fz - z0;
+        const x0w = wrap(x0, Gg), x1w = wrap(x0 + 1, Gg), z0w = wrap(z0, Gg), z1w = wrap(z0 + 1, Gg);
+        const v00 = hsrc[z0w * Gg + x0w], v10 = hsrc[z0w * Gg + x1w], v01 = hsrc[z1w * Gg + x0w], v11 = hsrc[z1w * Gg + x1w];
+        const top = v00 + (v10 - v00) * tx, bot = v01 + (v11 - v01) * tx;
+        gray[z * W + x] = Math.round(top + (bot - top) * tz);
+      }
+      vGrid = { W: W, biome: biome, gray: gray, biomeNames: RASTER_BIOMES };
+      vCtx = initTerrain(m.terrain, cfg);
+      vCtx.grayAt = (x, z) => gray[z * W + x];
+      vCtx.biomeAt = (x, z) => RASTER_BIOMES[biome[z * W + x]];
+      computeDeposits(vCtx, vGrid, (ph, f) => postMessage({ type: 'v3d-progress', phase: ph, frac: f }));
+      vChunks = new Map();
+      const grayCopy = gray.slice(), biomeCopy = biome.slice();
+      postMessage({ type: 'v3d-ready', W: W, waterLevel: cfg.waterLevel, maxGenerationHeight: cfg.maxGenerationHeight,
+        gray: grayCopy, biome: biomeCopy, biomeNames: RASTER_BIOMES }, [grayCopy.buffer, biomeCopy.buffer]);
+    } catch (err) { postMessage({ type: 'v3d-error', message: String(err && err.stack || err) }); }
+  }
   if (m.type === 'chunk') {
     try {
       if (!vCtx) { postMessage({ type: 'v3d-error', message: '3D not initialized' }); return; }
@@ -266,7 +296,8 @@ const html = `<!DOCTYPE html>
       <div class="row" style="margin:4px 0 8px">
         <strong style="font-size:15px">🧊 3D voxel world</strong>
         <span class="lbl" id="view3dStatus" style="margin-left:6px"></span>
-        <button id="view3dClose" style="margin-left:auto">← Back to map</button>
+        <button id="view3dRefresh" style="margin-left:auto" title="Rebuild the 3D view from the current design/map">⟳ Refresh</button>
+        <button id="view3dClose" style="margin-left:8px">← Back to map</button>
       </div>
       <div id="view3dCanvas" style="width:100%;height:70vh;min-height:420px;border-radius:var(--radius);overflow:hidden;background:#8fbcd4;position:relative"></div>
       <div class="lbl" style="margin-top:6px"><b>Drag</b> to look around · <b>W A S D</b> move · <b>Space / Q</b> up · <b>Shift / E</b> down · scroll to change speed</div>
@@ -1655,7 +1686,7 @@ $('expPng').onclick = () => { const a=document.createElement('a'); a.download='e
 // The worker generates + meshes real per-voxel block chunks on demand; we stream them into
 // Render3D and colour them by block type (reusing the ore chart's palette). Untick a block
 // type to hide it and see through to the strata/ore veins beneath.
-let seenBlocks = {}, hiddenBlocks = new Set(), worker3dBound = false;
+let seenBlocks = {}, hiddenBlocks = new Set(), worker3dBound = false, threeDFrom = 'map';
 const block3dColor = t => blockColorRaw(t);   // CSS colour string; THREE.Color parses it
 const SOIL_HIDE = ['Dirt','RockySoil','Grass','WetlandsSoil','FrozenSoil','Sand','DesertSand','Snow','Grass Block'];
 
@@ -1700,6 +1731,7 @@ function buildBlockToggles() {
 }
 function open3D() {
   if (!result || !terrain || !cfgUsed) { $('err').textContent = 'Wait for the world to finish generating first.'; return; }
+  threeDFrom = 'map'; $('view3dClose').textContent = '← Back to map';
   $('canvasWrap').style.display = 'none'; $('legend').style.display = 'none'; $('stats').style.display = 'none';
   $('view3d').style.display = 'none'; $('expPng').style.display = 'none';
   $('view3dWrap').style.display = 'block';
@@ -1713,11 +1745,18 @@ function open3D() {
 function close3D() {
   Render3D.stop();
   $('view3dWrap').style.display = 'none';
+  if (threeDFrom === 'designer') { threeDFrom = 'map'; $('designWrap').style.display = ''; return; }   // return to the map designer
   $('canvasWrap').style.display = ''; $('legend').style.display = ''; $('stats').style.display = '';
   $('view3d').style.display = ''; $('expPng').style.display = '';
 }
+function refresh3D() {
+  $('view3dStatus').textContent = 'rebuilding…';
+  if (threeDFrom === 'designer') { if (window.Designer && Designer.post3D) Designer.post3D(); }
+  else worker.postMessage({ type: '3d-init', terrain, cfg: cfgUsed });
+}
 $('view3d').onclick = open3D;
 $('view3dClose').onclick = close3D;
+$('view3dRefresh').onclick = refresh3D;
 $('view3dHideSoil').onclick = () => { SOIL_HIDE.forEach(s => { for (const t in seenBlocks) if (shortBlock(t) === s || prettyName(shortBlock(t)) === s) hiddenBlocks.add(t); }); buildBlockToggles(); Render3D.setHidden(Array.from(hiddenBlocks)); };
 $('view3dHideAll').onclick = () => { hiddenBlocks = new Set(Object.keys(seenBlocks)); buildBlockToggles(); Render3D.setHidden(Array.from(hiddenBlocks)); };
 $('view3dShowAll').onclick = () => { hiddenBlocks = new Set(); buildBlockToggles(); Render3D.setHidden([]); };

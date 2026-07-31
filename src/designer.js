@@ -184,7 +184,8 @@
             '<div class="dsnGallery" id="dsnGallery"><div class="dsnMini">No candidates yet — run a search.</div></div></div>' +
           '<div class="dsnCard"><h4 style="margin:0 0 4px">4 · Authored world <span class="dsnMini">(exact — no search)</span></h4>' +
             '<div class="dsnMini" style="margin:0 0 8px">Export your drawing as a real world: the biome + height maps + config become a bundle for the <code>EcoWorldGenCLI</code> tool, which generates a stock-loadable <code>.eco</code> save whose biomes match your drawing <b>exactly</b> (needs the C# tool + an Eco server build).</div>' +
-            '<button id="dsnExport" class="primary">⬇ Export authored world (.zip)</button>' +
+            '<div class="row" style="gap:6px"><button id="dsnExport" class="primary">⬇ Export authored world (.zip)</button>' +
+            '<button id="dsnPreview3D" title="Fly through your design in the 3D voxel world">🧊 3D preview</button></div>' +
             '<div class="dsnMini" id="dsnExportStatus" style="margin-top:8px"></div></div>' +
         '</div>' +
       '</div>';
@@ -211,6 +212,7 @@
     $('dsnStop').onclick = stopSearch;
     $('dsnWeight').oninput = e => { layoutWeight = +e.target.value / 100; rescorePool(); };
     $('dsnExport').onclick = exportBundle;
+    $('dsnPreview3D').onclick = preview3D;
     $('dsnPaintMode').querySelectorAll('button').forEach(b => b.onclick = () => { paintMode = b.dataset.pm; markPaintMode(); renderPaint(); });
     $('dsnElev').oninput = e => { elevValue = +e.target.value / 100; $('dsnElevV').textContent = elevLabel(elevValue); drawElevLegend(); };
     $('dsnElevV').textContent = elevLabel(elevValue);
@@ -998,7 +1000,36 @@
     const out = { size: b.size }; for (const f of b.files) out[f.name] = b64(f.data); return out;
   }
 
-  window.Designer = { open, close, bundleBase64 };
+  // ---- 3D preview of the authored design (reuses the main 3D voxel view + worker) ----
+  // Builds the same biome + carved-height maps the export produces and hands them to the voxel worker,
+  // which upscales them to world size and meshes real block chunks — so you can fly through the design.
+  function build3DPayload() {
+    const cfg = readForm();                               // internal cfg (worldWidth, waterLevel, maxGenerationHeight)
+    const t = computeTerrain();
+    const heightBytes = new Uint8Array(G * G);
+    for (let i = 0; i < G * G; i++) heightBytes[i] = Math.max(0, Math.min(255, Math.round(t.height[i] * 255)));
+    return { type: '3d-authored', G: G, biome: target.slice(), height: heightBytes, cfg: cfg, terrain: terrain };
+  }
+  function post3D() {
+    const p = build3DPayload();
+    $('view3dStatus').textContent = 'building 3D preview…';
+    worker.postMessage(p, [p.biome.buffer, p.height.buffer]);
+  }
+  function preview3D() {
+    if (typeof baseCfg === 'undefined' || !baseCfg) { $('dsnExportStatus').textContent = 'Load a config first.'; return; }
+    if (typeof terrain === 'undefined' || !terrain) { $('dsnExportStatus').textContent = 'No terrain loaded — load/generate a config first.'; return; }
+    $('designWrap').style.display = 'none';
+    $('view3dWrap').style.display = 'block';
+    threeDFrom = 'designer';
+    const cb = $('view3dClose'); if (cb) cb.textContent = '← Back to design';
+    seenBlocks = {}; hiddenBlocks = new Set(); buildBlockToggles();
+    Render3D.init($('view3dCanvas'), THREE);
+    if (!worker3dBound) { worker.addEventListener('message', worker3dHandler); worker3dBound = true; }
+    requestAnimationFrame(() => Render3D.resize());
+    post3D();
+  }
+
+  window.Designer = { open, close, bundleBase64, preview3D, post3D };
   const btn = document.getElementById('designOpen');
   if (btn) btn.onclick = open;
 })();
