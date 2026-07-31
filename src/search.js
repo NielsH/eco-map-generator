@@ -174,7 +174,7 @@ function meanDistAt(target, cand, G, sx, sy) {
 // centroid, so a local search would miss the true alignment. Cost is ~1M distance lookups for
 // G=64 — trivial next to the ~1s it takes to generate the candidate being scored.
 function bestShift(target, cand, G) {
-  const stride = G >= 48 ? 4 : (G >= 24 ? 2 : 1);
+  const stride = Math.max(1, Math.round(G / 16));   // ~constant coarse-scan positions, so cost stays ~O(cells) not O(G^4)
   let bx = 0, by = 0, best = Infinity;
   for (let sy = 0; sy < G; sy += stride) for (let sx = 0; sx < G; sx += stride) {
     const d = meanDistAt(target, cand, G, sx, sy);

@@ -10,7 +10,7 @@
 // function of the seed. So this is a lottery scored by similarity, not an optimizer that converges.
 // It reliably matches the biome MIX and macro land-shape; exact layout is best-effort (best-of-N).
 (function () {
-  const G = 64;                          // paint + scoring grid resolution
+  const G = 128;                         // paint + scoring grid resolution (finer = more drawable detail; bestShift stride scales with G)
   const NC = NUM_CLASSES;
   const CN = SCLASS;                     // class id -> name
   // display colors per score class (kept close to the map's biome palette)
@@ -37,6 +37,7 @@
   let elevPainted = new Uint8Array(G * G);     // 1 where the user painted elevation (else biome-derived default)
   let water = new Uint8Array(G * G);           // 1 where the user painted a river/lake (carved + water-filled)
   let paintMode = 'biome';                     // 'biome' | 'elevation' | 'water'
+  let wrapEdges = false;                        // toroidal painting: brush wraps around edges + shows a 2×2 seam preview
   let elevValue = 0.66;                        // current elevation brush value
   const RIVER_CARVE = 0.045, RIVER_LIP = 0.012; // channel depth + how far the water sits below the banks (in [0,1] height)
 
@@ -82,9 +83,9 @@
     s.textContent = `
     #designWrap{margin-top:6px}
     .dsnCols{display:flex;gap:22px;flex-wrap:wrap;align-items:flex-start}
-    .dsnLeft{flex:0 0 auto} .dsnRight{flex:1 1 360px;min-width:320px;max-width:560px}
+    .dsnLeft{flex:0 0 auto;--cw:min(760px,58vw,80vh)} .dsnRight{flex:1 1 360px;min-width:320px;max-width:560px}
     #dsnCanvasWrap{position:relative;border:0.5px solid var(--border);border-radius:12px;background:var(--surf);padding:8px;line-height:0;display:inline-block}
-    #dsnCanvas{border-radius:6px;cursor:crosshair;touch-action:none;image-rendering:pixelated;width:520px;height:520px;max-width:80vw;max-height:80vw}
+    #dsnCanvas{border-radius:6px;cursor:crosshair;touch-action:none;image-rendering:pixelated;width:var(--cw);height:var(--cw)}
     .dsnPal{display:flex;flex-wrap:wrap;gap:5px;margin:8px 0}
     .dsnPal button{display:flex;align-items:center;gap:6px;font-size:12px;padding:4px 9px}
     .dsnPal button.on{outline:2px solid var(--accent);outline-offset:1px;font-weight:600}
@@ -104,10 +105,11 @@
     .dsnMini{font-size:11px;color:var(--muted)}
     .dsnRange{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text2)}
     .dsnRange input[type=range]{flex:1}
-    .dsnLegend{margin:8px 0 0;padding:8px 10px;border:0.5px solid var(--border);border-radius:8px;background:var(--surf)}
+    .dsnLegend{margin:8px 0 0;padding:8px 10px;border:0.5px solid var(--border);border-radius:8px;background:var(--surf);width:var(--cw);box-sizing:border-box}
     .dsnLegend .lgHead{font-size:12px;color:var(--text2);margin-bottom:7px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-    .dsnLegend .lgRows{display:flex;flex-wrap:wrap;gap:7px}
+    .dsnLegend .lgRows{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px}
     .dsnLegend .lgRow{display:flex;align-items:center;gap:6px;font-size:11px;border:0.5px solid var(--border);border-radius:6px;padding:3px 6px;background:var(--bg)}
+    .dsnLegend .lgRow select{flex:1;min-width:0}
     .dsnLegend .lgSw{width:16px;height:16px;border-radius:4px;border:0.5px solid var(--border2);flex:0 0 auto}
     .dsnLegend .lgPct{color:var(--muted);min-width:26px;text-align:right}
     .dsnLegend select{font-size:11px;padding:1px 2px}
@@ -131,6 +133,7 @@
           '<div class="dsnTools">' +
             '<span class="dsnRange" style="width:190px">Brush <input type="range" id="dsnBrush" min="1" max="16" value="' + brushSize + '"><span id="dsnBrushV" class="dsnMini">' + brushSize + '</span></span>' +
             '<label class="dsnMini" style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="dsnFill"> flood fill</label>' +
+            '<label class="dsnMini" style="display:inline-flex;align-items:center;gap:4px" title="The world is a torus: left↔right and top↔bottom join. Wrap the brush around edges and show a 2×2 seam preview so you can line up the borders."><input type="checkbox" id="dsnWrap"> wrap edges</label>' +
             '<button id="dsnUndo" title="Undo (Ctrl+Z)">↶ Undo</button>' +
             '<button id="dsnSeedFromMap">Seed from current map</button>' +
             '<button id="dsnImport" title="Map an image\'s colors to biomes — auto-nearest, then remap any color you like">📁 Import image</button>' +
@@ -143,6 +146,10 @@
           '</div>' +
           '<div class="dsnMini">Left-drag paints · right-drag erases · <b>flood fill</b> bucket-fills a biome region. <b>Elevation</b>: sculpt height (unpainted areas use a natural biome-based default). <b>Water</b>: paint rivers/lakes — they carve a channel and fill with water (route them downhill along your terrain).</div>' +
           '<div id="dsnLegendWrap" class="dsnLegend" style="display:none"></div>' +
+          '<div id="dsnWrapPrev" style="display:none;margin-top:8px">' +
+            '<div class="dsnMini" style="margin-bottom:4px">Wrap preview — your map tiled 2×2. The world joins across these <b>dashed seams</b>; with <b>wrap edges</b> on, paint straight across a border and it continues on the far side so the edges line up.</div>' +
+            '<canvas id="dsnWrapCv" width="256" height="256" style="width:230px;height:230px;image-rendering:pixelated;border:0.5px solid var(--border);border-radius:8px"></canvas>' +
+          '</div>' +
         '</div>' +
         '<div class="dsnRight">' +
           '<div class="dsnCard"><h4>1 · Target</h4><div id="dsnAnalysis" class="dsnMini">Draw a layout (or seed it from the current map), then analyze it.</div>' +
@@ -184,6 +191,7 @@
     $('dsnClear').onclick = () => { pushUndo(); target.fill(SC.Ocean); elevPainted.fill(0); water.fill(0); hideLegend(); renderPaint(); };
     $('dsnUndo').onclick = undo;
     $('dsnSeedFromMap').onclick = seedFromMap;
+    $('dsnWrap').onchange = e => { wrapEdges = e.target.checked; $('dsnWrapPrev').style.display = wrapEdges ? '' : 'none'; renderPaint(); };
     $('dsnImport').onclick = () => $('dsnImgFile').click();
     $('dsnImgFile').onchange = e => { const f = e.target.files[0]; if (f) importImage(f); e.target.value = ''; };
     $('dsnClose').onclick = close;
@@ -413,6 +421,16 @@
     if (paintMode === 'elevation') drawHeight($('dsnCanvas'));
     else if (paintMode === 'water') drawWaterView($('dsnCanvas'));
     else drawGrid($('dsnCanvas'), target, true);
+    if (wrapEdges) drawWrapPreview();
+  }
+  // Tile the current view 2×2 so the toroidal seams (left↔right, top↔bottom) are visible while drawing.
+  function drawWrapPreview() {
+    const pv = $('dsnWrapCv'); if (!pv) return;
+    const src = $('dsnCanvas'), ctx = pv.getContext('2d'), W = pv.width, h = W / 2;
+    ctx.imageSmoothingEnabled = false;
+    for (let i = 0; i < 2; i++) for (let j = 0; j < 2; j++) ctx.drawImage(src, 0, 0, src.width, src.height, i * h, j * h, h, h);
+    ctx.strokeStyle = 'rgba(255,70,70,.85)'; ctx.lineWidth = 1; ctx.setLineDash([5, 4]);
+    ctx.beginPath(); ctx.moveTo(h + .5, 0); ctx.lineTo(h + .5, W); ctx.moveTo(0, h + .5); ctx.lineTo(W, h + .5); ctx.stroke(); ctx.setLineDash([]);
   }
   // biomes with the painted rivers/lakes overlaid in blue
   function drawWaterView(canvas) {
@@ -452,7 +470,8 @@
     const rad = brushSize - 1, r2 = (rad + 0.5) * (rad + 0.5);
     for (let dy = -rad; dy <= rad; dy++) for (let dx = -rad; dx <= rad; dx++) {
       if (dx * dx + dy * dy > r2) continue;
-      const x = cx + dx, y = cy + dy; if (x < 0 || x >= G || y < 0 || y >= G) continue;
+      let x = cx + dx, y = cy + dy;
+      if (wrapEdges) { x = ((x % G) + G) % G; y = ((y % G) + G) % G; } else if (x < 0 || x >= G || y < 0 || y >= G) continue;
       const i = y * G + x;
       if (v < 0) { elevPainted[i] = 0; } else { elev[i] = v; elevPainted[i] = 1; }
     }
@@ -461,7 +480,8 @@
     const rad = brushSize - 1, r2 = (rad + 0.5) * (rad + 0.5);
     for (let dy = -rad; dy <= rad; dy++) for (let dx = -rad; dx <= rad; dx++) {
       if (dx * dx + dy * dy > r2) continue;
-      const x = cx + dx, y = cy + dy; if (x < 0 || x >= G || y < 0 || y >= G) continue;
+      let x = cx + dx, y = cy + dy;
+      if (wrapEdges) { x = ((x % G) + G) % G; y = ((y % G) + G) % G; } else if (x < 0 || x >= G || y < 0 || y >= G) continue;
       water[y * G + x] = v;
     }
   }
@@ -487,7 +507,7 @@
   // Full-field height in [0,1]. Unpainted land is placed within its biome's [low,high] band by distance
   // to the coast (shore=low, interior=high) plus multi-octave rolling relief; ocean stays below sea
   // level. Painted values override. Blurred so biome edges are slopes, not cliffs.
-  const OCEAN_FALLOFF = 16, RELIEF_AMP = 0.10;
+  const OCEAN_FALLOFF = G / 4, RELIEF_AMP = 0.10;   // coast→interior ramp, kept proportional to grid size
   function computeHeightField() {
     const dist = oceanDistField();
     let a = new Float32Array(G * G);
@@ -544,8 +564,9 @@
     const rad = brushSize - 1, r2 = (rad + 0.5) * (rad + 0.5);
     for (let dy = -rad; dy <= rad; dy++) for (let dx = -rad; dx <= rad; dx++) {
       if (dx * dx + dy * dy > r2) continue;
-      const x = cx + dx, y = cy + dy;
-      if (x < 0 || x >= G || y < 0 || y >= G) continue;   // clamp (no wrap) for predictable strokes
+      let x = cx + dx, y = cy + dy;
+      if (wrapEdges) { x = ((x % G) + G) % G; y = ((y % G) + G) % G; }   // torus: bleed to the opposite edge
+      else if (x < 0 || x >= G || y < 0 || y >= G) continue;             // clamp for predictable strokes
       target[y * G + x] = cls;
     }
   }
@@ -558,8 +579,13 @@
       if (target[i] !== from) continue;
       target[i] = cls;
       const x = i % G, y = (i / G) | 0;
-      if (x > 0) st.push(i - 1); if (x < G - 1) st.push(i + 1);
-      if (y > 0) st.push(i - G); if (y < G - 1) st.push(i + G);
+      if (wrapEdges) {   // regions that touch a border continue on the opposite edge
+        st.push(((x + G - 1) % G) + y * G); st.push(((x + 1) % G) + y * G);
+        st.push(x + ((y + G - 1) % G) * G); st.push(x + ((y + 1) % G) * G);
+      } else {
+        if (x > 0) st.push(i - 1); if (x < G - 1) st.push(i + 1);
+        if (y > 0) st.push(i - G); if (y < G - 1) st.push(i + G);
+      }
     }
   }
   function seedFromMap() {
