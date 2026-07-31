@@ -9068,6 +9068,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
   // authored-world layers (for the "export a real world" flow, distinct from the seed search)
   let elev = new Float32Array(G * G);          // painted elevation [0..1], 0.5 = sea level
   let elevPainted = new Uint8Array(G * G);     // 1 where the user painted elevation (else biome-derived default)
+  let rough = new Float32Array(G * G);         // per-cell micro-relief amount, baked from the brush at paint time
   let water = new Uint8Array(G * G);           // 1 where the user painted a river/lake (carved + water-filled)
   let paintMode = 'biome';                     // 'biome' | 'elevation' | 'water'
   let elevValue = 0.66;                        // current elevation brush value
@@ -9177,7 +9178,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
             '<span class="dsnMini">Paint</span><span class="seg" id="dsnPaintMode"><button type="button" data-pm="biome" class="on">Biomes</button><button type="button" data-pm="elevation">Elevation</button><button type="button" data-pm="water">Water</button></span>' +
             '<span class="dsnRange" id="dsnElevWrap" style="display:none;gap:14px;flex-wrap:wrap">' +
               '<span class="dsnRange" style="gap:6px">Height <input type="range" id="dsnElev" min="0" max="100" value="' + Math.round(elevValue * 100) + '" style="width:120px"><span id="dsnElevV" class="dsnMini"></span></span>' +
-              '<span class="dsnRange" style="gap:6px" title="How much natural, gently-rolling variation painted areas get, like a default map. 0 = perfectly flat.">Roughness <input type="range" id="dsnRough" min="0" max="100" value="' + Math.round(paintRoughness / 0.16 * 100) + '" style="width:100px"><span id="dsnRoughV" class="dsnMini"></span></span>' +
+              '<span class="dsnRange" style="gap:6px" title="Natural variation the brush bakes into what you paint NEXT. Change it between strokes to make some areas smooth and others rugged. 0 = perfectly flat.">Roughness <input type="range" id="dsnRough" min="0" max="100" value="' + Math.round(paintRoughness / 0.16 * 100) + '" style="width:100px"><span id="dsnRoughV" class="dsnMini"></span></span>' +
             '</span>' +
           '</div>' +
           '<div id="dsnElevLegend" style="display:none;margin:2px 0 0;max-width:320px">' +
@@ -9232,7 +9233,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
 
     // tools + wiring
     $('dsnBrush').oninput = e => { brushSize = +e.target.value; $('dsnBrushV').textContent = brushSize; };
-    $('dsnClear').onclick = () => { pushUndo(); target.fill(SC.Ocean); elevPainted.fill(0); water.fill(0); hideLegend(); renderPaint(); };
+    $('dsnClear').onclick = () => { pushUndo(); target.fill(SC.Ocean); elevPainted.fill(0); rough.fill(0); water.fill(0); hideLegend(); renderPaint(); };
     $('dsnUndo').onclick = undo;
     $('dsnSeedFromMap').onclick = seedFromMap;
     $('dsnImport').onclick = () => $('dsnImgFile').click();
@@ -9246,7 +9247,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     $('dsnPaintMode').querySelectorAll('button').forEach(b => b.onclick = () => { paintMode = b.dataset.pm; markPaintMode(); renderPaint(); });
     $('dsnElev').oninput = e => { elevValue = +e.target.value / 100; $('dsnElevV').textContent = elevLabel(elevValue); drawElevLegend(); };
     $('dsnElevV').textContent = elevLabel(elevValue);
-    $('dsnRough').oninput = e => { paintRoughness = +e.target.value / 100 * 0.16; $('dsnRoughV').textContent = roughLabel(paintRoughness); if (paintMode === 'elevation') renderPaint(); };
+    $('dsnRough').oninput = e => { paintRoughness = +e.target.value / 100 * 0.16; $('dsnRoughV').textContent = roughLabel(paintRoughness); };   // applies to the NEXT strokes, not existing paint
     $('dsnRoughV').textContent = roughLabel(paintRoughness);
     const cv = $('dsnCanvas');
     cv.addEventListener('contextmenu', e => e.preventDefault());
@@ -9507,8 +9508,8 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     for (let y = 0; y < W; y++) { const gy = G - 1 - y; for (let x = 0; x < W; x++) { if (water[gy * G + x]) { const o = (y * W + x) * 4; d[o] = 30; d[o + 1] = 110; d[o + 2] = 230; } } }
     ctx.putImageData(img, 0, 0);
   }
-  function pushUndo() { undoStack.push({ t: target.slice(), e: elev.slice(), p: elevPainted.slice(), w: water.slice() }); if (undoStack.length > 40) undoStack.shift(); }
-  function undo() { if (!undoStack.length) return; const s = undoStack.pop(); target = s.t; elev = s.e; elevPainted = s.p; water = s.w; renderPaint(); }
+  function pushUndo() { undoStack.push({ t: target.slice(), e: elev.slice(), p: elevPainted.slice(), w: water.slice(), r: rough.slice() }); if (undoStack.length > 40) undoStack.shift(); }
+  function undo() { if (!undoStack.length) return; const s = undoStack.pop(); target = s.t; elev = s.e; elevPainted = s.p; water = s.w; rough = s.r; renderPaint(); }
   function onPointer(e) {
     const cv = $('dsnCanvas'), r = cv.getBoundingClientRect();
     const dispX = Math.floor((e.clientX - r.left) / r.width * G);
@@ -9540,7 +9541,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
       if (dx * dx + dy * dy > r2) continue;
       const x = ((cx + dx) % G + G) % G, y = ((cy + dy) % G + G) % G;
       const i = y * G + x;
-      if (v < 0) { elevPainted[i] = 0; } else { elev[i] = v; elevPainted[i] = 1; }
+      if (v < 0) { elevPainted[i] = 0; } else { elev[i] = v; elevPainted[i] = 1; rough[i] = paintRoughness; }   // bake the brush's roughness per cell
     }
   }
   function stampWater(cx, cy, v) {
@@ -9579,8 +9580,8 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     let a = new Float32Array(G * G);
     for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) {
       const i = y * G + x;
-      if (elevPainted[i]) {                                             // painted: add natural micro-relief (not dead flat)
-        const v = elev[i] + (fbm(x, y) - 0.5) * paintRoughness;
+      if (elevPainted[i]) {                                             // painted: add the per-cell micro-relief baked at paint time
+        const v = elev[i] + (fbm(x, y) - 0.5) * rough[i];
         a[i] = elev[i] >= 0.505 ? Math.max(0.505, v) : v;               // painted land stays above sea (no accidental puddles)
         continue;
       }
