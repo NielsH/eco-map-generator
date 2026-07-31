@@ -37,7 +37,6 @@
   let elevPainted = new Uint8Array(G * G);     // 1 where the user painted elevation (else biome-derived default)
   let water = new Uint8Array(G * G);           // 1 where the user painted a river/lake (carved + water-filled)
   let paintMode = 'biome';                     // 'biome' | 'elevation' | 'water'
-  let wrapEdges = false;                        // toroidal painting: brush wraps around edges + shows a 2×2 seam preview
   let elevValue = 0.66;                        // current elevation brush value
   const RIVER_CARVE = 0.045, RIVER_LIP = 0.012; // channel depth + how far the water sits below the banks (in [0,1] height)
 
@@ -133,7 +132,6 @@
           '<div class="dsnTools">' +
             '<span class="dsnRange" style="width:190px">Brush <input type="range" id="dsnBrush" min="1" max="16" value="' + brushSize + '"><span id="dsnBrushV" class="dsnMini">' + brushSize + '</span></span>' +
             '<label class="dsnMini" style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="dsnFill"> flood fill</label>' +
-            '<label class="dsnMini" style="display:inline-flex;align-items:center;gap:4px" title="The world is a torus: left↔right and top↔bottom join. Wrap the brush around edges and show a 2×2 seam preview so you can line up the borders."><input type="checkbox" id="dsnWrap"> wrap edges</label>' +
             '<button id="dsnUndo" title="Undo (Ctrl+Z)">↶ Undo</button>' +
             '<button id="dsnSeedFromMap">Seed from current map</button>' +
             '<button id="dsnImport" title="Map an image\'s colors to biomes — auto-nearest, then remap any color you like">📁 Import image</button>' +
@@ -146,8 +144,8 @@
           '</div>' +
           '<div class="dsnMini">Left-drag paints · right-drag erases · <b>flood fill</b> bucket-fills a biome region. <b>Elevation</b>: sculpt height (unpainted areas use a natural biome-based default). <b>Water</b>: paint rivers/lakes — they carve a channel and fill with water (route them downhill along your terrain).</div>' +
           '<div id="dsnLegendWrap" class="dsnLegend" style="display:none"></div>' +
-          '<div id="dsnWrapPrev" style="display:none;margin-top:8px">' +
-            '<div class="dsnMini" style="margin-bottom:4px">Wrap preview — your map tiled 2×2. The world joins across these <b>dashed seams</b>; with <b>wrap edges</b> on, paint straight across a border and it continues on the far side so the edges line up.</div>' +
+          '<div id="dsnWrapPrev" style="margin-top:8px">' +
+            '<div class="dsnMini" style="margin-bottom:4px">Wrap preview — your map tiled 2×2. The world is a torus: it joins across these <b>dashed seams</b>. Strokes wrap around, so paint straight across a border and it continues on the far side — the edges line up automatically.</div>' +
             '<canvas id="dsnWrapCv" width="256" height="256" style="width:230px;height:230px;image-rendering:pixelated;border:0.5px solid var(--border);border-radius:8px"></canvas>' +
           '</div>' +
         '</div>' +
@@ -191,7 +189,6 @@
     $('dsnClear').onclick = () => { pushUndo(); target.fill(SC.Ocean); elevPainted.fill(0); water.fill(0); hideLegend(); renderPaint(); };
     $('dsnUndo').onclick = undo;
     $('dsnSeedFromMap').onclick = seedFromMap;
-    $('dsnWrap').onchange = e => { wrapEdges = e.target.checked; $('dsnWrapPrev').style.display = wrapEdges ? '' : 'none'; renderPaint(); };
     $('dsnImport').onclick = () => $('dsnImgFile').click();
     $('dsnImgFile').onchange = e => { const f = e.target.files[0]; if (f) importImage(f); e.target.value = ''; };
     $('dsnClose').onclick = close;
@@ -421,7 +418,7 @@
     if (paintMode === 'elevation') drawHeight($('dsnCanvas'));
     else if (paintMode === 'water') drawWaterView($('dsnCanvas'));
     else drawGrid($('dsnCanvas'), target, true);
-    if (wrapEdges) drawWrapPreview();
+    drawWrapPreview();
   }
   // Tile the current view 2×2 so the toroidal seams (left↔right, top↔bottom) are visible while drawing.
   function drawWrapPreview() {
@@ -470,8 +467,7 @@
     const rad = brushSize - 1, r2 = (rad + 0.5) * (rad + 0.5);
     for (let dy = -rad; dy <= rad; dy++) for (let dx = -rad; dx <= rad; dx++) {
       if (dx * dx + dy * dy > r2) continue;
-      let x = cx + dx, y = cy + dy;
-      if (wrapEdges) { x = ((x % G) + G) % G; y = ((y % G) + G) % G; } else if (x < 0 || x >= G || y < 0 || y >= G) continue;
+      const x = ((cx + dx) % G + G) % G, y = ((cy + dy) % G + G) % G;
       const i = y * G + x;
       if (v < 0) { elevPainted[i] = 0; } else { elev[i] = v; elevPainted[i] = 1; }
     }
@@ -480,8 +476,7 @@
     const rad = brushSize - 1, r2 = (rad + 0.5) * (rad + 0.5);
     for (let dy = -rad; dy <= rad; dy++) for (let dx = -rad; dx <= rad; dx++) {
       if (dx * dx + dy * dy > r2) continue;
-      let x = cx + dx, y = cy + dy;
-      if (wrapEdges) { x = ((x % G) + G) % G; y = ((y % G) + G) % G; } else if (x < 0 || x >= G || y < 0 || y >= G) continue;
+      const x = ((cx + dx) % G + G) % G, y = ((cy + dy) % G + G) % G;
       water[y * G + x] = v;
     }
   }
@@ -564,9 +559,7 @@
     const rad = brushSize - 1, r2 = (rad + 0.5) * (rad + 0.5);
     for (let dy = -rad; dy <= rad; dy++) for (let dx = -rad; dx <= rad; dx++) {
       if (dx * dx + dy * dy > r2) continue;
-      let x = cx + dx, y = cy + dy;
-      if (wrapEdges) { x = ((x % G) + G) % G; y = ((y % G) + G) % G; }   // torus: bleed to the opposite edge
-      else if (x < 0 || x >= G || y < 0 || y >= G) continue;             // clamp for predictable strokes
+      const x = ((cx + dx) % G + G) % G, y = ((cy + dy) % G + G) % G;   // torus: strokes wrap to the opposite edge
       target[y * G + x] = cls;
     }
   }
@@ -578,14 +571,9 @@
       const i = st.pop();
       if (target[i] !== from) continue;
       target[i] = cls;
-      const x = i % G, y = (i / G) | 0;
-      if (wrapEdges) {   // regions that touch a border continue on the opposite edge
-        st.push(((x + G - 1) % G) + y * G); st.push(((x + 1) % G) + y * G);
-        st.push(x + ((y + G - 1) % G) * G); st.push(x + ((y + 1) % G) * G);
-      } else {
-        if (x > 0) st.push(i - 1); if (x < G - 1) st.push(i + 1);
-        if (y > 0) st.push(i - G); if (y < G - 1) st.push(i + G);
-      }
+      const x = i % G, y = (i / G) | 0;   // torus: regions that touch a border continue on the opposite edge
+      st.push(((x + G - 1) % G) + y * G); st.push(((x + 1) % G) + y * G);
+      st.push(x + ((y + G - 1) % G) * G); st.push(x + ((y + 1) % G) * G);
     }
   }
   function seedFromMap() {
