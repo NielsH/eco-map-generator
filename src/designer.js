@@ -886,7 +886,8 @@
     if (!built) buildUI();
     // hide the map view + panels (mirror open3D), show the designer
     $('canvasWrap').style.display = 'none'; $('legend').style.display = 'none'; $('stats').style.display = 'none';
-    $('view3d').style.display = 'none'; $('expPng').style.display = 'none'; $('designOpen').style.display = 'none';
+    const sb = $('surfaceBar'); if (sb) sb.style.display = 'none';
+    const mc = $('mainCols'); if (mc) mc.classList.add('solo');   // full-width overlay
     const cp = $('chartsPanel'), cfp = $('cfgPanel');
     if (cp) { cp._dsnPrev = cp.style.display; cp.style.display = 'none'; }
     if (cfp) { cfp._dsnPrev = cfp.style.display; cfp.style.display = 'none'; }
@@ -902,7 +903,8 @@
     stopSearch();
     $('designWrap').style.display = 'none';
     $('canvasWrap').style.display = ''; $('legend').style.display = ''; $('stats').style.display = '';
-    $('view3d').style.display = ''; $('expPng').style.display = ''; $('designOpen').style.display = '';
+    const sb = $('surfaceBar'); if (sb) sb.style.display = '';
+    const mc = $('mainCols'); if (mc) mc.classList.remove('solo');
     const cp = $('chartsPanel'), cfp = $('cfgPanel');
     if (cp) cp.style.display = cp._dsnPrev != null ? cp._dsnPrev : '';
     if (cfp) cfp.style.display = cfp._dsnPrev != null ? cfp._dsnPrev : '';

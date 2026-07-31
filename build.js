@@ -159,7 +159,14 @@ const html = `<!DOCTYPE html>
   }
   *{box-sizing:border-box}
   body{margin:0; background:var(--bg); color:var(--text); font-family:var(--font); font-size:15px; line-height:1.5; padding:24px;}
-  .wrap{max-width:1360px; margin:0 auto;}
+  .wrap{max-width:1440px; margin:0 auto;}
+  #mainCols{display:grid; grid-template-columns:minmax(0,1fr) 344px; gap:22px; align-items:start; grid-template-areas:'map cfg' 'charts charts'; margin-top:16px;}
+  #mainCols > #panel{grid-area:map; margin-top:0;}
+  #mainCols > #cfgPanel{grid-area:cfg; margin-top:0; position:sticky; top:10px;}
+  #mainCols > #chartsPanel{grid-area:charts; margin-top:10px;}
+  #mainCols.solo{display:block;}
+  #mainCols.solo > #panel{margin-top:16px;}
+  @media(max-width:1080px){ #mainCols{grid-template-columns:1fr; grid-template-areas:'map' 'cfg' 'charts';} #mainCols > #cfgPanel{position:static;} }
   h1{font-size:21px; font-weight:600; margin:0 0 4px;}
   p.sub{color:var(--text2); margin:0 0 20px; font-size:14px;}
   #drop{border:1.5px dashed var(--border2); border-radius:12px; padding:22px; text-align:center; color:var(--text2);
@@ -279,8 +286,9 @@ const html = `<!DOCTYPE html>
   <div id="meta"></div>
   <div id="prog">Generating… <span id="progPhase"></span><div class="bar"><div id="progBar"></div></div></div>
 
+  <div id="mainCols">
   <div id="panel">
-    <div class="row">
+    <div class="row" id="surfaceBar">
       <span class="lbl">Layer</span><span class="seg" id="layers"></span>
       <label class="lbl" style="display:inline-flex;align-items:center;gap:5px;margin-left:8px"><input type="checkbox" id="waterToggle" checked> Rivers &amp; lakes</label>
       <button id="designOpen" style="margin-left:auto">🎨 Design a map</button>
@@ -360,6 +368,7 @@ const html = `<!DOCTYPE html>
       <label class="lbl" style="display:inline-flex;align-items:center;gap:5px;margin-left:auto" title="Max canvas resolution for the 2D map render">Max render px <input type="number" id="maxpx" value="900" min="200" max="2000" step="100" style="width:74px"></label>
       <button id="dlEco">Download .eco</button>
     </div>
+  </div>
   </div>
 
 </div>
@@ -1521,7 +1530,8 @@ function open3D() {
   if (!result || !terrain || !cfgUsed) { $('err').textContent = 'Wait for the world to finish generating first.'; return; }
   threeDFrom = 'map'; $('view3dClose').textContent = '← Back to map';
   $('canvasWrap').style.display = 'none'; $('legend').style.display = 'none'; $('stats').style.display = 'none';
-  $('view3d').style.display = 'none'; $('expPng').style.display = 'none';
+  $('surfaceBar').style.display = 'none'; $('cfgPanel').style.display = 'none'; $('chartsPanel').style.display = 'none';
+  $('mainCols').classList.add('solo');   // full-width overlay
   $('view3dWrap').style.display = 'block';
   $('view3dStatus').textContent = 'initializing…';
   seenBlocks = {}; hiddenBlocks = new Set(); buildBlockToggles();
@@ -1533,9 +1543,10 @@ function open3D() {
 function close3D() {
   Render3D.stop();
   $('view3dWrap').style.display = 'none';
-  if (threeDFrom === 'designer') { threeDFrom = 'map'; $('designWrap').style.display = ''; return; }   // return to the map designer
+  if (threeDFrom === 'designer') { threeDFrom = 'map'; $('designWrap').style.display = ''; return; }   // stay in the designer (still solo)
   $('canvasWrap').style.display = ''; $('legend').style.display = ''; $('stats').style.display = '';
-  $('view3d').style.display = ''; $('expPng').style.display = '';
+  $('surfaceBar').style.display = ''; $('cfgPanel').style.display = 'block'; $('chartsPanel').style.display = 'block';
+  $('mainCols').classList.remove('solo');
 }
 function refresh3D() {
   $('view3dStatus').textContent = 'rebuilding…';

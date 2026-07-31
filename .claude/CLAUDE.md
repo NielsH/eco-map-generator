@@ -42,6 +42,21 @@ node test/verify-core.js  # Random + 66 noise checks vs references captured from
 - **Runs from `file://`** because the vector table AND the default config are embedded — no `fetch`. The map
   is generated in a Blob Web Worker built from the inlined library.
 
+## Layout
+
+`.wrap` holds a header + config-source area (drop/paste/**Load pasted config**), then `#mainCols` — a CSS
+grid (`grid-template-areas: 'map cfg' / 'charts charts'`): **left** = `#panel` (surface map + layers +
+the `#view3dWrap`/`#designWrap` overlays), **right** = `#cfgPanel` (config form, collapsible `<details>`
+per `CFG_GROUPS`), **full-width below** = `#chartsPanel` (Underground). Opening the 3D view or the
+designer adds `.solo` to `#mainCols` (→ `display:block`, one column) and hides `#cfgPanel`/`#chartsPanel`/
+`#surfaceBar` so the overlay is full-width; closing restores the grid. Generate model: **Load pasted
+config** (`loadConfigText`) parses+populates+generates; **Regenerate map** (`generateFromForm`) applies
+form edits — the single generate action (there is no separate top "Generate" button any more).
+
+Removed in the cleanup pass: the Ore-distribution chart (`OreChart`) + its toggles, the Block-composition
+Crushed/Emphasize toggles (fixed to separate/normal), the Manual-knobs ore editor (`buildOreEditor` is a
+guarded no-op kept for shared callers), and the "Open in ore visualizer" handoff.
+
 ## Architecture
 
 Worker (generation, in `src/`): `generate(cfg)` →
