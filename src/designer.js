@@ -886,12 +886,10 @@
     if (!built) buildUI();
     // hide the map view + panels (mirror open3D), show the designer
     $('canvasWrap').style.display = 'none'; $('legend').style.display = 'none'; $('stats').style.display = 'none';
-    const sb = $('surfaceBar'); if (sb) sb.style.display = 'none';
-    const mc = $('mainCols'); if (mc) mc.classList.add('solo');   // full-width overlay
-    const cp = $('chartsPanel'), cfp = $('cfgPanel');
-    if (cp) { cp._dsnPrev = cp.style.display; cp.style.display = 'none'; }
+    const sb = $('surfaceBar'); if (sb) sb.style.display = 'none';   // hide the map's cfg sidebar → left column (designer + Underground) goes full width
+    const cfp = $('cfgPanel');
     if (cfp) { cfp._dsnPrev = cfp.style.display; cfp.style.display = 'none'; }
-    $('designWrap').style.display = 'block';
+    $('designWrap').style.display = 'block';   // Underground (#chartsPanel) stays visible below, usable while designing
     // first time in: seed the canvas from the current map so there's something to edit (not blank ocean)
     let empty = true; for (let i = 0; i < target.length; i++) if (target[i] !== SC.Ocean) { empty = false; break; }
     if (empty && typeof result !== 'undefined' && result) seedFromMap();
@@ -904,9 +902,7 @@
     $('designWrap').style.display = 'none';
     $('canvasWrap').style.display = ''; $('legend').style.display = ''; $('stats').style.display = '';
     const sb = $('surfaceBar'); if (sb) sb.style.display = '';
-    const mc = $('mainCols'); if (mc) mc.classList.remove('solo');
-    const cp = $('chartsPanel'), cfp = $('cfgPanel');
-    if (cp) cp.style.display = cp._dsnPrev != null ? cp._dsnPrev : '';
+    const cfp = $('cfgPanel');
     if (cfp) cfp.style.display = cfp._dsnPrev != null ? cfp._dsnPrev : '';
   }
 
@@ -1021,6 +1017,7 @@
     if (typeof baseCfg === 'undefined' || !baseCfg) { $('dsnExportStatus').textContent = 'Load a config first.'; return; }
     if (typeof terrain === 'undefined' || !terrain) { $('dsnExportStatus').textContent = 'No terrain loaded — load/generate a config first.'; return; }
     $('designWrap').style.display = 'none';
+    const cp = $('chartsPanel'); if (cp) cp.style.display = 'none';   // 3D view is a full-screen preview; Underground returns on Back
     $('view3dWrap').style.display = 'block';
     threeDFrom = 'designer';
     const cb = $('view3dClose'); if (cb) cb.textContent = '← Back to design';

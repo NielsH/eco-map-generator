@@ -160,13 +160,11 @@ const html = `<!DOCTYPE html>
   *{box-sizing:border-box}
   body{margin:0; background:var(--bg); color:var(--text); font-family:var(--font); font-size:15px; line-height:1.5; padding:24px;}
   .wrap{max-width:1440px; margin:0 auto;}
-  #mainCols{display:grid; grid-template-columns:minmax(0,1fr) 344px; gap:22px; align-items:start; grid-template-areas:'map cfg' 'charts charts'; margin-top:16px;}
-  #mainCols > #panel{grid-area:map; margin-top:0;}
-  #mainCols > #cfgPanel{grid-area:cfg; margin-top:0; position:sticky; top:10px;}
-  #mainCols > #chartsPanel{grid-area:charts; margin-top:10px;}
-  #mainCols.solo{display:block;}
-  #mainCols.solo > #panel{margin-top:16px;}
-  @media(max-width:1080px){ #mainCols{grid-template-columns:1fr; grid-template-areas:'map' 'cfg' 'charts';} #mainCols > #cfgPanel{position:static;} }
+  #mainCols{display:flex; gap:22px; align-items:flex-start; margin-top:16px;}
+  #leftCol{flex:1 1 auto; min-width:0;}
+  #leftCol > #panel{margin-top:0;}
+  #mainCols > #cfgPanel{flex:0 0 344px; margin-top:0; position:sticky; top:10px; max-height:calc(100vh - 20px); overflow:auto;}
+  @media(max-width:1080px){ #mainCols{flex-direction:column;} #mainCols > #cfgPanel{flex:1 1 auto; width:100%; position:static; max-height:none;} }
   h1{font-size:21px; font-weight:600; margin:0 0 4px;}
   p.sub{color:var(--text2); margin:0 0 20px; font-size:14px;}
   #drop{border:1.5px dashed var(--border2); border-radius:12px; padding:22px; text-align:center; color:var(--text2);
@@ -287,6 +285,7 @@ const html = `<!DOCTYPE html>
   <div id="prog">Generating… <span id="progPhase"></span><div class="bar"><div id="progBar"></div></div></div>
 
   <div id="mainCols">
+  <div id="leftCol">
   <div id="panel">
     <div class="row" id="surfaceBar">
       <span class="lbl">Layer</span><span class="seg" id="layers"></span>
@@ -354,6 +353,7 @@ const html = `<!DOCTYPE html>
         </div>
       </div>
     </div>
+  </div>
   </div>
 
   <div id="cfgPanel">
@@ -1530,8 +1530,7 @@ function open3D() {
   if (!result || !terrain || !cfgUsed) { $('err').textContent = 'Wait for the world to finish generating first.'; return; }
   threeDFrom = 'map'; $('view3dClose').textContent = '← Back to map';
   $('canvasWrap').style.display = 'none'; $('legend').style.display = 'none'; $('stats').style.display = 'none';
-  $('surfaceBar').style.display = 'none'; $('cfgPanel').style.display = 'none'; $('chartsPanel').style.display = 'none';
-  $('mainCols').classList.add('solo');   // full-width overlay
+  $('surfaceBar').style.display = 'none'; $('cfgPanel').style.display = 'none'; $('chartsPanel').style.display = 'none';   // hidden cfg sidebar → left column goes full width (flex)
   $('view3dWrap').style.display = 'block';
   $('view3dStatus').textContent = 'initializing…';
   seenBlocks = {}; hiddenBlocks = new Set(); buildBlockToggles();
@@ -1543,10 +1542,9 @@ function open3D() {
 function close3D() {
   Render3D.stop();
   $('view3dWrap').style.display = 'none';
-  if (threeDFrom === 'designer') { threeDFrom = 'map'; $('designWrap').style.display = ''; return; }   // stay in the designer (still solo)
+  if (threeDFrom === 'designer') { threeDFrom = 'map'; $('chartsPanel').style.display = 'block'; $('designWrap').style.display = ''; return; }   // back to the designer (Underground returns below it)
   $('canvasWrap').style.display = ''; $('legend').style.display = ''; $('stats').style.display = '';
   $('surfaceBar').style.display = ''; $('cfgPanel').style.display = 'block'; $('chartsPanel').style.display = 'block';
-  $('mainCols').classList.remove('solo');
 }
 function refresh3D() {
   $('view3dStatus').textContent = 'rebuilding…';
