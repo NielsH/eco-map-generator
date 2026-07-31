@@ -2098,14 +2098,14 @@ const G = { poissonSamples, Voronoi };
 bindVoxel(C);
 
 let lastRes = null;   // keep the last generate() result so the 3D view can request raster grids lazily
-let vGrid = null, vCtx = null, vChunks = null;   // 3D voxel view: raster grid, terrain ctx, per-chunk column cache
+let vGrid = null, vCtx = null, vChunks = null, vSource = null;   // 3D voxel view: raster grid, terrain ctx, per-chunk column cache, and which view built it ('map'|'authored')
 onmessage = function (e) {
   const m = e.data;
   if (m.type === 'init') { setVectorTable(m.vt); postMessage({ type: 'ready' }); return; }
   if (m.type === 'gen') {
     try {
       const res = generate(m.cfg, { progress: s => postMessage({ type: 'progress', phase: s }) });
-      lastRes = res; vGrid = null; vCtx = null; vChunks = null;   // stale 3D caches
+      lastRes = res; vGrid = null; vCtx = null; vChunks = null; vSource = null;   // stale 3D caches
       const polys = res.polys.map(p => {
         const pts = new Float32Array(p.points.length * 2);
         for (let i = 0; i < p.points.length; i++) { pts[i*2] = p.points[i].x; pts[i*2+1] = p.points[i].y; }
@@ -2121,7 +2121,7 @@ onmessage = function (e) {
   if (m.type === '3d-init') {
     try {
       if (!lastRes) { postMessage({ type: 'v3d-error', message: 'No world generated yet' }); return; }
-      if (vCtx && vCtx._deposits && vGrid) {   // reuse the precomputed layer on reopen (invalidated on regenerate)
+      if (vCtx && vCtx._deposits && vGrid && vSource === 'map') {   // reuse the precomputed layer on reopen (invalidated on regenerate / authored preview)
         postMessage({ type: 'v3d-ready', W: vGrid.W, waterLevel: m.cfg.waterLevel, maxGenerationHeight: m.cfg.maxGenerationHeight,
           gray: vGrid.gray.slice(), biome: vGrid.biome.slice(), biomeNames: vGrid.biomeNames });
         return;
@@ -2133,7 +2133,7 @@ onmessage = function (e) {
       vCtx.grayAt = (x, z) => gray[z * W + x];
       vCtx.biomeAt = (x, z) => names[biome[z * W + x]];
       computeDeposits(vCtx, vGrid, (ph, f) => postMessage({ type: 'v3d-progress', phase: ph, frac: f }));   // precompute the ore-vein overlay
-      vChunks = new Map();
+      vChunks = new Map(); vSource = 'map';
       const grayCopy = gray.slice(), biomeCopy = biome.slice();   // copies so the worker keeps its grids
       postMessage({ type: 'v3d-ready', W: W, waterLevel: cfg.waterLevel, maxGenerationHeight: cfg.maxGenerationHeight,
         gray: grayCopy, biome: biomeCopy, biomeNames: names },
@@ -2164,7 +2164,7 @@ onmessage = function (e) {
       vCtx.grayAt = (x, z) => gray[z * W + x];
       vCtx.biomeAt = (x, z) => RASTER_BIOMES[biome[z * W + x]];
       computeDeposits(vCtx, vGrid, (ph, f) => postMessage({ type: 'v3d-progress', phase: ph, frac: f }));
-      vChunks = new Map();
+      vChunks = new Map(); vSource = 'authored';
       const grayCopy = gray.slice(), biomeCopy = biome.slice();
       postMessage({ type: 'v3d-ready', W: W, waterLevel: cfg.waterLevel, maxGenerationHeight: cfg.maxGenerationHeight,
         gray: grayCopy, biome: biomeCopy, biomeNames: RASTER_BIOMES }, [grayCopy.buffer, biomeCopy.buffer]);
