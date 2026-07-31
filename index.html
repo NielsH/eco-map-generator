@@ -8954,7 +8954,8 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     s.textContent = `
     #designWrap{margin-top:6px}
     .dsnCols{display:flex;gap:22px;flex-wrap:wrap;align-items:flex-start}
-    .dsnLeft{flex:0 0 auto;--cw:min(760px,58vw,80vh)} .dsnRight{flex:1 1 360px;min-width:320px;max-width:560px}
+    .dsnLeft{flex:0 0 auto;max-width:calc(var(--cw) + 20px);--cw:min(880px,64vw,88vh)} .dsnRight{flex:1 1 320px;min-width:300px;max-width:460px}
+    .dsnLeft .dsnMini{max-width:var(--cw)}
     #dsnCanvasWrap{position:relative;border:0.5px solid var(--border);border-radius:12px;background:var(--surf);padding:8px;line-height:0;display:inline-block}
     #dsnCanvas{border-radius:6px;cursor:crosshair;touch-action:none;image-rendering:pixelated;width:var(--cw);height:var(--cw)}
     .dsnPal{display:flex;flex-wrap:wrap;gap:5px;margin:8px 0}
@@ -8964,6 +8965,8 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     .dsnTools{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:6px 0}
     .dsnCard{border:0.5px solid var(--border);border-radius:10px;background:var(--surf);padding:10px 12px;margin:0 0 12px}
     .dsnCard h4{margin:0 0 6px;font-size:13px;font-weight:600}
+    .dsnSectionLbl{font-size:12px;font-weight:600;color:var(--text2);margin:16px 0 6px;padding-top:12px;border-top:0.5px solid var(--border)}
+    .dsnSectionLbl i{color:var(--muted);font-weight:500}
     .dsnGallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px}
     .dsnCandidate{border:0.5px solid var(--border);border-radius:8px;background:var(--surf);padding:6px;text-align:center;font-size:11px;color:var(--text2)}
     .dsnCandidate canvas{width:100%;height:auto;border-radius:5px;image-rendering:pixelated;display:block;margin-bottom:4px;cursor:pointer}
@@ -8993,10 +8996,9 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     injectStyle();
     const host = $('designWrap');
     host.innerHTML =
-      '<div class="row" style="margin:2px 0 6px"><strong style="font-size:15px">🎨 Design a map</strong>' +
-      '<span class="dsnMini" style="margin-left:6px">draw a target, then search seeds for a real world that resembles it</span>' +
+      '<div class="row" style="margin:2px 0 10px"><strong style="font-size:15px">🎨 Design a map</strong>' +
+      '<span class="dsnMini" style="margin-left:6px">paint a world → preview it in 3D → export it exactly, or find the closest real seed</span>' +
       '<button id="dsnClose" style="margin-left:auto">← Back to map</button></div>' +
-      '<div class="dsnMini" style="margin:0 0 10px;max-width:900px">The generator has no way to place a biome at a spot you choose — layout is decided by the seed. So this finds the <b>closest</b> real world by trying many seeds and scoring similarity; it matches the biome mix and land shape well, exact placement only loosely. Every result is a genuine, exportable <code>.eco</code>.</div>' +
       '<div class="dsnCols">' +
         '<div class="dsnLeft">' +
           '<div class="dsnPal" id="dsnPal"></div>' +
@@ -9033,10 +9035,19 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
           '</div>' +
         '</div>' +
         '<div class="dsnRight">' +
+          // Primary path: exact authored world (+ 3D preview)
+          '<div class="dsnCard"><h4 style="margin:0 0 4px">Your world <span class="dsnMini">— exact</span></h4>' +
+            '<div class="dsnMini" style="margin:0 0 8px"><b>🧊 3D preview</b> flies through your design here. <b>Export</b> writes a bundle for the <code>EcoWorldGenCLI</code> tool → a stock-loadable <code>.eco</code> whose biomes + terrain match your drawing <b>exactly</b> (needs the C# tool + an Eco server build).</div>' +
+            '<div class="row" style="gap:6px"><button id="dsnPreview3D" class="primary" title="Fly through your design in the 3D voxel world">🧊 3D preview</button>' +
+            '<button id="dsnExport">⬇ Export (.zip)</button></div>' +
+            '<div class="dsnMini" id="dsnExportStatus" style="margin-top:8px"></div></div>' +
+          // Secondary path: closest naturally-generated world (seed search)
+          '<div class="dsnSectionLbl">Or: find the closest <i>naturally-generated</i> world</div>' +
           '<div class="dsnCard"><h4>1 · Target</h4><div id="dsnAnalysis" class="dsnMini">Draw a layout (or seed it from the current map), then analyze it.</div>' +
             '<div class="dsnBars" id="dsnMixBars" style="display:none"></div>' +
             '<button id="dsnAnalyze" class="primary" style="margin-top:8px">Analyze drawing → set up search</button></div>' +
           '<div class="dsnCard" id="dsnSearchCard" style="opacity:.5;pointer-events:none"><h4>2 · Search</h4>' +
+            '<div class="dsnMini" style="margin:0 0 8px">The generator can\'t place a biome where you choose — layout comes from the seed. This tries many seeds and keeps the closest by biome mix + land shape (exact placement only loosely).</div>' +
             '<div class="dsnRange" style="margin-bottom:8px">Match&nbsp;<span class="dsnMini">mix</span><input type="range" id="dsnWeight" min="0" max="100" value="' + Math.round(layoutWeight * 100) + '"><span class="dsnMini">layout</span></div>' +
             '<div class="row" style="margin:2px 0"><button id="dsnStart" class="primary">▶ Start search</button><button id="dsnStop" disabled>■ Stop</button>' +
               '<label class="dsnMini" style="display:inline-flex;align-items:center;gap:4px;margin-left:4px" title="Also wobble land% and biome weights ±6% while searching, to explore around the inversion"><input type="checkbox" id="dsnJitter"> vary knobs</label></div>' +
@@ -9051,11 +9062,6 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
             '<div class="dsnMini" style="margin:2px 0 2px">click any card to apply it as your real world · scores are relative — even the best is an approximation</div>' +
             '<div class="dsnMini" style="margin:0 0 8px"><b>mix</b> = biome proportions · <b>shape</b> = land-mass overlap · <b>fit</b> = biome-type agreement</div>' +
             '<div class="dsnGallery" id="dsnGallery"><div class="dsnMini">No candidates yet — run a search.</div></div></div>' +
-          '<div class="dsnCard"><h4 style="margin:0 0 4px">4 · Authored world <span class="dsnMini">(exact — no search)</span></h4>' +
-            '<div class="dsnMini" style="margin:0 0 8px">Export your drawing as a real world: the biome + height maps + config become a bundle for the <code>EcoWorldGenCLI</code> tool, which generates a stock-loadable <code>.eco</code> save whose biomes match your drawing <b>exactly</b> (needs the C# tool + an Eco server build).</div>' +
-            '<div class="row" style="gap:6px"><button id="dsnExport" class="primary">⬇ Export authored world (.zip)</button>' +
-            '<button id="dsnPreview3D" title="Fly through your design in the 3D voxel world">🧊 3D preview</button></div>' +
-            '<div class="dsnMini" id="dsnExportStatus" style="margin-top:8px"></div></div>' +
         '</div>' +
       '</div>';
 
