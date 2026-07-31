@@ -270,11 +270,10 @@ const html = `<!DOCTYPE html>
     <strong>Drop a WorldGenerator.eco file here</strong>, or <label style="color:var(--accent); cursor:pointer; text-decoration:underline">browse<input id="file" type="file" accept=".eco,.json,application/json" style="display:none"></label>
     <div style="font-size:13px; margin-top:4px;">— or paste the JSON below —</div>
   </div>
-  <textarea id="paste" placeholder="Paste WorldGenerator.eco JSON here, then click Generate"></textarea>
+  <textarea id="paste" placeholder="Paste WorldGenerator.eco JSON here, then click Load"></textarea>
   <div class="row">
-    <button class="primary" id="gen">Generate map</button>
+    <button class="primary" id="loadCfg">Load pasted config</button>
     <span class="lbl">Seed override</span><input type="text" id="seed" placeholder="(from config)"><button id="randSeed" title="Random seed &amp; regenerate">🎲 Randomize</button>
-    <span class="lbl">Max render px</span><input type="number" id="maxpx" value="900" min="200" max="2000" step="100">
   </div>
   <div id="err"></div>
   <div id="meta"></div>
@@ -319,7 +318,6 @@ const html = `<!DOCTYPE html>
       <strong style="font-size:15px;">Underground</strong>
       <span class="seg" id="chartTabs" style="margin-left:4px">
         <button type="button" data-tab="block" class="on">Block composition</button>
-        <button type="button" data-tab="ore">Ore distribution</button>
         <button type="button" data-tab="edit">Editor</button>
       </span>
     </div>
@@ -327,35 +325,13 @@ const html = `<!DOCTYPE html>
     <div id="blockTab">
       <div style="display:flex;align-items:center;gap:10px;margin:2px 0;flex-wrap:wrap;">
         <span class="lbl">what a column is made of, top to bottom, per biome</span>
-        <span class="lbl" style="margin-left:8px">Crushed</span><span class="seg" id="blkCrush"></span>
-        <span class="lbl" style="margin-left:8px">Ores</span><span class="seg" id="blkEmph"></span>
         <span class="lbl" id="blockMeta" style="margin-left:10px"></span>
       </div>
       <div id="blockChartWrap"><div id="blockChart"></div><div id="blockTip"></div></div>
       <div id="blockLegend"></div>
     </div>
 
-    <div id="oreTab" style="display:none">
-      <div style="display:flex;align-items:center;gap:10px;margin:2px 0;flex-wrap:wrap;">
-        <span class="lbl">where each material concentrates by biome &amp; depth</span>
-        <span class="lbl" style="margin-left:8px">Group by</span><span class="seg" id="oreGrp"></span>
-        <span class="lbl" style="margin-left:8px">Style</span><span class="seg" id="oreSty"></span>
-        <span class="lbl" style="margin-left:8px">Scale</span><span class="seg" id="oreScl"></span>
-        <span class="lbl" style="margin-left:8px">Seed spread</span><span class="seg" id="oreSpr"></span>
-        <span class="lbl" id="oreMeta" style="margin-left:10px"></span>
-      </div>
-      <div id="oreChartWrap"><div id="oreChart"></div><div id="oreTip"></div></div>
-      <div id="oreLegend"></div>
-    </div>
-
     <div id="editTab" style="display:none">
-      <div style="display:flex;align-items:center;gap:10px;margin:2px 0 6px;flex-wrap:wrap;">
-        <span class="seg" id="oreTabs">
-          <button type="button" data-tab="visual" class="on">Visual editor</button>
-          <button type="button" data-tab="manual">Manual knobs</button>
-        </span>
-        <button id="oreHandoff" style="margin-left:auto">Open in ore visualizer ↗</button>
-      </div>
       <div id="oreVisualTab">
         <div class="lbl" style="margin:4px 0 6px">Pick a biome — the column shows the whole mix at real world height (surface at its true Y, air above, smeared over the surface band), matching the block-composition chart. Click any block to edit it; drag a vein to move it, its top/bottom edges to resize its depth, its inner edge to change abundance, or a base-rock boundary to move where a layer ends.</div>
         <div id="ovBiomes"></div>
@@ -369,10 +345,6 @@ const html = `<!DOCTYPE html>
           </div>
         </div>
       </div>
-      <div id="oreManualTab" style="display:none">
-        <div class="lbl" style="margin:4px 0 8px">Edit veins &amp; scatter for every biome, add/remove nodes — the distribution chart updates live.</div>
-        <div id="oreEditor"></div>
-      </div>
     </div>
   </div>
 
@@ -385,7 +357,8 @@ const html = `<!DOCTYPE html>
     <div class="cfgActions">
       <button class="primary" id="regen">Regenerate map</button>
       <button id="resetCfg">Reset to loaded</button>
-      <button id="dlEco" style="margin-left:auto">Download .eco</button>
+      <label class="lbl" style="display:inline-flex;align-items:center;gap:5px;margin-left:auto" title="Max canvas resolution for the 2D map render">Max render px <input type="number" id="maxpx" value="900" min="200" max="2000" step="100" style="width:74px"></label>
+      <button id="dlEco">Download .eco</button>
     </div>
   </div>
 
@@ -659,10 +632,10 @@ function readForm() {
 // ---- generation ----
 function generateMap(cfg) {
   $('err').textContent = '';
-  renderPx = Math.max(200, Math.min(2000, +$('maxpx').value || 900));
+  renderPx = Math.max(200, Math.min(2000, ($('maxpx') && +$('maxpx').value) || 900));
   cfgUsed = cfg;
   $('meta').innerHTML = \`World <b>\${cfg.worldWidth*10}×\${cfg.worldLength*10} m</b> · seed <b>\${cfg.seed}</b> · point radius \${cfg.pointRadius}\`;
-  $('gen').disabled = true; $('regen').disabled = true;
+  $('loadCfg').disabled = true; $('regen').disabled = true;
   $('prog').style.display = 'block'; $('progBar').style.width = '8%'; $('progPhase').textContent = 'sampling…';
 
   if (!worker) worker = makeWorker();
@@ -672,13 +645,13 @@ function generateMap(cfg) {
     const m = e.data;
     if (m.type === 'ready') { worker.postMessage({ type: 'gen', cfg }); return; }
     if (m.type === 'progress') { $('progPhase').textContent = m.phase + '…'; $('progBar').style.width = (phases[m.phase]||10) + '%'; return; }
-    if (m.type === 'error') { $('err').textContent = 'Generation failed: ' + m.message; $('gen').disabled = false; $('regen').disabled = false; $('prog').style.display='none'; return; }
+    if (m.type === 'error') { $('err').textContent = 'Generation failed: ' + m.message; $('loadCfg').disabled = false; $('regen').disabled = false; $('prog').style.display='none'; return; }
     if (m.type === 'done') {
       $('progBar').style.width = '100%';
       result = m;   // 3D voxel caches (grid/terrain/chunks) are invalidated worker-side on each 'gen'
       updateMixActuals(m);
-      if (terrain) { const ej = buildExportJson(); OreChart.render(ej); BlockChart.render(ej); }   // keep charts' biome present/absent + water line in sync
-      $('gen').disabled = false; $('regen').disabled = false;
+      if (terrain) { const ej = buildExportJson(); BlockChart.render(ej); }   // keep charts' biome present/absent + water line in sync
+      $('loadCfg').disabled = false; $('regen').disabled = false;
       setTimeout(() => { $('prog').style.display = 'none'; }, 300);
       $('panel').style.display = 'block';
       scale = renderPx / m.worldSize;
@@ -705,7 +678,7 @@ function loadConfigText(text) {
   buildOreEditor();
   OreVisual.build();
   $('chartsPanel').style.display = terrain ? 'block' : 'none';
-  if (terrain) { const ej = buildExportJson(); OreChart.render(ej); BlockChart.render(ej); }
+  if (terrain) { const ej = buildExportJson(); BlockChart.render(ej); }
   generateMap(cfg);
 }
 function generateFromForm() {
@@ -845,7 +818,8 @@ function oreAdd(bi, type) {
 }
 function oreRemove(idx) { const e = oreNodes[idx]; if (!e) return; const i = e.sub.indexOf(e.node); if (i >= 0) e.sub.splice(i, 1); buildOreEditor(); OreVisual.build(); scheduleOreRender(); }
 function buildOreEditor() {
-  const host = $('oreEditor'); host.innerHTML = ''; oreNodes = [];
+  const host = $('oreEditor'); if (!host) return;   // manual-knobs editor removed; kept as a safe no-op for shared callers
+  host.innerHTML = ''; oreNodes = [];
   if (!terrain || !terrain.Modules) { host.innerHTML = '<div class="lbl">This config has no TerrainModule to edit.</div>'; return; }
   const opts = collectBlockTypes();
   terrain.Modules.forEach((bm, bi) => {
@@ -890,7 +864,7 @@ function wireOreEditor() {
   host.querySelectorAll('button[data-add]').forEach(b => b.addEventListener('click', () => oreAdd(+b.dataset.b, b.dataset.add)));
 }
 let oreRenderTimer = null;
-function scheduleOreRender() { clearTimeout(oreRenderTimer); oreRenderTimer = setTimeout(() => { if (terrain) { const ej = buildExportJson(); OreChart.render(ej); BlockChart.render(ej); } }, 150); }
+function scheduleOreRender() { clearTimeout(oreRenderTimer); oreRenderTimer = setTimeout(() => { if (terrain) { const ej = buildExportJson(); BlockChart.render(ej); } }, 150); }
 
 // ---- visual ore editor: per-biome depth lane where each vein/scatter is a draggable object ----
 // Drag an object's body to move its DepthRange, drag its right edge to change abundance (SpawnPercentChance /
@@ -1166,174 +1140,9 @@ const OreVisual = (function () {
   return { build, init };
 })();
 
-// ---- ore-distribution chart (port of WorldGenOreVisualizer) ----
-const OreChart = (function () {
-  const ELEV = { Grassland:[.02,.4], WarmForest:[.1,.5], ColdForest:[.1,.7], RainForest:[.1,.5], Desert:[.02,.2], Taiga:[.3,1], Tundra:[.4,1], Ice:[.6,1], Wetland:[.02,.3], ColdCoast:[.05,.1], WarmCoast:[.05,.1] };
-  const WEIGHTF = { RainForest:'RainforestWeight', WarmForest:'WarmForestWeight', ColdForest:'CoolForestWeight', Taiga:'TaigaWeight', Tundra:'TundraWeight', Ice:'IceWeight', Desert:'DesertWeight', Wetland:'WetlandWeight' };
-  const ALWAYS = { Grassland:1, ColdCoast:1, WarmCoast:1 };
-  const biomeOrder = ['Desert','Grassland','Wetland','WarmForest','RainForest','WarmCoast','ColdCoast','ColdForest','Taiga','Tundra','Ice'];
-  const oreOrder = ['iron','copper','gold','coal','sulfur','peat','limestone','clay'];
-  function extract(cfg) {
-    const idmap = {};
-    (function idx(o){ if (o && typeof o === 'object'){ if (!Array.isArray(o) && o['$id']) idmap[o['$id']] = o; for (const k in o) idx(o[k]); } })(cfg);
-    const deref = o => (o && o['$ref'] != null) ? idmap[o['$ref']] : o;
-    const btype = bt => { bt = deref(bt); return (bt && bt.Type) ? bt.Type : ''; };
-    const rng = (o, k, d) => { const r = o[k]; if (!r) return d; return [r.min != null ? r.min : d[0], r.max != null ? r.max : d[1]]; };
-    const meanW = o => { const dw = o.DirectionWeights || []; if (!dw.length) return [1,1,1]; let x=0,y=0,z=0; for (let i=0;i<dw.length;i++){x+=dw[i].X||0;y+=dw[i].Y||0;z+=dw[i].Z||0;} return [x/dw.length,y/dw.length,z/dw.length]; };
-    const boost = (wx,wy,wz) => { wx=Math.max(wx,1e-6);wy=Math.max(wy,1e-6);wz=Math.max(wz,1e-6); return Math.pow(wy,2/3)/Math.pow(wx*wz,1/3); };
-    let weights = null;
-    (function find(o){ if (weights||!o||typeof o!=='object') return; if (!Array.isArray(o)&&(o.CoolForestWeight!=null||o.DesertWeight!=null)){weights=o;return;} for (const k in o) find(o[k]); })(cfg);
-    const WL = cfg.WaterLevel != null ? cfg.WaterLevel : 60, MG = cfg.MaxGenerationHeight != null ? cfg.MaxGenerationHeight : 120;
-    const surfOf = name => { const e = ELEV[name] || [.1,.5]; return [Math.round(WL + e[0]*(MG-WL)), Math.round(WL + e[1]*(MG-WL))]; };
-    const presentOf = name => { if (ALWAYS[name]) return true; if (!weights) return true; const f = WEIGHTF[name]; if (!f) return true; return (weights[f]||0) > 0; };
-    const terr = deref(cfg.TerrainModule); if (!terr || !terr.Modules) throw new Error('No TerrainModule.Modules');
-    const out = {}; const add = (b,o,m) => { const k = b+'|'+o; (out[k]=out[k]||[]).push(m); };
-    terr.Modules.forEach(bm => { bm = deref(bm); const name = bm.BiomeName; if (!ELEV[name]) return;
-      const dm = deref(bm.Module); const ranges = (dm && dm.BlockDepthRanges) || [];
-      ranges.forEach(bdr => { bdr = deref(bdr); const pm = oreMaterial(btype(bdr.BlockType));
-        if (pm) add(name, pm, { t:'strat', a:Math.max(0,bdr.Min|0), b:Math.max(bdr.Min|0,bdr.Max|0), w:0.6 });
-        (bdr.SubModules||[]).forEach(sm => { sm = deref(sm); const ty = sm['$type']||''; const mat = oreMaterial(btype(sm.BlockType)); if (!mat) return;
-          if (ty.indexOf('StandardTerrainModule') >= 0) { const r = rng(sm,'DepthRange',[0,200]); add(name, mat, { t:'std', a:r[0]|0, b:r[1]|0, w:sm.PercentChance!=null?sm.PercentChance:0.05 }); }
-          else if (ty.indexOf('DepositTerrainModule') >= 0) { const sr = rng(sm,'DepthRange',[0,200]), br = rng(sm,'DepositDepthRange',[0,200]); const bc = rng(sm,'BlocksCountRange',[1,1]); const N = (bc[0]+bc[1])/2; const mw = meanW(sm);
-            const spc = sm.SpawnPercentChance!=null?sm.SpawnPercentChance:0.01;
-            add(name, mat, { t:'dep', sa:sr[0]|0, sb:sr[1]|0, ba:Math.min(sr[0],br[0])|0, bb:Math.max(sr[1],br[1])|0, w:spc*N, spc:spc, bo:boost(mw[0],mw[1],mw[2]), N:N }); }
-        });
-      });
-    });
-    const entries = []; for (const k in out) { const p = k.split('|'); entries.push({ bi:p[0], ore:p[1], surf:surfOf(p[0]), on:presentOf(p[0]), mods:out[k] }); }
-    // Seed-to-seed spread: each deposit is an independent per-block Bernoulli roll, so the count of deposit
-    // seed-points on one map is ~Poisson. Relative spread of a module is 1/sqrt(expected count); scatter has a
-    // huge count (~zero spread), rare deposits in rare biomes have few (visible spread). Combine per cell by
-    // error propagation over each module's integrated contribution. Areas are in blocks² (chance is per block).
-    // Prefer the actually-generated map for world area and biome coverage; fall back to config + constants when
-    // no map has been generated yet. Ocean is its own biome key, so per-biome coverage already excludes it.
-    let wsum = 0; if (weights) for (const bn in WEIGHTF) wsum += (weights[WEIGHTF[bn]]||0);
-    const fallbackFrac = name => { const f = WEIGHTF[name]; if (f) return Math.max(0, (weights && weights[f])||0);
-      if (name === 'Grassland') return Math.max(0.03, 1 - wsum); return 0.04; }; // coasts are thin strips
-    const dims = deref(cfg.Dimensions) || {};
-    const cfgArea = (((dims.WorldWidth|0)||72)*10) * (((dims.WorldLength|0)||72)*10);
-    const LANDSHARE = 0.6; // rough land fraction, used only in the no-map fallback
-    const map = (result && result.stats && result.worldSize) ? result : null;
-    let cellArea; // land area (blocks²) of a given ore-chart biome
-    if (map) { const worldArea = map.worldSize * map.worldSize, counts = map.stats.counts;
-      let tot = 0; for (const k in counts) tot += counts[k]; tot = tot || 1;
-      cellArea = name => { const c = counts[name]||0; return c > 0 ? worldArea*(c/tot) : cfgArea*LANDSHARE*fallbackFrac(name); }; }
-    else cellArea = name => cfgArea * LANDSHARE * fallbackFrac(name);
-    entries.forEach(e => { const area = cellArea(e.bi); let vSum = 0, iSum = 0, depI = 0, lam = 0;
-      e.mods.forEach(m => {
-        if (m.t === 'dep') { const band = Math.max(1, m.sb - m.sa + 1);
-          const lambda = Math.max(1e-6, m.spc * area * band); lam += lambda;
-          const I = m.w, cv = 1 / Math.sqrt(lambda); vSum += (I*cv)*(I*cv); iSum += I; depI += I; }
-        else iSum += m.w * Math.max(1, (m.b - m.a + 1)); }); // scatter: effectively zero variance
-      e.cv = iSum > 0 ? Math.min(1.5, Math.sqrt(vSum) / iSum) : 0; e.lambda = lam;
-      e.depShare = iSum > 0 ? depI / iSum : 0; }); // how much of this ore comes from sparse deposits vs steady scatter
-    return { entries, WL, MG, spreadFromMap: !!map };
-  }
-  let Ymax = 125, DMAX = 210;
-  function depthProfile(e) {
-    const arr = new Array(DMAX+1).fill(0);
-    e.mods.forEach(m => {
-      if (m.t === 'std' || m.t === 'strat') { for (let d = Math.max(0,m.a); d <= m.b && d <= DMAX; d++) arr[d] += m.w; return; }
-      const ey = 0.62*Math.cbrt(m.N)*m.bo, h = Math.max(1, Math.round(ey));
-      const base = new Array(DMAX+1).fill(0); for (let d = Math.max(0,m.sa); d <= m.sb && d <= DMAX; d++) base[d] = 1;
-      const sm = new Array(DMAX+1).fill(0);
-      for (let d = 0; d <= DMAX; d++) { let acc=0,ws=0; for (let k=-h;k<=h;k++){ const wk=h+1-Math.abs(k), dd=d-k; if (dd>=0&&dd<=DMAX) acc+=base[dd]*wk; ws+=wk; } sm[d]=acc/ws; }
-      for (let d2 = 0; d2 <= DMAX; d2++) if (d2 < m.ba || d2 > m.bb) sm[d2] = 0;
-      let tot = 0; for (let d3 = 0; d3 <= DMAX; d3++) tot += sm[d3];
-      if (tot > 0) for (let d4 = 0; d4 <= DMAX; d4++) arr[d4] += sm[d4]/tot*m.w;
-    });
-    return arr;
-  }
-  function smearY(dp, surf) { const lo=surf[0],hi=surf[1],cnt=hi-lo+1,arr=[];
-    for (let Y=0;Y<=Ymax;Y++){ let sum=0; for (let sft=lo;sft<=hi;sft++){ const d=sft-Y; sum+=(d>=0&&d<=DMAX)?dp[d]:0; } arr.push(sum/cnt); }
-    const sm=[]; for (let Y2=0;Y2<=Ymax;Y2++){ const a=arr[Math.max(0,Y2-1)],b=arr[Y2],c=arr[Math.min(Ymax,Y2+1)]; sm.push((a+2*b+c)/4); } return sm; }
-  let D=null, gMax=0, oreMax={}, layout=[], curW=0, plotR=0, svgEl=null, hvLine=null, hvRect=null, H=0, tipEl=null, wrapEl=null;
-  const padTop=48, sc=2.4, x0=64, subW=34, gap=10;
-  const state = { mode:'ore', style:'violin', scale:'global', spread:'off' };
-  const cssv = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-  const py = Y => padTop + (Ymax-Y)*sc;
-  function buildGroups(mode) { const E=D.entries, groups=[];
-    if (mode === 'ore') oreOrder.forEach(o => { const cells=E.filter(e=>e.ore===o).sort((a,b)=>biomeOrder.indexOf(a.bi)-biomeOrder.indexOf(b.bi)); if (cells.length) groups.push({label:ORE_NAME[o],color:ORE_COL[o],on:true,cells,sub:e=>ORE_DISP[e.bi]+(e.on?'':'*')}); });
-    else biomeOrder.forEach(b => { const cells=E.filter(e=>e.bi===b).sort((a,b2)=>oreOrder.indexOf(a.ore)-oreOrder.indexOf(b2.ore)); if (cells.length) groups.push({label:ORE_DISP[b]+(cells[0].on?'':'*'),color:null,on:cells[0].on,cells,sub:e=>ORE_NAME[e.ore]}); });
-    return groups; }
-  function render() {
-    if (!D) return;
-    const cT=cssv('--text'),cS=cssv('--text2'),cM=cssv('--muted'),cB=cssv('--border'),water=cssv('--water')||'#3987e5';
-    const groups=buildGroups(state.mode), MINGW=82; let totalSlots=0; groups.forEach(g=>{ g.slot=Math.max(g.cells.length*subW,MINGW); totalSlots+=g.slot; });
-    curW=x0+totalSlots+(groups.length-1)*gap+14; plotR=curW-14; layout=[]; const maxHW=subW/2-2, barHW=10;
-    let s='<svg id="oreSvg" xmlns="http://www.w3.org/2000/svg" width="'+curW+'" height="'+H+'" viewBox="0 0 '+curW+' '+H+'" style="display:block;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">';
-    const step=Ymax>140?40:20, ticks=[]; for (let t=0;t<=Ymax;t+=step) ticks.push(t);
-    for (let i=0;i<ticks.length;i++){ const ty=py(ticks[i]); s+='<line x1="'+x0+'" y1="'+ty+'" x2="'+plotR+'" y2="'+ty+'" stroke="'+cB+'" stroke-width="1"/><text x="'+(x0-8)+'" y="'+(ty+4)+'" text-anchor="end" fill="'+cM+'" font-size="11">'+ticks[i]+'</text>'; }
-    s+='<text x="12" y="'+py(Ymax*0.86)+'" fill="'+cS+'" font-size="12" transform="rotate(-90 12 '+py(Ymax*0.86)+')">World height (Y)</text>';
-    const wy=py(D.WL); s+='<line x1="'+x0+'" y1="'+wy+'" x2="'+plotR+'" y2="'+wy+'" stroke="'+water+'" stroke-width="1.4" stroke-dasharray="5 4"/><text x="'+plotR+'" y="'+(wy-5)+'" text-anchor="end" fill="'+water+'" font-size="10.5">water Y'+D.WL+'</text>';
-    s+='<rect id="oreHvr" x="0" y="0" width="0" height="0" fill="'+cM+'" fill-opacity="0.10" style="display:none"/>';
-    let cx=x0;
-    groups.forEach(g => { const gStart=cx, slot=g.slot, cellsW=g.cells.length*subW; let cellx=gStart+(slot-cellsW)/2; const hcol=g.color?cT:(g.on?cT:cM);
-      s+='<text x="'+(gStart+slot/2)+'" y="20" text-anchor="middle" fill="'+hcol+'" font-size="12.5" font-weight="600">'+g.label+'</text>';
-      if (g.color) s+='<rect x="'+(cellx+4)+'" y="26" width="'+(cellsW-8)+'" height="3" rx="1.5" fill="'+g.color+'"/>'; else s+='<line x1="'+(cellx+4)+'" y1="27" x2="'+(cellx+cellsW-4)+'" y2="27" stroke="'+cB+'" stroke-width="1"/>';
-      g.cells.forEach(e => { const bx=cellx, scx=bx+subW/2, col=ORE_COL[e.ore], dim=e.on?1:0.5; const norm=(state.scale==='global'?gMax:(oreMax[e.ore]||1))||1; const syT=py(Math.min(e.surf[1],Ymax)),syB=py(e.surf[0]);
-        s+='<rect x="'+(bx+2)+'" y="'+syT+'" width="'+(subW-4)+'" height="'+(syB-syT)+'" fill="'+cM+'" fill-opacity="0.08"/><line x1="'+(bx+2)+'" y1="'+syT+'" x2="'+(bx+subW-2)+'" y2="'+syT+'" stroke="'+cM+'" stroke-width="1" stroke-opacity="0.35" stroke-dasharray="2 2"/>';
-        if (state.style === 'violin') { const halo=state.spread==='on'&&e.cv>0.02, hwCap=subW/2-0.5;
-          for (let Y=0;Y<=Ymax;Y++){ const nv=e.prof[Y]/norm; if (nv<=0.004) continue; const rt=Math.sqrt(nv), hw=Math.max(1.1,rt*maxHW), op=(0.26+0.6*rt)*dim, yy=py(Y)-sc/2, hgt=(sc+0.5).toFixed(1);
-            if (halo){ const hw2=Math.min(hwCap,hw*(1+e.cv)); s+='<rect x="'+(scx-hw2).toFixed(1)+'" y="'+yy.toFixed(1)+'" width="'+(hw2*2).toFixed(1)+'" height="'+hgt+'" fill="'+col+'" fill-opacity="'+(0.13*dim).toFixed(2)+'"/>'; }
-            s+='<rect x="'+(scx-hw).toFixed(1)+'" y="'+yy.toFixed(1)+'" width="'+(hw*2).toFixed(1)+'" height="'+hgt+'" fill="'+col+'" fill-opacity="'+op.toFixed(2)+'"/>'; } }
-        else { let ylo=1e9,yhi=-1; for (let Y2=0;Y2<=Ymax;Y2++){ if (e.prof[Y2]/norm>0.03){ if (Y2<ylo)ylo=Y2; if (Y2>yhi)yhi=Y2; } } if (yhi>0){ const bt=py(yhi); s+='<rect x="'+(scx-barHW)+'" y="'+bt+'" width="'+(barHW*2)+'" height="'+(py(ylo)-bt)+'" rx="2" fill="'+col+'" fill-opacity="'+(0.82*dim).toFixed(2)+'"/>'; } }
-        s+='<text transform="rotate(-42 '+scx+' '+(H-48)+')" x="'+scx+'" y="'+(H-48)+'" text-anchor="end" fill="'+(e.on?cS:cM)+'" font-size="10">'+g.sub(e)+'</text>';
-        layout.push({x0:bx,x1:bx+subW,e}); cellx+=subW;
-      });
-      cx=gStart+slot+gap;
-    });
-    s+='<line id="oreHvl" x1="0" y1="0" x2="0" y2="0" stroke="'+cT+'" stroke-width="1" stroke-opacity="0.5" stroke-dasharray="3 3" style="display:none"/></svg>';
-    $('oreChart').innerHTML=s; svgEl=$('oreSvg'); hvLine=$('oreHvl'); hvRect=$('oreHvr');
-    svgEl.addEventListener('mousemove', onMove);
-    svgEl.addEventListener('mouseleave', () => { tipEl.style.display='none'; hvLine.style.display='none'; hvRect.style.display='none'; });
-  }
-  function onMove(e) {
-    const cM=cssv('--muted'),cS=cssv('--text2'); const r=svgEl.getBoundingClientRect();
-    const sx=(e.clientX-r.left)*(curW/r.width), sy=(e.clientY-r.top)*(H/r.height); const Y=Math.round(Ymax-(sy-padTop)/sc); let col=null;
-    for (let i=0;i<layout.length;i++){ if (sx>=layout[i].x0&&sx<layout[i].x1){ col=layout[i]; break; } }
-    if (!col||Y<0||Y>Ymax){ tipEl.style.display='none'; hvLine.style.display='none'; hvRect.style.display='none'; return; }
-    const en=col.e, val=en.prof[Y], gi=val/gMax*100, po=val/(oreMax[en.ore]||1)*100;
-    hvLine.setAttribute('x1',x0); hvLine.setAttribute('x2',plotR); hvLine.setAttribute('y1',py(Y)); hvLine.setAttribute('y2',py(Y)); hvLine.style.display='block';
-    hvRect.setAttribute('x',col.x0); hvRect.setAttribute('y',padTop); hvRect.setAttribute('width',subW); hvRect.setAttribute('height',Ymax*sc); hvRect.style.display='block';
-    const sm=(en.surf[0]+en.surf[1])/2, dep=Math.round(sm-Y); const depL=dep>=0?('≈ '+dep+' blocks deep'):('~ '+(-dep)+' above surface');
-    const giTxt=gi>=1?Math.round(gi):(gi>0.05?'<1':'0'); let bodyH;
-    if (gi<0.4 && po<2) bodyH='<div style="color:'+cM+'">negligible '+ORE_NAME[en.ore].toLowerCase()+' here</div>';
-    else bodyH='<div>Density index <span style="font-weight:600;color:'+ORE_COL[en.ore]+'">'+giTxt+'</span> / 100 <span style="color:'+cM+'">global</span></div><div style="color:'+cS+'">'+Math.round(po)+'% of peak '+ORE_NAME[en.ore].toLowerCase()+'</div>';
-    const absent=en.on?'':'<div style="color:'+cM+'">* not generated on this map</div>';
-    let spreadH='';
-    if (en.lambda>0){ const pct=Math.round(en.cv*100), depN='≈'+Math.round(Math.max(1,en.lambda))+' deposits/map';
-      if (en.cv<0.05 && en.depShare<0.5) spreadH='<div style="color:'+cS+'">steady across seeds <span style="color:'+cM+'">(scatter-dominated · '+depN+')</span></div>';
-      else { const lbl=en.cv<0.05?'barely varies':(en.cv<0.2?'mild seed variance':'high seed variance');
-        spreadH='<div style="color:'+cS+'">seed spread ±'+pct+'% · '+depN+' <span style="color:'+cM+'">('+lbl+')</span></div>'; } }
-    tipEl.innerHTML='<div style="font-weight:600">'+ORE_DISP[en.bi]+' · '+ORE_NAME[en.ore]+'</div><div style="color:'+cS+'">Y '+Y+' · '+depL+'</div>'+bodyH+spreadH+absent; tipEl.style.display='block';
-    const wr=wrapEl.getBoundingClientRect(); tipEl.style.left=(e.clientX-wr.left+wrapEl.scrollLeft+14)+'px'; tipEl.style.top=(e.clientY-wr.top+12)+'px';
-  }
-  function renderFromCfg(cfg) {
-    try { D = extract(cfg); } catch (ex) { $('oreChart').innerHTML='<div class="lbl" style="padding:12px">Ore chart unavailable: ' + ex.message + '</div>'; return; }
-    Ymax = Math.max(120, Math.ceil(D.MG/20)*20); DMAX = Ymax+90; H = padTop+Ymax*sc+70; gMax = 0; oreMax = {};
-    D.entries.forEach(e => { e.prof = smearY(depthProfile(e), e.surf); e.pk = 0; e.prof.forEach(v => { if (v>gMax) gMax=v; if (v>e.pk) e.pk=v; }); if (e.pk>(oreMax[e.ore]||0)) oreMax[e.ore]=e.pk; }); if (gMax<=0) gMax=1;
-    $('oreMeta').textContent = D.entries.length + ' biome×material bands · water Y' + D.WL + ' · gen height ' + D.MG
-      + ' · seed spread ' + (D.spreadFromMap ? 'from generated map' : 'estimated (generate for real coverage)');
-    render();
-  }
-  function seg(id, opts, key) { const c=$(id); c.innerHTML=''; opts.forEach(o => { const b=document.createElement('button'); b.textContent=o.label; b.onclick=()=>{ state[key]=o.val; [...c.children].forEach(x=>x.classList.toggle('on', x===b)); render(); }; if (o.val===state[key]) b.className='on'; c.appendChild(b); }); }
-  function init() {
-    tipEl=$('oreTip'); wrapEl=$('oreChartWrap');
-    seg('oreGrp', [{label:'Ore',val:'ore'},{label:'Biome',val:'biome'}], 'mode');
-    seg('oreSty', [{label:'Violins',val:'violin'},{label:'Bars',val:'bars'}], 'style');
-    seg('oreScl', [{label:'Global',val:'global'},{label:'Per-ore',val:'perore'}], 'scale');
-    seg('oreSpr', [{label:'Off',val:'off'},{label:'On',val:'on'}], 'spread');
-    let lg=''; oreOrder.forEach(o => { lg+='<span><span class="sw" style="background:'+ORE_COL[o]+'"></span>'+ORE_NAME[o]+'</span>'; });
-    lg+='<span style="color:var(--muted)">* biome not on this map · widths √-scaled · <b>Global</b>: full width = densest ore anywhere · <b>Per-ore</b>: full width = peak of that ore · <b>Seed spread</b>: faint halo = seed-to-seed variance (wide on rare deposits) · hover for density</span>'; $('oreLegend').innerHTML=lg;
-  }
-  return { render: renderFromCfg, init };
-})();
-
 // ---- block-composition chart: per-biome vertical "what you dig through" stack over world height ----
-// Complements the ore chart. Where the ore chart normalises each ore's density on its own axis, this shows
-// the 100%-stacked composition of ALL blocks (base strata + scatter + veins) at each Y, per biome, so you can
-// read how the mix shifts with depth. Model is a faithful aggregate of the server's TerrainDepthModule:
+// Shows the 100%-stacked composition of ALL blocks (base strata + scatter + veins) at each Y, per biome, so
+// you can read how the mix shifts with depth. Model is a faithful aggregate of the server's TerrainDepthModule:
 // each stratum's bottom is a per-column noise threshold ~U[Min,Max]; the shallowest in-order stratum whose
 // threshold >= depth wins, then that stratum's scatters apply first-wins by PercentChance, and veins carve a
 // small deposit fraction out on top. We Monte-Carlo the strata thresholds (fixed seed -> stable chart).
@@ -1343,7 +1152,7 @@ const BlockChart = (function () {
   const ALWAYS = { Grassland:1, ColdCoast:1, WarmCoast:1 };
   const biomeOrder = ['Desert','Grassland','Wetland','WarmForest','RainForest','WarmCoast','ColdCoast','ColdForest','Taiga','Tundra','Ice'];
   const cssv = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-  const state = { merge:'merge', emph:'off' };
+  const state = { merge:'separate', emph:'off' };   // fixed: separate crushed blocks, ores at true abundance
   let Ymax = 125, DMAX = 210;
   const padTop = 44, sc = 2.4, x0 = 54, colW = 50, gap = 16, maxHW = colW/2 - 3;
   const py = Y => padTop + (Ymax - Y) * sc;
@@ -1536,20 +1345,9 @@ const BlockChart = (function () {
   let lastCfg = null;
   function init() {
     tipEl = $('blockTip'); wrapEl = $('blockChartWrap');
-    seg('blkCrush', [{ label:'Merge', val:'merge' }, { label:'Separate', val:'separate' }], 'merge');
-    seg('blkEmph', [{ label:'Normal', val:'off' }, { label:'Emphasize', val:'on' }], 'emph');
   }
   return { render: function (cfg) { lastCfg = cfg; renderFromCfg(cfg); }, init };
 })();
-
-// hand-off the current (edited) config to the standalone ore visualizer via postMessage handshake
-let pendingHandoff = null;
-function oreHandoff() {
-  if (!terrain) { $('err').textContent = 'Load a config first.'; return; }
-  pendingHandoff = buildExportJson();
-  window.open('WorldGenOreVisualizer.html', '_blank');
-}
-window.addEventListener('message', e => { if (e.data && e.data.type === 'eco-oreviz-ready' && pendingHandoff && e.source) e.source.postMessage({ type: 'eco-config', cfg: pendingHandoff }, '*'); });
 
 // ---- rendering ----
 function fillPolyPath(ctx, pts, s, ox, oy) {
@@ -1650,28 +1448,18 @@ $('cv').addEventListener('mouseleave', ()=>{ $('tip').style.display='none'; });
 
 // ---- wiring ----
 buildForm();
-OreChart.init();
 BlockChart.init();
 OreVisual.init();
-// underground charts: two tabs in one panel, Block composition default
+// underground: Block composition + Editor tabs in one panel (Block composition default)
 (function initChartTabs(){
   const tabs = $('chartTabs');
-  const show = t => { $('blockTab').style.display = t === 'block' ? '' : 'none'; $('oreTab').style.display = t === 'ore' ? '' : 'none'; $('editTab').style.display = t === 'edit' ? '' : 'none';
+  const show = t => { $('blockTab').style.display = t === 'block' ? '' : 'none'; $('editTab').style.display = t === 'edit' ? '' : 'none';
     for (const b of tabs.children) b.classList.toggle('on', b.dataset.tab === t);
-    if (t === 'edit' && terrain) { if ($('oreManualTab').style.display === 'none') OreVisual.build(); else buildOreEditor(); } };
+    if (t === 'edit' && terrain) OreVisual.build(); };
   for (const b of tabs.children) b.onclick = () => show(b.dataset.tab);
 })();
-// block & ore editor: Visual editor / Manual knobs tabs (rebuild the shown tab so edits in the other stay in sync)
-(function initOreTabs(){
-  const tabs = $('oreTabs');
-  const show = t => { $('oreVisualTab').style.display = t === 'visual' ? '' : 'none'; $('oreManualTab').style.display = t === 'manual' ? '' : 'none';
-    for (const b of tabs.children) b.classList.toggle('on', b.dataset.tab === t);
-    if (terrain) { if (t === 'visual') OreVisual.build(); else buildOreEditor(); } };
-  for (const b of tabs.children) b.onclick = () => show(b.dataset.tab);
-})();
-$('oreHandoff').onclick = oreHandoff;
-$('gen').onclick = () => loadConfigText($('paste').value);
 $('regen').onclick = generateFromForm;
+$('loadCfg').onclick = () => loadConfigText($('paste').value);
 $('resetCfg').onclick = () => { if (baseCfg) populateForm(baseCfg); };
 $('dlEco').onclick = downloadEco;
 $('randSeed').onclick = () => {
