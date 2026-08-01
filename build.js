@@ -233,7 +233,6 @@ const html = `<!DOCTYPE html>
   #chartsPanel{display:none; margin:0 0 14px; border:0.5px solid var(--border); border-radius:12px; background:var(--surf); padding:6px 14px 12px;}
   #chartsPanel > summary{cursor:pointer; user-select:none; padding:4px 0; list-style-position:inside;}
   #chartTabs button{font-size:13px; padding:6px 13px;}
-  #oreTabs button{font-size:13px; padding:6px 13px;}
   #ovBiomes{display:flex; gap:6px; flex-wrap:wrap; margin:6px 0 2px;}
   #ovLane svg{max-width:100%;}
   #oreEditor{display:flex; flex-direction:column; gap:6px; margin:8px 0 12px;}
@@ -262,10 +261,6 @@ const html = `<!DOCTYPE html>
   .ovRow .ndel:hover{color:#c0392b; background:var(--surf);}
   .oreAdd{display:flex; gap:8px; padding:9px 0 5px;}
   .oreAdd button{font-size:12px; padding:4px 11px;}
-  #oreChartWrap{width:100%; overflow-x:auto; position:relative; border:0.5px solid var(--border); border-radius:12px; background:var(--surf); padding:6px 0; margin-top:4px;}
-  #oreChart svg{max-width:100%; height:auto;}
-  #oreTip{position:absolute; display:none; pointer-events:none; background:var(--surf); border:0.5px solid var(--border2); border-radius:var(--radius); padding:8px 10px; font-size:12px; line-height:1.5; max-width:250px; z-index:5; box-shadow:0 2px 10px rgba(0,0,0,.15);}
-  #oreLegend{display:flex; flex-wrap:wrap; gap:12px 18px; margin-top:12px; font-size:12px; color:var(--text2); align-items:center;}
   #blockChartWrap{width:100%; overflow-x:auto; position:relative; border:0.5px solid var(--border); border-radius:12px; background:var(--surf); padding:6px 0; margin-top:4px;}
   #blockChart svg{max-width:100%; height:auto;}
   #blockTip{position:absolute; display:none; pointer-events:none; background:var(--surf); border:0.5px solid var(--border2); border-radius:var(--radius); padding:8px 10px; font-size:12px; line-height:1.5; max-width:290px; z-index:5; box-shadow:0 2px 10px rgba(0,0,0,.15);}

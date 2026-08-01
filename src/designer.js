@@ -937,7 +937,6 @@
     $('dsnRightDesign').style.display = find ? 'none' : '';
     $('dsnRightFind').style.display = find ? '' : 'none';
     $('dsnFindGallery').style.display = find ? '' : 'none';
-    $('designWrap').classList.toggle('findMode', find);
     // hide the map view + panels (mirror open3D), show the designer
     $('canvasWrap').style.display = 'none'; $('legend').style.display = 'none'; $('stats').style.display = 'none';
     const sb = $('surfaceBar'); if (sb) sb.style.display = 'none';   // hide the map's cfg sidebar → left column (designer + Underground) goes full width
