@@ -56,13 +56,11 @@ var Render3D = (function () {
   // ---- streaming ----
   function streamChunks() {
     if (!meta) return;
-    var nC = Math.ceil(meta.W / CHUNK);
     var ccx = Math.floor(camera.position.x / CHUNK), ccz = Math.floor(camera.position.z / CHUNK);
     var want = [];
     for (var dz = -RENDER_DIST; dz <= RENDER_DIST; dz++)
       for (var dx = -RENDER_DIST; dx <= RENDER_DIST; dx++) {
-        var cx = ccx + dx, cz = ccz + dz;
-        if (cx < 0 || cz < 0 || cx >= nC || cz >= nC) continue;
+        var cx = ccx + dx, cz = ccz + dz;   // no bounds clamp: the worker wraps chunk data (toroidal), so the world tiles seamlessly
         var key = cx + ',' + cz;
         if (chunks.has(key) || pending.has(key)) continue;
         want.push({ key: key, cx: cx, cz: cz, d: dx * dx + dz * dz });
@@ -137,7 +135,8 @@ var Render3D = (function () {
   function updateHud() {
     if (!hud) return;
     var p = camera.position, b = biomeAt(p.x, p.z);
-    hud.textContent = 'Y ' + Math.round(p.y) + '   X ' + Math.round(p.x) + '  Z ' + Math.round(p.z) +
+    var wrap = v => Wg ? Math.round(((v % Wg) + Wg) % Wg) : Math.round(v);   // torus: report position within [0, W)
+    hud.textContent = 'Y ' + Math.round(p.y) + '   X ' + wrap(p.x) + '  Z ' + wrap(p.z) +
       (b ? '   ·   ' + b : '') + (curSlice != null ? '   ✂ cutaway' : '');
   }
 

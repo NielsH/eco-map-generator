@@ -416,6 +416,13 @@ function generate(cfg, opts = {}) {
     }
     for (const [k, v] of result) k.biome = v;
   }
+
+  // Fast path for the inverse-design search: biome layout is fully decided here, so skip the
+  // (expensive) elevation/temperature/moisture, lakes and rivers passes. Polys carry no elevation
+  // in this mode; the search only reads p.biome + geometry. Coasts are not yet split warm/cold
+  // (that happens after rivers) — the search collapses all coasts to one class anyway.
+  if (opts.biomesOnly) return { polys, rivers: [], worldSize, numContinents, numSmallIslands, numLakes: 0, numRivers: 0, landPercent };
+
   progress('elevation');
 
   // ---- elevation, temperature, moisture ----

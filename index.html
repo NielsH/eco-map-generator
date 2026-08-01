@@ -16,7 +16,13 @@
   }
   *{box-sizing:border-box}
   body{margin:0; background:var(--bg); color:var(--text); font-family:var(--font); font-size:15px; line-height:1.5; padding:24px;}
-  .wrap{max-width:1360px; margin:0 auto;}
+  .wrap{max-width:1440px; margin:0 auto;}
+  #mainCols{display:flex; gap:22px; align-items:flex-start; margin-top:16px;}
+  #leftCol{flex:1 1 auto; min-width:0; display:flex; flex-direction:column;}
+  #leftCol > #panel{margin-top:0; order:0;}
+  #leftCol > #chartsPanel{order:-1;}   /* Underground sits above the map/designer, collapsed by default */
+  #mainCols > #cfgPanel{flex:0 0 344px; margin-top:0; position:sticky; top:10px; max-height:calc(100vh - 20px); overflow:auto;}
+  @media(max-width:1080px){ #mainCols{flex-direction:column;} #mainCols > #cfgPanel{flex:1 1 auto; width:100%; position:static; max-height:none;} }
   h1{font-size:21px; font-weight:600; margin:0 0 4px;}
   p.sub{color:var(--text2); margin:0 0 20px; font-size:14px;}
   #drop{border:1.5px dashed var(--border2); border-radius:12px; padding:22px; text-align:center; color:var(--text2);
@@ -41,6 +47,10 @@
   #panel{display:none; margin-top:18px;}
   #canvasWrap{display:inline-block; position:relative; border:0.5px solid var(--border); border-radius:12px; background:var(--surf); padding:8px; line-height:0;}
   canvas{border-radius:6px; max-width:100%; height:auto; image-rendering:auto; cursor:crosshair;}
+  #cv{width:100%;}   /* fill the left column so the map sits snug against the config sidebar */
+  #srcBox{border:0.5px solid var(--border); border-radius:10px; background:var(--surf); padding:6px 12px; margin-bottom:6px;}
+  #srcBox summary{cursor:pointer; font-weight:600; font-size:13px; user-select:none; padding:2px 0;}
+  #srcBox[open] summary{margin-bottom:6px;}
   #legend{display:flex; flex-wrap:wrap; gap:8px 16px; margin-top:12px; font-size:12px; color:var(--text2); align-items:center;}
   .sw{width:12px; height:12px; border-radius:2px; display:inline-block; vertical-align:-1px; margin-right:6px; border:0.5px solid var(--border);}
   #stats{font-size:13px; color:var(--text2); margin-top:10px;}
@@ -77,9 +87,9 @@
   .mixRow .pct{color:var(--muted); width:14px;}
   .mixRow .mact{color:var(--accent); width:70px; text-align:right; font-size:11.5px;}
   .mixRow.mixGrass input{background:var(--surf1); color:var(--text2);}
-  #chartsPanel{display:none; margin-top:20px;}
+  #chartsPanel{display:none; margin:0 0 14px; border:0.5px solid var(--border); border-radius:12px; background:var(--surf); padding:6px 14px 12px;}
+  #chartsPanel > summary{cursor:pointer; user-select:none; padding:4px 0; list-style-position:inside;}
   #chartTabs button{font-size:13px; padding:6px 13px;}
-  #oreTabs button{font-size:13px; padding:6px 13px;}
   #ovBiomes{display:flex; gap:6px; flex-wrap:wrap; margin:6px 0 2px;}
   #ovLane svg{max-width:100%;}
   #oreEditor{display:flex; flex-direction:column; gap:6px; margin:8px 0 12px;}
@@ -108,10 +118,6 @@
   .ovRow .ndel:hover{color:#c0392b; background:var(--surf);}
   .oreAdd{display:flex; gap:8px; padding:9px 0 5px;}
   .oreAdd button{font-size:12px; padding:4px 11px;}
-  #oreChartWrap{width:100%; overflow-x:auto; position:relative; border:0.5px solid var(--border); border-radius:12px; background:var(--surf); padding:6px 0; margin-top:4px;}
-  #oreChart svg{max-width:100%; height:auto;}
-  #oreTip{position:absolute; display:none; pointer-events:none; background:var(--surf); border:0.5px solid var(--border2); border-radius:var(--radius); padding:8px 10px; font-size:12px; line-height:1.5; max-width:250px; z-index:5; box-shadow:0 2px 10px rgba(0,0,0,.15);}
-  #oreLegend{display:flex; flex-wrap:wrap; gap:12px 18px; margin-top:12px; font-size:12px; color:var(--text2); align-items:center;}
   #blockChartWrap{width:100%; overflow-x:auto; position:relative; border:0.5px solid var(--border); border-radius:12px; background:var(--surf); padding:6px 0; margin-top:4px;}
   #blockChart svg{max-width:100%; height:auto;}
   #blockTip{position:absolute; display:none; pointer-events:none; background:var(--surf); border:0.5px solid var(--border2); border-radius:var(--radius); padding:8px 10px; font-size:12px; line-height:1.5; max-width:290px; z-index:5; box-shadow:0 2px 10px rgba(0,0,0,.15);}
@@ -120,28 +126,32 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>Eco WorldGen map preview</h1>
-  <p class="sub">A default Eco world is shown on load — drop, upload, or paste your own <code>WorldGenerator.eco</code> to replace it, or edit any knob below and regenerate. Previews the generated surface (biomes, elevation, climate, rivers &amp; lakes) and block/ore composition, entirely in your browser using a faithful port of the server's generator.</p>
 
-  <div id="drop">
-    <strong>Drop a WorldGenerator.eco file here</strong>, or <label style="color:var(--accent); cursor:pointer; text-decoration:underline">browse<input id="file" type="file" accept=".eco,.json,application/json" style="display:none"></label>
-    <div style="font-size:13px; margin-top:4px;">— or paste the JSON below —</div>
-  </div>
-  <textarea id="paste" placeholder="Paste WorldGenerator.eco JSON here, then click Generate"></textarea>
-  <div class="row">
-    <button class="primary" id="gen">Generate map</button>
+  <details id="srcBox" open>
+    <summary id="srcSummary">📁 Config source <span class="lbl">— using the default world · drop or paste your own below</span></summary>
+    <div id="drop" style="margin-top:8px">
+      <strong>Drop a WorldGenerator.eco file here</strong>, or <label style="color:var(--accent); cursor:pointer; text-decoration:underline">browse<input id="file" type="file" accept=".eco,.json,application/json" style="display:none"></label>
+      <div style="font-size:13px; margin-top:4px;">— or paste the JSON below —</div>
+    </div>
+    <textarea id="paste" placeholder="Paste WorldGenerator.eco JSON here, then click Load"></textarea>
+    <div class="row"><button class="primary" id="loadCfg">Load pasted config</button></div>
+  </details>
+  <div class="row" style="margin-top:8px">
     <span class="lbl">Seed override</span><input type="text" id="seed" placeholder="(from config)"><button id="randSeed" title="Random seed &amp; regenerate">🎲 Randomize</button>
-    <span class="lbl">Max render px</span><input type="number" id="maxpx" value="900" min="200" max="2000" step="100">
   </div>
   <div id="err"></div>
   <div id="meta"></div>
   <div id="prog">Generating… <span id="progPhase"></span><div class="bar"><div id="progBar"></div></div></div>
 
+  <div id="mainCols">
+  <div id="leftCol">
   <div id="panel">
-    <div class="row">
+    <div class="row" id="surfaceBar">
       <span class="lbl">Layer</span><span class="seg" id="layers"></span>
       <label class="lbl" style="display:inline-flex;align-items:center;gap:5px;margin-left:8px"><input type="checkbox" id="waterToggle" checked> Rivers &amp; lakes</label>
-      <button id="view3d" style="margin-left:auto">🧊 3D view</button>
+      <button id="designOpen" style="margin-left:auto">🎨 Design a map</button>
+      <button id="findOpen">🔍 Find a map</button>
+      <button id="view3d">🧊 3D view</button>
       <button id="expPng">Export PNG</button>
     </div>
     <div id="canvasWrap"><canvas id="cv"></canvas><div id="tip"></div></div>
@@ -152,7 +162,8 @@
       <div class="row" style="margin:4px 0 8px">
         <strong style="font-size:15px">🧊 3D voxel world</strong>
         <span class="lbl" id="view3dStatus" style="margin-left:6px"></span>
-        <button id="view3dClose" style="margin-left:auto">← Back to map</button>
+        <button id="view3dRefresh" style="margin-left:auto" title="Rebuild the 3D view from the current design/map">⟳ Refresh</button>
+        <button id="view3dClose" style="margin-left:8px">← Back to map</button>
       </div>
       <div id="view3dCanvas" style="width:100%;height:70vh;min-height:420px;border-radius:var(--radius);overflow:hidden;background:#8fbcd4;position:relative"></div>
       <div class="lbl" style="margin-top:6px"><b>Drag</b> to look around · <b>W A S D</b> move · <b>Space / Q</b> up · <b>Shift / E</b> down · scroll to change speed</div>
@@ -165,14 +176,15 @@
       </div>
       <div id="view3dBlocks" style="display:flex;flex-wrap:wrap;gap:5px 14px;font-size:12.5px"></div>
     </div>
+
+    <div id="designWrap" style="display:none"></div>
   </div>
 
-  <div id="chartsPanel">
-    <div class="row" style="margin:6px 0 4px;">
-      <strong style="font-size:15px;">Underground</strong>
-      <span class="seg" id="chartTabs" style="margin-left:4px">
+  <details id="chartsPanel">
+    <summary><strong style="font-size:15px;">🧱 Underground</strong> <span class="lbl">block composition &amp; ore editor — applies to the generated / authored world</span></summary>
+    <div class="row" style="margin:8px 0 4px;">
+      <span class="seg" id="chartTabs">
         <button type="button" data-tab="block" class="on">Block composition</button>
-        <button type="button" data-tab="ore">Ore distribution</button>
         <button type="button" data-tab="edit">Editor</button>
       </span>
     </div>
@@ -180,35 +192,13 @@
     <div id="blockTab">
       <div style="display:flex;align-items:center;gap:10px;margin:2px 0;flex-wrap:wrap;">
         <span class="lbl">what a column is made of, top to bottom, per biome</span>
-        <span class="lbl" style="margin-left:8px">Crushed</span><span class="seg" id="blkCrush"></span>
-        <span class="lbl" style="margin-left:8px">Ores</span><span class="seg" id="blkEmph"></span>
         <span class="lbl" id="blockMeta" style="margin-left:10px"></span>
       </div>
       <div id="blockChartWrap"><div id="blockChart"></div><div id="blockTip"></div></div>
       <div id="blockLegend"></div>
     </div>
 
-    <div id="oreTab" style="display:none">
-      <div style="display:flex;align-items:center;gap:10px;margin:2px 0;flex-wrap:wrap;">
-        <span class="lbl">where each material concentrates by biome &amp; depth</span>
-        <span class="lbl" style="margin-left:8px">Group by</span><span class="seg" id="oreGrp"></span>
-        <span class="lbl" style="margin-left:8px">Style</span><span class="seg" id="oreSty"></span>
-        <span class="lbl" style="margin-left:8px">Scale</span><span class="seg" id="oreScl"></span>
-        <span class="lbl" style="margin-left:8px">Seed spread</span><span class="seg" id="oreSpr"></span>
-        <span class="lbl" id="oreMeta" style="margin-left:10px"></span>
-      </div>
-      <div id="oreChartWrap"><div id="oreChart"></div><div id="oreTip"></div></div>
-      <div id="oreLegend"></div>
-    </div>
-
     <div id="editTab" style="display:none">
-      <div style="display:flex;align-items:center;gap:10px;margin:2px 0 6px;flex-wrap:wrap;">
-        <span class="seg" id="oreTabs">
-          <button type="button" data-tab="visual" class="on">Visual editor</button>
-          <button type="button" data-tab="manual">Manual knobs</button>
-        </span>
-        <button id="oreHandoff" style="margin-left:auto">Open in ore visualizer ↗</button>
-      </div>
       <div id="oreVisualTab">
         <div class="lbl" style="margin:4px 0 6px">Pick a biome — the column shows the whole mix at real world height (surface at its true Y, air above, smeared over the surface band), matching the block-composition chart. Click any block to edit it; drag a vein to move it, its top/bottom edges to resize its depth, its inner edge to change abundance, or a base-rock boundary to move where a layer ends.</div>
         <div id="ovBiomes"></div>
@@ -222,11 +212,8 @@
           </div>
         </div>
       </div>
-      <div id="oreManualTab" style="display:none">
-        <div class="lbl" style="margin:4px 0 8px">Edit veins &amp; scatter for every biome, add/remove nodes — the distribution chart updates live.</div>
-        <div id="oreEditor"></div>
-      </div>
     </div>
+  </details>
   </div>
 
   <div id="cfgPanel">
@@ -238,8 +225,10 @@
     <div class="cfgActions">
       <button class="primary" id="regen">Regenerate map</button>
       <button id="resetCfg">Reset to loaded</button>
-      <button id="dlEco" style="margin-left:auto">Download .eco</button>
+      <label class="lbl" style="display:inline-flex;align-items:center;gap:5px;margin-left:auto" title="Max canvas resolution for the 2D map render">Max render px <input type="number" id="maxpx" value="1200" min="200" max="2000" step="100" style="width:74px"></label>
+      <button id="dlEco">Download .eco</button>
     </div>
+  </div>
   </div>
 
 </div>
@@ -1177,6 +1166,13 @@ function generate(cfg, opts = {}) {
     }
     for (const [k, v] of result) k.biome = v;
   }
+
+  // Fast path for the inverse-design search: biome layout is fully decided here, so skip the
+  // (expensive) elevation/temperature/moisture, lakes and rivers passes. Polys carry no elevation
+  // in this mode; the search only reads p.biome + geometry. Coasts are not yet split warm/cold
+  // (that happens after rivers) — the search collapses all coasts to one class anyway.
+  if (opts.biomesOnly) return { polys, rivers: [], worldSize, numContinents, numSmallIslands, numLakes: 0, numRivers: 0, landPercent };
+
   progress('elevation');
 
   // ---- elevation, temperature, moisture ----
@@ -1854,6 +1850,232 @@ function meshChunkFromCols(chunk, hiddenArr, sliceTop) {
 
 
 
+// Inverse-design search core (Node-requirable; also inlined into the worker AND the main thread).
+//
+// The map generator has no spatial-placement knobs: WHERE a biome lands is a chaotic function of
+// the seed alone (see worldgen's balanceBiome — placement floods a terraced-noise priority field
+// whose seed comes off the master RNG). So "reproduce this drawing" is a best-of-N seed lottery,
+// not an optimization that converges. This module provides the machinery for that lottery:
+//   - a compact "score class" space (11 classes) that both the painter and a generated map map into,
+//   - a coarse rasterizer that turns generated polygons into a G x G class grid (a map "signature"),
+//   - a wrap-invariant similarity score (the world tiles toroidally, so we compare under the best
+//     cyclic shift), blending biome proportions, soft per-cell agreement, and land-shape IoU.
+//
+// Everything here is deterministic and dependency-free (reads only polygon geometry + biome names).
+
+// ---- score classes -----------------------------------------------------------------------------
+// A painter-friendly, generator-hittable subset. Steppe collapses to Grassland and HighDesert to
+// Desert (they share rasterized colors in the game anyway); all coasts merge (thin auto-generated
+// rings the user can't place precisely); DeepOcean+Ocean merge (shallow-vs-deep is automatic).
+const SCLASS = ['Ocean', 'Coast', 'Grassland', 'WarmForest', 'ColdForest', 'RainForest', 'Desert', 'Taiga', 'Tundra', 'Ice', 'Wetland'];
+const NUM_CLASSES = SCLASS.length;
+const SC = {}; SCLASS.forEach((n, i) => { SC[n] = i; });
+
+// Map a worldgen biome name (+ optional lake flag) to a score class.
+const NAME_TO_CLASS = {
+  DeepOcean: SC.Ocean, Ocean: SC.Ocean,
+  Coast: SC.Coast, ColdCoast: SC.Coast, WarmCoast: SC.Coast,
+  Grassland: SC.Grassland, Steppe: SC.Grassland,
+  WarmForest: SC.WarmForest, ColdForest: SC.ColdForest, RainForest: SC.RainForest,
+  Desert: SC.Desert, HighDesert: SC.Desert,
+  Taiga: SC.Taiga, Tundra: SC.Tundra, Ice: SC.Ice, Wetland: SC.Wetland,
+};
+function classOfName(name, hasLake) {
+  if (hasLake) return SC.Ocean;                 // lakes render as water
+  const c = NAME_TO_CLASS[name];
+  return c === undefined ? SC.Ocean : c;
+}
+
+// ---- class-similarity distance (0 = identical, 1 = maximally different) ------------------------
+// Land biomes are embedded in a (temperature, moisture) plane so "close" biomes (the forests,
+// grassland) get partial credit and "far" ones (desert vs ice) get almost none. Water/coast are
+// handled specially. This makes the score forgiving of near-misses and intuitive as a percentage.
+const EMB = {
+  Grassland: [0.55, 0.45], WarmForest: [0.70, 0.60], ColdForest: [0.35, 0.55], RainForest: [0.80, 0.85],
+  Desert: [0.85, 0.10], Taiga: [0.25, 0.50], Tundra: [0.15, 0.40], Ice: [0.02, 0.30], Wetland: [0.60, 0.95],
+};
+const DIST = (function () {
+  const d = [];
+  const isLand = c => c >= SC.Grassland;
+  for (let a = 0; a < NUM_CLASSES; a++) {
+    d.push(new Float32Array(NUM_CLASSES));
+    for (let b = 0; b < NUM_CLASSES; b++) {
+      if (a === b) { d[a][b] = 0; continue; }
+      const an = SCLASS[a], bn = SCLASS[b];
+      if (a === SC.Ocean || b === SC.Ocean) {
+        // ocean vs coast is a near miss; ocean vs land is total
+        d[a][b] = (a === SC.Coast || b === SC.Coast) ? 0.5 : 1.0;
+      } else if (a === SC.Coast || b === SC.Coast) {
+        d[a][b] = 0.7;                                   // coast vs land: mostly wrong but shoreline-adjacent
+      } else if (isLand(a) && isLand(b)) {
+        const pa = EMB[an], pb = EMB[bn];
+        const dt = pa[0] - pb[0], dm = pa[1] - pb[1];
+        d[a][b] = Math.min(1, Math.hypot(dt, dm) / 1.05);  // /~sqrt(2) so max spread ~1
+      } else {
+        d[a][b] = 1.0;
+      }
+    }
+  }
+  return d;
+})();
+
+// ---- coarse rasterizer: generated polygons -> G x G class grid ---------------------------------
+// Fill polygons into an intermediate R x R grid (R chosen a few px per Voronoi cell), then
+// majority-downsample to G x G. Scanline fill writes modulo R so the world wraps seamlessly.
+function fillPolyR(pts, R, cid, grid) {
+  const n = pts.length;
+  if (n < 3) return;
+  let minY = Infinity, maxY = -Infinity;
+  for (let i = 0; i < n; i++) { const y = pts[i].y; if (y < minY) minY = y; if (y > maxY) maxY = y; }
+  const yStart = Math.ceil(minY - 0.5), yEnd = Math.floor(maxY - 0.5);
+  const xs = [];
+  for (let yi = yStart; yi <= yEnd; yi++) {
+    const sy = yi + 0.5;
+    xs.length = 0;
+    for (let i = 0, j = n - 1; i < n; j = i++) {
+      const y0 = pts[j].y, y1 = pts[i].y;
+      if ((y0 <= sy && y1 > sy) || (y1 <= sy && y0 > sy)) {
+        const t = (sy - y0) / (y1 - y0);
+        xs.push(pts[j].x + t * (pts[i].x - pts[j].x));
+      }
+    }
+    if (xs.length < 2) continue;
+    xs.sort((a, b) => a - b);
+    const wy = ((yi % R) + R) % R;
+    for (let k = 0; k + 1 < xs.length; k += 2) {
+      const xStart = Math.ceil(xs[k] - 0.5), xEnd = Math.floor(xs[k + 1] - 0.5);
+      for (let xi = xStart; xi <= xEnd; xi++) {
+        const wx = ((xi % R) + R) % R;
+        grid[wy * R + wx] = cid;
+      }
+    }
+  }
+}
+
+function rasterClassR(polys, worldSize, R) {
+  const grid = new Uint8Array(R * R);   // 0 == Ocean, matching the server clearing biome map to ocean
+  const sc = R / worldSize;
+  const sp = [];
+  for (let pi = 0; pi < polys.length; pi++) {
+    const p = polys[pi];
+    const cid = classOfName(p.biome.name, p.hasLake);
+    const pts = p.points, n = pts.length;
+    const cx = p.center.x * sc, cy = p.center.y * sc;
+    sp.length = n;
+    for (let i = 0; i < n; i++) {
+      const x = pts[i].x * sc, y = pts[i].y * sc;
+      const dx = x - cx, dy = y - cy, len = Math.hypot(dx, dy) || 1;
+      sp[i] = { x: x + dx / len * 0.9, y: y + dy / len * 0.9 };   // fudge ~1px so cells overlap (no seam gaps)
+    }
+    fillPolyR(sp, R, cid, grid);
+  }
+  return grid;
+}
+
+function downsampleMajority(grid, R, G) {
+  const out = new Uint8Array(G * G);
+  const bs = R / G;
+  const tally = new Int32Array(NUM_CLASSES);
+  for (let gy = 0; gy < G; gy++) {
+    const y0 = Math.floor(gy * bs), y1 = Math.max(y0 + 1, Math.min(R, Math.floor((gy + 1) * bs)));
+    for (let gx = 0; gx < G; gx++) {
+      const x0 = Math.floor(gx * bs), x1 = Math.max(x0 + 1, Math.min(R, Math.floor((gx + 1) * bs)));
+      tally.fill(0);
+      for (let y = y0; y < y1; y++) { const row = y * R; for (let x = x0; x < x1; x++) tally[grid[row + x]]++; }
+      let best = 0, bc = -1;
+      for (let c = 0; c < NUM_CLASSES; c++) if (tally[c] > bc) { bc = tally[c]; best = c; }
+      out[gy * G + gx] = best;
+    }
+  }
+  return out;
+}
+
+// Turn generated polygons into the G x G class-grid "signature" used for scoring & previews.
+function classGridAt(polys, worldSize, G) {
+  const R = Math.min(worldSize, Math.max(4 * G, 256));   // a few intermediate px per coarse cell
+  return downsampleMajority(rasterClassR(polys, worldSize, R), R, G);
+}
+
+// ---- similarity scoring ------------------------------------------------------------------------
+function histogram(grid) {
+  const h = new Float64Array(NUM_CLASSES);
+  for (let i = 0; i < grid.length; i++) h[grid[i]]++;
+  const inv = grid.length ? 1 / grid.length : 0;
+  for (let c = 0; c < NUM_CLASSES; c++) h[c] *= inv;
+  return h;
+}
+function proportionScore(target, cand) {
+  const ht = histogram(target), hc = histogram(cand);
+  let tvd = 0; for (let c = 0; c < NUM_CLASSES; c++) tvd += Math.abs(ht[c] - hc[c]);
+  return 1 - 0.5 * tvd;   // 1 - total-variation distance, in [0,1]
+}
+// mean class-distance between target and cand shifted by (sx,sy); lower is better
+function meanDistAt(target, cand, G, sx, sy) {
+  let sum = 0;
+  for (let y = 0; y < G; y++) {
+    const cyr = (((y + sy) % G) + G) % G;
+    for (let x = 0; x < G; x++) {
+      const cxr = (((x + sx) % G) + G) % G;
+      sum += DIST[target[y * G + x]][cand[cyr * G + cxr]];
+    }
+  }
+  return sum / (G * G);
+}
+// Best toroidal shift (minimizing mean class-distance) via a coarse full scan + local refine.
+// A global scan is used (not a centroid seed) because a mostly-land map has no meaningful land
+// centroid, so a local search would miss the true alignment. Cost is ~1M distance lookups for
+// G=64 — trivial next to the ~1s it takes to generate the candidate being scored.
+function bestShift(target, cand, G) {
+  const stride = Math.max(1, Math.round(G / 16));   // ~constant coarse-scan positions, so cost stays ~O(cells) not O(G^4)
+  let bx = 0, by = 0, best = Infinity;
+  for (let sy = 0; sy < G; sy += stride) for (let sx = 0; sx < G; sx += stride) {
+    const d = meanDistAt(target, cand, G, sx, sy);
+    if (d < best) { best = d; bx = sx; by = sy; }
+  }
+  if (stride > 1) {
+    const r = stride - 1;
+    const cx = bx, cy = by;
+    for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+      if (dx === 0 && dy === 0) continue;
+      const d = meanDistAt(target, cand, G, cx + dx, cy + dy);
+      if (d < best) { best = d; bx = ((cx + dx) % G + G) % G; by = ((cy + dy) % G + G) % G; }
+    }
+  }
+  return { sx: bx, sy: by, dist: best };
+}
+// Score a candidate class grid against the target. opts.layoutWeight in [0,1] trades biome-mix
+// fidelity (0) against spatial-layout fidelity (1). Wrap-invariant: finds the best cyclic shift.
+function scoreGrids(target, cand, G, opts) {
+  opts = opts || {};
+  const w = opts.layoutWeight == null ? 0.6 : opts.layoutWeight;
+  const prop = proportionScore(target, cand);
+
+  const bs = bestShift(target, cand, G);
+  const bestSx = bs.sx, bestSy = bs.sy, bestDist = bs.dist;
+
+  // metrics at the best shift
+  let exact = 0, inter = 0, uni = 0;
+  for (let y = 0; y < G; y++) {
+    const cyr = (((y + bestSy) % G) + G) % G;
+    for (let x = 0; x < G; x++) {
+      const cxr = (((x + bestSx) % G) + G) % G;
+      const t = target[y * G + x], c = cand[cyr * G + cxr];
+      if (t === c) exact++;
+      const lt = t !== SC.Ocean, lc = c !== SC.Ocean;
+      if (lt || lc) { uni++; if (lt && lc) inter++; }
+    }
+  }
+  const cells = G * G;
+  const soft = 1 - bestDist;               // partial-credit agreement
+  const exactFrac = exact / cells;
+  const iou = uni ? inter / uni : 1;       // land-shape overlap
+  const layout = 0.5 * soft + 0.3 * iou + 0.2 * exactFrac;
+  const score = (1 - w) * prop + w * layout;
+  return { score, prop, soft, exact: exactFrac, iou, layout, shift: [bestSx, bestSy] };
+}
+
+
+
 const C = { CsRandom, Perlin, RidgedMulti, ScaleBias, gradientCoherentNoise3D, setVectorTable, NQ };
 
 const G = { poissonSamples, Voronoi };
@@ -1861,14 +2083,14 @@ const G = { poissonSamples, Voronoi };
 bindVoxel(C);
 
 let lastRes = null;   // keep the last generate() result so the 3D view can request raster grids lazily
-let vGrid = null, vCtx = null, vChunks = null;   // 3D voxel view: raster grid, terrain ctx, per-chunk column cache
+let vGrid = null, vCtx = null, vChunks = null, vSource = null;   // 3D voxel view: raster grid, terrain ctx, per-chunk column cache, and which view built it ('map'|'authored')
 onmessage = function (e) {
   const m = e.data;
   if (m.type === 'init') { setVectorTable(m.vt); postMessage({ type: 'ready' }); return; }
   if (m.type === 'gen') {
     try {
       const res = generate(m.cfg, { progress: s => postMessage({ type: 'progress', phase: s }) });
-      lastRes = res; vGrid = null; vCtx = null; vChunks = null;   // stale 3D caches
+      lastRes = res; vGrid = null; vCtx = null; vChunks = null; vSource = null;   // stale 3D caches
       const polys = res.polys.map(p => {
         const pts = new Float32Array(p.points.length * 2);
         for (let i = 0; i < p.points.length; i++) { pts[i*2] = p.points[i].x; pts[i*2+1] = p.points[i].y; }
@@ -1884,7 +2106,7 @@ onmessage = function (e) {
   if (m.type === '3d-init') {
     try {
       if (!lastRes) { postMessage({ type: 'v3d-error', message: 'No world generated yet' }); return; }
-      if (vCtx && vCtx._deposits && vGrid) {   // reuse the precomputed layer on reopen (invalidated on regenerate)
+      if (vCtx && vCtx._deposits && vGrid && vSource === 'map') {   // reuse the precomputed layer on reopen (invalidated on regenerate / authored preview)
         postMessage({ type: 'v3d-ready', W: vGrid.W, waterLevel: m.cfg.waterLevel, maxGenerationHeight: m.cfg.maxGenerationHeight,
           gray: vGrid.gray.slice(), biome: vGrid.biome.slice(), biomeNames: vGrid.biomeNames });
         return;
@@ -1896,11 +2118,41 @@ onmessage = function (e) {
       vCtx.grayAt = (x, z) => gray[z * W + x];
       vCtx.biomeAt = (x, z) => names[biome[z * W + x]];
       computeDeposits(vCtx, vGrid, (ph, f) => postMessage({ type: 'v3d-progress', phase: ph, frac: f }));   // precompute the ore-vein overlay
-      vChunks = new Map();
+      vChunks = new Map(); vSource = 'map';
       const grayCopy = gray.slice(), biomeCopy = biome.slice();   // copies so the worker keeps its grids
       postMessage({ type: 'v3d-ready', W: W, waterLevel: cfg.waterLevel, maxGenerationHeight: cfg.maxGenerationHeight,
         gray: grayCopy, biome: biomeCopy, biomeNames: names },
         [grayCopy.buffer, biomeCopy.buffer]);
+    } catch (err) { postMessage({ type: 'v3d-error', message: String(err && err.stack || err) }); }
+  }
+  // Authored design -> 3D: build the voxel grids straight from the painted biome + height maps
+  // (upscaled to world size, painter classes mapped to real biomes), then reuse the same chunk mesher.
+  if (m.type === '3d-authored') {
+    try {
+      const cfg = m.cfg, Gg = m.G, W = cfg.worldWidth * 10;
+      const src = m.biome, hsrc = m.height;
+      const CLS2RB = [RB_ID.DeepOcean, RB_ID.WarmCoast, RB_ID.Grassland, RB_ID.WarmForest, RB_ID.ColdForest, RB_ID.RainForest, RB_ID.Desert, RB_ID.Taiga, RB_ID.Tundra, RB_ID.Ice, RB_ID.Wetland];
+      const biome = new Uint8Array(W * W), gray = new Uint8Array(W * W);
+      const wrap = (v, n) => ((v % n) + n) % n;
+      for (let z = 0; z < W; z++) for (let x = 0; x < W; x++) {
+        const xc = (x * Gg / W) | 0, zc = (z * Gg / W) | 0, cls = src[zc * Gg + xc];        // biome: nearest upscale
+        biome[z * W + x] = cls < CLS2RB.length ? CLS2RB[cls] : RB_ID.DeepOcean;
+        const fx = (x + 0.5) * Gg / W - 0.5, fz = (z + 0.5) * Gg / W - 0.5;                  // height: bilinear + toroidal (matches the mod)
+        const x0 = Math.floor(fx), z0 = Math.floor(fz), tx = fx - x0, tz = fz - z0;
+        const x0w = wrap(x0, Gg), x1w = wrap(x0 + 1, Gg), z0w = wrap(z0, Gg), z1w = wrap(z0 + 1, Gg);
+        const v00 = hsrc[z0w * Gg + x0w], v10 = hsrc[z0w * Gg + x1w], v01 = hsrc[z1w * Gg + x0w], v11 = hsrc[z1w * Gg + x1w];
+        const top = v00 + (v10 - v00) * tx, bot = v01 + (v11 - v01) * tx;
+        gray[z * W + x] = Math.round(top + (bot - top) * tz);
+      }
+      vGrid = { W: W, biome: biome, gray: gray, biomeNames: RASTER_BIOMES };
+      vCtx = initTerrain(m.terrain, cfg);
+      vCtx.grayAt = (x, z) => gray[z * W + x];
+      vCtx.biomeAt = (x, z) => RASTER_BIOMES[biome[z * W + x]];
+      computeDeposits(vCtx, vGrid, (ph, f) => postMessage({ type: 'v3d-progress', phase: ph, frac: f }));
+      vChunks = new Map(); vSource = 'authored';
+      const grayCopy = gray.slice(), biomeCopy = biome.slice();
+      postMessage({ type: 'v3d-ready', W: W, waterLevel: cfg.waterLevel, maxGenerationHeight: cfg.maxGenerationHeight,
+        gray: grayCopy, biome: biomeCopy, biomeNames: RASTER_BIOMES }, [grayCopy.buffer, biomeCopy.buffer]);
     } catch (err) { postMessage({ type: 'v3d-error', message: String(err && err.stack || err) }); }
   }
   if (m.type === 'chunk') {
@@ -1915,7 +2167,27 @@ onmessage = function (e) {
     } catch (err) { postMessage({ type: 'v3d-error', message: String(err && err.stack || err) }); }
   }
   if (m.type === 'chunkdrop') { if (vChunks) vChunks.delete(m.cx + ',' + m.cz); }
+  // ---- inverse-design search (own message types) ----
+  if (m.type === 'classgrid') {   // coarse class-grid signature of the current map (for "seed from current map")
+    try {
+      if (!lastRes) { postMessage({ type: 'classgrid', grid: null }); return; }
+      const grid = classGridAt(lastRes.polys, lastRes.worldSize, m.G);
+      postMessage({ type: 'classgrid', G: m.G, grid }, [grid.buffer]);
+    } catch (err) { postMessage({ type: 'search-error', message: String(err && err.stack || err) }); }
+  }
+  if (m.type === 'search-init') { sTarget = m.target; sG = m.G; sW = m.layoutWeight; postMessage({ type: 'search-ready' }); }
+  if (m.type === 'search-eval') {   // generate one candidate (biomes only), rasterize + score vs the target
+    try {
+      const res = generate(m.cfg, { biomesOnly: true });
+      const grid = classGridAt(res.polys, res.worldSize, sG);
+      const s = scoreGrids(sTarget, grid, sG, { layoutWeight: sW });
+      postMessage({ type: 'search-result', seed: m.cfg.seed, jobId: m.jobId, grid,
+        score: s.score, prop: s.prop, soft: s.soft, exact: s.exact, iou: s.iou, layout: s.layout, shift: s.shift,
+        landPercent: res.landPercent }, [grid.buffer]);
+    } catch (err) { postMessage({ type: 'search-error', jobId: m.jobId, message: String(err && err.stack || err) }); }
+  }
 };
+let sTarget = null, sG = 64, sW = 0.6;
 </script>
 <script type="text/plain" id="vtsrc">-0.763874,-0.596439,-0.246489,0,0.396055,0.904518,-0.158073,0,-0.499004,-0.8665,-0.0131631,0,0.468724,-0.824756,0.316346,0,0.829598,0.43195,0.353816,0,-0.454473,0.629497,-0.630228,0,-0.162349,-0.869962,-0.465628,0,0.932805,0.253451,0.256198,0,-0.345419,0.927299,-0.144227,0,-0.715026,-0.293698,-0.634413,0,-0.245997,0.717467,-0.651711,0,-0.967409,-0.250435,-0.037451,0,0.901729,0.397108,-0.170852,0,0.892657,-0.0720622,-0.444938,0,0.0260084,-0.0361701,0.999007,0,0.949107,-0.19486,0.247439,0,0.471803,-0.807064,-0.355036,0,0.879737,0.141845,0.453809,0,0.570747,0.696415,0.435033,0,-0.141751,-0.988233,-0.0574584,0,-0.58219,-0.0303005,0.812488,0,-0.60922,0.239482,-0.755975,0,0.299394,-0.197066,-0.933557,0,-0.851615,-0.220702,-0.47544,0,0.848886,0.341829,-0.403169,0,-0.156129,-0.687241,0.709453,0,-0.665651,0.626724,0.405124,0,0.595914,-0.674582,0.43569,0,0.171025,-0.509292,0.843428,0,0.78605,0.536414,-0.307222,0,0.18905,-0.791613,0.581042,0,-0.294916,0.844994,0.446105,0,0.342031,-0.58736,-0.7335,0,0.57155,0.7869,0.232635,0,0.885026,-0.408223,0.223791,0,-0.789518,0.571645,0.223347,0,0.774571,0.31566,0.548087,0,-0.79695,-0.0433603,-0.602487,0,-0.142425,-0.473249,-0.869339,0,-0.0698838,0.170442,0.982886,0,0.687815,-0.484748,0.540306,0,0.543703,-0.534446,-0.647112,0,0.97186,0.184391,-0.146588,0,0.707084,0.485713,-0.513921,0,0.942302,0.331945,0.043348,0,0.499084,0.599922,0.625307,0,-0.289203,0.211107,0.9337,0,0.412433,-0.71667,-0.56239,0,0.87721,-0.082816,0.47291,0,-0.420685,-0.214278,0.881538,0,0.752558,-0.0391579,0.657361,0,0.0765725,-0.996789,0.0234082,0,-0.544312,-0.309435,-0.779727,0,-0.455358,-0.415572,0.787368,0,-0.874586,0.483746,0.0330131,0,0.245172,-0.0838623,0.965846,0,0.382293,-0.432813,0.81641,0,-0.287735,-0.905514,0.311853,0,-0.667704,0.704955,-0.239186,0,0.717885,-0.464002,-0.518983,0,0.976342,-0.214895,0.0240053,0,-0.0733096,-0.921136,0.382276,0,-0.986284,0.151224,-0.0661379,0,-0.899319,-0.429671,0.0812908,0,0.652102,-0.724625,0.222893,0,0.203761,0.458023,-0.865272,0,-0.030396,0.698724,-0.714745,0,-0.460232,0.839138,0.289887,0,-0.0898602,0.837894,0.538386,0,-0.731595,0.0793784,0.677102,0,-0.447236,-0.788397,0.422386,0,0.186481,0.645855,-0.740335,0,-0.259006,0.935463,0.240467,0,0.445839,0.819655,-0.359712,0,0.349962,0.755022,-0.554499,0,-0.997078,-0.0359577,0.0673977,0,-0.431163,-0.147516,-0.890133,0,0.299648,-0.63914,0.708316,0,0.397043,0.566526,-0.722084,0,-0.502489,0.438308,-0.745246,0,0.0687235,0.354097,0.93268,0,-0.0476651,-0.462597,0.885286,0,-0.221934,0.900739,-0.373383,0,-0.956107,-0.225676,0.186893,0,-0.187627,0.391487,-0.900852,0,-0.224209,-0.315405,0.92209,0,-0.730807,-0.537068,0.421283,0,-0.0353135,-0.816748,0.575913,0,-0.941391,0.176991,-0.287153,0,-0.154174,0.390458,0.90762,0,-0.283847,0.533842,0.796519,0,-0.482737,-0.850448,0.209052,0,-0.649175,0.477748,0.591886,0,0.885373,-0.405387,-0.227543,0,-0.147261,0.181623,-0.972279,0,0.0959236,-0.115847,-0.988624,0,-0.89724,-0.191348,0.397928,0,0.903553,-0.428461,-0.00350461,0,0.849072,-0.295807,-0.437693,0,0.65551,0.741754,-0.141804,0,0.61598,-0.178669,0.767232,0,0.0112967,0.932256,-0.361623,0,-0.793031,0.258012,0.551845,0,0.421933,0.454311,0.784585,0,-0.319993,0.0401618,-0.946568,0,-0.81571,0.551307,-0.175151,0,-0.377644,0.00322313,0.925945,0,0.129759,-0.666581,-0.734052,0,0.601901,-0.654237,-0.457919,0,-0.927463,-0.0343576,-0.372334,0,-0.438663,-0.868301,-0.231578,0,-0.648845,-0.749138,-0.133387,0,0.507393,-0.588294,0.629653,0,0.726958,0.623665,0.287358,0,0.411159,0.367614,-0.834151,0,0.806333,0.585117,-0.0864016,0,0.263935,-0.880876,0.392932,0,0.421546,-0.201336,0.884174,0,-0.683198,-0.569557,-0.456996,0,-0.117116,-0.0406654,-0.992285,0,-0.643679,-0.109196,-0.757465,0,-0.561559,-0.62989,0.536554,0,0.0628422,0.104677,-0.992519,0,0.480759,-0.2867,-0.828658,0,-0.228559,-0.228965,-0.946222,0,-0.10194,-0.65706,-0.746914,0,0.0689193,-0.678236,0.731605,0,0.401019,-0.754026,0.52022,0,-0.742141,0.547083,-0.387203,0,-0.00210603,-0.796417,-0.604745,0,0.296725,-0.409909,-0.862513,0,-0.260932,-0.798201,0.542945,0,-0.641628,0.742379,0.192838,0,-0.186009,-0.101514,0.97729,0,0.106711,-0.962067,0.251079,0,-0.743499,0.30988,-0.592607,0,-0.795853,-0.605066,-0.0226607,0,-0.828661,-0.419471,-0.370628,0,0.0847218,-0.489815,-0.8677,0,-0.381405,0.788019,-0.483276,0,0.282042,-0.953394,0.107205,0,0.530774,0.847413,0.0130696,0,0.0515397,0.922524,0.382484,0,-0.631467,-0.709046,0.313852,0,0.688248,0.517273,0.508668,0,0.646689,-0.333782,-0.685845,0,-0.932528,-0.247532,-0.262906,0,0.630609,0.68757,-0.359973,0,0.577805,-0.394189,0.714673,0,-0.887833,-0.437301,-0.14325,0,0.690982,0.174003,0.701617,0,-0.866701,0.0118182,0.498689,0,-0.482876,0.727143,0.487949,0,-0.577567,0.682593,-0.447752,0,0.373768,0.0982991,0.922299,0,0.170744,0.964243,-0.202687,0,0.993654,-0.035791,-0.106632,0,0.587065,0.4143,-0.695493,0,-0.396509,0.26509,-0.878924,0,-0.0866853,0.83553,-0.542563,0,0.923193,0.133398,-0.360443,0,0.00379108,-0.258618,0.965972,0,0.239144,0.245154,-0.939526,0,0.758731,-0.555871,0.33961,0,0.295355,0.309513,0.903862,0,0.0531222,-0.91003,-0.411124,0,0.270452,0.0229439,-0.96246,0,0.563634,0.0324352,0.825387,0,0.156326,0.147392,0.976646,0,-0.0410141,0.981824,0.185309,0,-0.385562,-0.576343,-0.720535,0,0.388281,0.904441,0.176702,0,0.945561,-0.192859,-0.262146,0,0.844504,0.520193,0.127325,0,0.0330893,0.999121,-0.0257505,0,-0.592616,-0.482475,-0.644999,0,0.539471,0.631024,-0.557476,0,0.655851,-0.027319,-0.754396,0,0.274465,0.887659,0.369772,0,-0.123419,0.975177,-0.183842,0,-0.223429,0.708045,0.66989,0,-0.908654,0.196302,0.368528,0,-0.95759,-0.00863708,0.288005,0,0.960535,0.030592,0.276472,0,-0.413146,0.907537,0.0754161,0,-0.847992,0.350849,-0.397259,0,0.614736,0.395841,0.68221,0,-0.503504,-0.666128,-0.550234,0,-0.268833,-0.738524,-0.618314,0,0.792737,-0.60001,-0.107502,0,-0.637582,0.508144,-0.579032,0,0.750105,0.282165,-0.598101,0,-0.351199,-0.392294,-0.850155,0,0.250126,-0.960993,-0.118025,0,-0.732341,0.680909,-0.0063274,0,-0.760674,-0.141009,0.633634,0,0.222823,-0.304012,0.926243,0,0.209178,0.505671,0.836984,0,0.757914,-0.56629,-0.323857,0,-0.782926,-0.339196,0.52151,0,-0.462952,0.585565,0.665424,0,0.61879,0.194119,-0.761194,0,0.741388,-0.276743,0.611357,0,0.707571,0.702621,0.0752872,0,0.156562,0.819977,0.550569,0,-0.793606,0.440216,0.42,0,0.234547,0.885309,-0.401517,0,0.132598,0.80115,-0.58359,0,-0.377899,-0.639179,0.669808,0,-0.865993,-0.396465,0.304748,0,-0.624815,-0.44283,0.643046,0,-0.485705,0.825614,-0.287146,0,-0.971788,0.175535,0.157529,0,-0.456027,0.392629,0.798675,0,-0.0104443,0.521623,-0.853112,0,-0.660575,-0.74519,0.091282,0,-0.0157698,-0.307475,-0.951425,0,-0.603467,-0.250192,0.757121,0,0.506876,0.25006,0.824952,0,0.255404,0.966794,0.00884498,0,0.466764,-0.874228,-0.133625,0,0.475077,-0.0682351,-0.877295,0,-0.224967,-0.938972,-0.260233,0,-0.377929,-0.814757,-0.439705,0,-0.305847,0.542333,-0.782517,0,0.26658,-0.902905,-0.337191,0,0.0275773,0.322158,-0.946284,0,0.018542199999999998,0.716349,0.697496,0,-0.20483,0.978416,0.0273371,0,-0.898276,0.373969,0.230752,0,-0.00909378,0.546594,0.837349,0,0.6602,-0.751089,0.000959236,0,0.855301,-0.303056,0.420259,0,0.797138,0.0623013,-0.600574,0,0.48947,-0.86681299999999994,0.0951509,0,0.251142,0.674531,0.694216,0,-0.578422,-0.737373,-0.348867,0,-0.254689,-0.514807,0.818601,0,0.374972,0.761612,0.528529,0,0.640303,-0.734271,-0.225517,0,-0.638076,0.285527,0.715075,0,0.772956,-0.15984,-0.613995,0,0.798217,-0.590628,0.118356,0,-0.986276,-0.0578337,-0.154644,0,-0.312988,-0.94549,0.0899272,0,-0.497338,0.178325,0.849032,0,-0.101136,-0.981014,0.165477,0,-0.521688,0.0553434,-0.851339,0,-0.786182,-0.583814,0.202678,0,-0.565191,0.821858,-0.0714658,0,0.437895,0.152598,-0.885981,0,-0.92394,0.353436,-0.14635,0,0.212189,-0.815162,-0.538969,0,-0.859262,0.143405,-0.491024,0,0.991353,0.112814,0.0670273,0,0.0337884,-0.979891,-0.196654,0</script>
 <script type="application/json" id="defaultcfg">{
@@ -7030,13 +7302,11 @@ var Render3D = (function () {
   // ---- streaming ----
   function streamChunks() {
     if (!meta) return;
-    var nC = Math.ceil(meta.W / CHUNK);
     var ccx = Math.floor(camera.position.x / CHUNK), ccz = Math.floor(camera.position.z / CHUNK);
     var want = [];
     for (var dz = -RENDER_DIST; dz <= RENDER_DIST; dz++)
       for (var dx = -RENDER_DIST; dx <= RENDER_DIST; dx++) {
-        var cx = ccx + dx, cz = ccz + dz;
-        if (cx < 0 || cz < 0 || cx >= nC || cz >= nC) continue;
+        var cx = ccx + dx, cz = ccz + dz;   // no bounds clamp: the worker wraps chunk data (toroidal), so the world tiles seamlessly
         var key = cx + ',' + cz;
         if (chunks.has(key) || pending.has(key)) continue;
         want.push({ key: key, cx: cx, cz: cz, d: dx * dx + dz * dz });
@@ -7111,7 +7381,8 @@ var Render3D = (function () {
   function updateHud() {
     if (!hud) return;
     var p = camera.position, b = biomeAt(p.x, p.z);
-    hud.textContent = 'Y ' + Math.round(p.y) + '   X ' + Math.round(p.x) + '  Z ' + Math.round(p.z) +
+    var wrap = v => Wg ? Math.round(((v % Wg) + Wg) % Wg) : Math.round(v);   // torus: report position within [0, W)
+    hud.textContent = 'Y ' + Math.round(p.y) + '   X ' + wrap(p.x) + '  Z ' + wrap(p.z) +
       (b ? '   ·   ' + b : '') + (curSlice != null ? '   ✂ cutaway' : '');
   }
 
@@ -7186,6 +7457,231 @@ var Render3D = (function () {
   return { init: init, setWorld: setWorld, onChunkMesh: onChunkMesh, setHidden: setHidden,
     start: start, stop: stop, resize: resize, isReady: function () { return !!renderer; } };
 })();
+</script>
+<script>// Inverse-design search core (Node-requirable; also inlined into the worker AND the main thread).
+//
+// The map generator has no spatial-placement knobs: WHERE a biome lands is a chaotic function of
+// the seed alone (see worldgen's balanceBiome — placement floods a terraced-noise priority field
+// whose seed comes off the master RNG). So "reproduce this drawing" is a best-of-N seed lottery,
+// not an optimization that converges. This module provides the machinery for that lottery:
+//   - a compact "score class" space (11 classes) that both the painter and a generated map map into,
+//   - a coarse rasterizer that turns generated polygons into a G x G class grid (a map "signature"),
+//   - a wrap-invariant similarity score (the world tiles toroidally, so we compare under the best
+//     cyclic shift), blending biome proportions, soft per-cell agreement, and land-shape IoU.
+//
+// Everything here is deterministic and dependency-free (reads only polygon geometry + biome names).
+
+// ---- score classes -----------------------------------------------------------------------------
+// A painter-friendly, generator-hittable subset. Steppe collapses to Grassland and HighDesert to
+// Desert (they share rasterized colors in the game anyway); all coasts merge (thin auto-generated
+// rings the user can't place precisely); DeepOcean+Ocean merge (shallow-vs-deep is automatic).
+const SCLASS = ['Ocean', 'Coast', 'Grassland', 'WarmForest', 'ColdForest', 'RainForest', 'Desert', 'Taiga', 'Tundra', 'Ice', 'Wetland'];
+const NUM_CLASSES = SCLASS.length;
+const SC = {}; SCLASS.forEach((n, i) => { SC[n] = i; });
+
+// Map a worldgen biome name (+ optional lake flag) to a score class.
+const NAME_TO_CLASS = {
+  DeepOcean: SC.Ocean, Ocean: SC.Ocean,
+  Coast: SC.Coast, ColdCoast: SC.Coast, WarmCoast: SC.Coast,
+  Grassland: SC.Grassland, Steppe: SC.Grassland,
+  WarmForest: SC.WarmForest, ColdForest: SC.ColdForest, RainForest: SC.RainForest,
+  Desert: SC.Desert, HighDesert: SC.Desert,
+  Taiga: SC.Taiga, Tundra: SC.Tundra, Ice: SC.Ice, Wetland: SC.Wetland,
+};
+function classOfName(name, hasLake) {
+  if (hasLake) return SC.Ocean;                 // lakes render as water
+  const c = NAME_TO_CLASS[name];
+  return c === undefined ? SC.Ocean : c;
+}
+
+// ---- class-similarity distance (0 = identical, 1 = maximally different) ------------------------
+// Land biomes are embedded in a (temperature, moisture) plane so "close" biomes (the forests,
+// grassland) get partial credit and "far" ones (desert vs ice) get almost none. Water/coast are
+// handled specially. This makes the score forgiving of near-misses and intuitive as a percentage.
+const EMB = {
+  Grassland: [0.55, 0.45], WarmForest: [0.70, 0.60], ColdForest: [0.35, 0.55], RainForest: [0.80, 0.85],
+  Desert: [0.85, 0.10], Taiga: [0.25, 0.50], Tundra: [0.15, 0.40], Ice: [0.02, 0.30], Wetland: [0.60, 0.95],
+};
+const DIST = (function () {
+  const d = [];
+  const isLand = c => c >= SC.Grassland;
+  for (let a = 0; a < NUM_CLASSES; a++) {
+    d.push(new Float32Array(NUM_CLASSES));
+    for (let b = 0; b < NUM_CLASSES; b++) {
+      if (a === b) { d[a][b] = 0; continue; }
+      const an = SCLASS[a], bn = SCLASS[b];
+      if (a === SC.Ocean || b === SC.Ocean) {
+        // ocean vs coast is a near miss; ocean vs land is total
+        d[a][b] = (a === SC.Coast || b === SC.Coast) ? 0.5 : 1.0;
+      } else if (a === SC.Coast || b === SC.Coast) {
+        d[a][b] = 0.7;                                   // coast vs land: mostly wrong but shoreline-adjacent
+      } else if (isLand(a) && isLand(b)) {
+        const pa = EMB[an], pb = EMB[bn];
+        const dt = pa[0] - pb[0], dm = pa[1] - pb[1];
+        d[a][b] = Math.min(1, Math.hypot(dt, dm) / 1.05);  // /~sqrt(2) so max spread ~1
+      } else {
+        d[a][b] = 1.0;
+      }
+    }
+  }
+  return d;
+})();
+
+// ---- coarse rasterizer: generated polygons -> G x G class grid ---------------------------------
+// Fill polygons into an intermediate R x R grid (R chosen a few px per Voronoi cell), then
+// majority-downsample to G x G. Scanline fill writes modulo R so the world wraps seamlessly.
+function fillPolyR(pts, R, cid, grid) {
+  const n = pts.length;
+  if (n < 3) return;
+  let minY = Infinity, maxY = -Infinity;
+  for (let i = 0; i < n; i++) { const y = pts[i].y; if (y < minY) minY = y; if (y > maxY) maxY = y; }
+  const yStart = Math.ceil(minY - 0.5), yEnd = Math.floor(maxY - 0.5);
+  const xs = [];
+  for (let yi = yStart; yi <= yEnd; yi++) {
+    const sy = yi + 0.5;
+    xs.length = 0;
+    for (let i = 0, j = n - 1; i < n; j = i++) {
+      const y0 = pts[j].y, y1 = pts[i].y;
+      if ((y0 <= sy && y1 > sy) || (y1 <= sy && y0 > sy)) {
+        const t = (sy - y0) / (y1 - y0);
+        xs.push(pts[j].x + t * (pts[i].x - pts[j].x));
+      }
+    }
+    if (xs.length < 2) continue;
+    xs.sort((a, b) => a - b);
+    const wy = ((yi % R) + R) % R;
+    for (let k = 0; k + 1 < xs.length; k += 2) {
+      const xStart = Math.ceil(xs[k] - 0.5), xEnd = Math.floor(xs[k + 1] - 0.5);
+      for (let xi = xStart; xi <= xEnd; xi++) {
+        const wx = ((xi % R) + R) % R;
+        grid[wy * R + wx] = cid;
+      }
+    }
+  }
+}
+
+function rasterClassR(polys, worldSize, R) {
+  const grid = new Uint8Array(R * R);   // 0 == Ocean, matching the server clearing biome map to ocean
+  const sc = R / worldSize;
+  const sp = [];
+  for (let pi = 0; pi < polys.length; pi++) {
+    const p = polys[pi];
+    const cid = classOfName(p.biome.name, p.hasLake);
+    const pts = p.points, n = pts.length;
+    const cx = p.center.x * sc, cy = p.center.y * sc;
+    sp.length = n;
+    for (let i = 0; i < n; i++) {
+      const x = pts[i].x * sc, y = pts[i].y * sc;
+      const dx = x - cx, dy = y - cy, len = Math.hypot(dx, dy) || 1;
+      sp[i] = { x: x + dx / len * 0.9, y: y + dy / len * 0.9 };   // fudge ~1px so cells overlap (no seam gaps)
+    }
+    fillPolyR(sp, R, cid, grid);
+  }
+  return grid;
+}
+
+function downsampleMajority(grid, R, G) {
+  const out = new Uint8Array(G * G);
+  const bs = R / G;
+  const tally = new Int32Array(NUM_CLASSES);
+  for (let gy = 0; gy < G; gy++) {
+    const y0 = Math.floor(gy * bs), y1 = Math.max(y0 + 1, Math.min(R, Math.floor((gy + 1) * bs)));
+    for (let gx = 0; gx < G; gx++) {
+      const x0 = Math.floor(gx * bs), x1 = Math.max(x0 + 1, Math.min(R, Math.floor((gx + 1) * bs)));
+      tally.fill(0);
+      for (let y = y0; y < y1; y++) { const row = y * R; for (let x = x0; x < x1; x++) tally[grid[row + x]]++; }
+      let best = 0, bc = -1;
+      for (let c = 0; c < NUM_CLASSES; c++) if (tally[c] > bc) { bc = tally[c]; best = c; }
+      out[gy * G + gx] = best;
+    }
+  }
+  return out;
+}
+
+// Turn generated polygons into the G x G class-grid "signature" used for scoring & previews.
+function classGridAt(polys, worldSize, G) {
+  const R = Math.min(worldSize, Math.max(4 * G, 256));   // a few intermediate px per coarse cell
+  return downsampleMajority(rasterClassR(polys, worldSize, R), R, G);
+}
+
+// ---- similarity scoring ------------------------------------------------------------------------
+function histogram(grid) {
+  const h = new Float64Array(NUM_CLASSES);
+  for (let i = 0; i < grid.length; i++) h[grid[i]]++;
+  const inv = grid.length ? 1 / grid.length : 0;
+  for (let c = 0; c < NUM_CLASSES; c++) h[c] *= inv;
+  return h;
+}
+function proportionScore(target, cand) {
+  const ht = histogram(target), hc = histogram(cand);
+  let tvd = 0; for (let c = 0; c < NUM_CLASSES; c++) tvd += Math.abs(ht[c] - hc[c]);
+  return 1 - 0.5 * tvd;   // 1 - total-variation distance, in [0,1]
+}
+// mean class-distance between target and cand shifted by (sx,sy); lower is better
+function meanDistAt(target, cand, G, sx, sy) {
+  let sum = 0;
+  for (let y = 0; y < G; y++) {
+    const cyr = (((y + sy) % G) + G) % G;
+    for (let x = 0; x < G; x++) {
+      const cxr = (((x + sx) % G) + G) % G;
+      sum += DIST[target[y * G + x]][cand[cyr * G + cxr]];
+    }
+  }
+  return sum / (G * G);
+}
+// Best toroidal shift (minimizing mean class-distance) via a coarse full scan + local refine.
+// A global scan is used (not a centroid seed) because a mostly-land map has no meaningful land
+// centroid, so a local search would miss the true alignment. Cost is ~1M distance lookups for
+// G=64 — trivial next to the ~1s it takes to generate the candidate being scored.
+function bestShift(target, cand, G) {
+  const stride = Math.max(1, Math.round(G / 16));   // ~constant coarse-scan positions, so cost stays ~O(cells) not O(G^4)
+  let bx = 0, by = 0, best = Infinity;
+  for (let sy = 0; sy < G; sy += stride) for (let sx = 0; sx < G; sx += stride) {
+    const d = meanDistAt(target, cand, G, sx, sy);
+    if (d < best) { best = d; bx = sx; by = sy; }
+  }
+  if (stride > 1) {
+    const r = stride - 1;
+    const cx = bx, cy = by;
+    for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+      if (dx === 0 && dy === 0) continue;
+      const d = meanDistAt(target, cand, G, cx + dx, cy + dy);
+      if (d < best) { best = d; bx = ((cx + dx) % G + G) % G; by = ((cy + dy) % G + G) % G; }
+    }
+  }
+  return { sx: bx, sy: by, dist: best };
+}
+// Score a candidate class grid against the target. opts.layoutWeight in [0,1] trades biome-mix
+// fidelity (0) against spatial-layout fidelity (1). Wrap-invariant: finds the best cyclic shift.
+function scoreGrids(target, cand, G, opts) {
+  opts = opts || {};
+  const w = opts.layoutWeight == null ? 0.6 : opts.layoutWeight;
+  const prop = proportionScore(target, cand);
+
+  const bs = bestShift(target, cand, G);
+  const bestSx = bs.sx, bestSy = bs.sy, bestDist = bs.dist;
+
+  // metrics at the best shift
+  let exact = 0, inter = 0, uni = 0;
+  for (let y = 0; y < G; y++) {
+    const cyr = (((y + bestSy) % G) + G) % G;
+    for (let x = 0; x < G; x++) {
+      const cxr = (((x + bestSx) % G) + G) % G;
+      const t = target[y * G + x], c = cand[cyr * G + cxr];
+      if (t === c) exact++;
+      const lt = t !== SC.Ocean, lc = c !== SC.Ocean;
+      if (lt || lc) { uni++; if (lt && lc) inter++; }
+    }
+  }
+  const cells = G * G;
+  const soft = 1 - bestDist;               // partial-credit agreement
+  const exactFrac = exact / cells;
+  const iou = uni ? inter / uni : 1;       // land-shape overlap
+  const layout = 0.5 * soft + 0.3 * iou + 0.2 * exactFrac;
+  const score = (1 - w) * prop + w * layout;
+  return { score, prop, soft, exact: exactFrac, iou, layout, shift: [bestSx, bestSy] };
+}
+
 </script>
 <script>
 "use strict";
@@ -7313,7 +7809,7 @@ function fieldHtml([key, label, type, step]) {
 function buildForm() {
   const host = $('cfgForm'); host.innerHTML = '';
   CFG_GROUPS.forEach(([title, fields], gi) => {
-    const d = document.createElement('details'); if (gi < 3) d.open = true;
+    const d = document.createElement('details');   // all groups collapsed by default — expand what you need
     if (title === 'Biome mix') { d.innerHTML = `<summary>${title}</summary>` + biomeMixHtml(fields); host.appendChild(d); return; }
     d.innerHTML = `<summary>${title}</summary><div class="cfgGrid">${fields.map(fieldHtml).join('')}</div>`;
     host.appendChild(d);
@@ -7445,10 +7941,10 @@ function readForm() {
 // ---- generation ----
 function generateMap(cfg) {
   $('err').textContent = '';
-  renderPx = Math.max(200, Math.min(2000, +$('maxpx').value || 900));
+  renderPx = Math.max(200, Math.min(2000, ($('maxpx') && +$('maxpx').value) || 900));
   cfgUsed = cfg;
   $('meta').innerHTML = `World <b>${cfg.worldWidth*10}×${cfg.worldLength*10} m</b> · seed <b>${cfg.seed}</b> · point radius ${cfg.pointRadius}`;
-  $('gen').disabled = true; $('regen').disabled = true;
+  $('loadCfg').disabled = true; $('regen').disabled = true;
   $('prog').style.display = 'block'; $('progBar').style.width = '8%'; $('progPhase').textContent = 'sampling…';
 
   if (!worker) worker = makeWorker();
@@ -7458,13 +7954,13 @@ function generateMap(cfg) {
     const m = e.data;
     if (m.type === 'ready') { worker.postMessage({ type: 'gen', cfg }); return; }
     if (m.type === 'progress') { $('progPhase').textContent = m.phase + '…'; $('progBar').style.width = (phases[m.phase]||10) + '%'; return; }
-    if (m.type === 'error') { $('err').textContent = 'Generation failed: ' + m.message; $('gen').disabled = false; $('regen').disabled = false; $('prog').style.display='none'; return; }
+    if (m.type === 'error') { $('err').textContent = 'Generation failed: ' + m.message; $('loadCfg').disabled = false; $('regen').disabled = false; $('prog').style.display='none'; return; }
     if (m.type === 'done') {
       $('progBar').style.width = '100%';
       result = m;   // 3D voxel caches (grid/terrain/chunks) are invalidated worker-side on each 'gen'
       updateMixActuals(m);
-      if (terrain) { const ej = buildExportJson(); OreChart.render(ej); BlockChart.render(ej); }   // keep charts' biome present/absent + water line in sync
-      $('gen').disabled = false; $('regen').disabled = false;
+      if (terrain) { const ej = buildExportJson(); BlockChart.render(ej); }   // keep charts' biome present/absent + water line in sync
+      $('loadCfg').disabled = false; $('regen').disabled = false;
       setTimeout(() => { $('prog').style.display = 'none'; }, 300);
       $('panel').style.display = 'block';
       scale = renderPx / m.worldSize;
@@ -7477,7 +7973,7 @@ function generateMap(cfg) {
   else { worker.postMessage({ type: 'init', vt: VT }); workerReady = true; }
 }
 // parse a pasted/loaded config, fill the form, then generate
-function loadConfigText(text) {
+function loadConfigText(text, userInitiated) {
   text = (text || '').trim();
   $('err').textContent = '';
   if (!text) { $('err').textContent = 'Paste or drop a WorldGenerator.eco config first.'; return; }
@@ -7491,7 +7987,11 @@ function loadConfigText(text) {
   buildOreEditor();
   OreVisual.build();
   $('chartsPanel').style.display = terrain ? 'block' : 'none';
-  if (terrain) { const ej = buildExportJson(); OreChart.render(ej); BlockChart.render(ej); }
+  if (terrain) { const ej = buildExportJson(); BlockChart.render(ej); }
+  if (userInitiated) {   // collapse the source area only after the user loads their own config (not the initial default)
+    const sb = $('srcBox'); if (sb) sb.open = false;
+    const ss = $('srcSummary'); if (ss) ss.innerHTML = '📁 Config source <span class="lbl">— loaded · click to load another</span>';
+  }
   generateMap(cfg);
 }
 function generateFromForm() {
@@ -7631,7 +8131,8 @@ function oreAdd(bi, type) {
 }
 function oreRemove(idx) { const e = oreNodes[idx]; if (!e) return; const i = e.sub.indexOf(e.node); if (i >= 0) e.sub.splice(i, 1); buildOreEditor(); OreVisual.build(); scheduleOreRender(); }
 function buildOreEditor() {
-  const host = $('oreEditor'); host.innerHTML = ''; oreNodes = [];
+  const host = $('oreEditor'); if (!host) return;   // manual-knobs editor removed; kept as a safe no-op for shared callers
+  host.innerHTML = ''; oreNodes = [];
   if (!terrain || !terrain.Modules) { host.innerHTML = '<div class="lbl">This config has no TerrainModule to edit.</div>'; return; }
   const opts = collectBlockTypes();
   terrain.Modules.forEach((bm, bi) => {
@@ -7676,7 +8177,7 @@ function wireOreEditor() {
   host.querySelectorAll('button[data-add]').forEach(b => b.addEventListener('click', () => oreAdd(+b.dataset.b, b.dataset.add)));
 }
 let oreRenderTimer = null;
-function scheduleOreRender() { clearTimeout(oreRenderTimer); oreRenderTimer = setTimeout(() => { if (terrain) { const ej = buildExportJson(); OreChart.render(ej); BlockChart.render(ej); } }, 150); }
+function scheduleOreRender() { clearTimeout(oreRenderTimer); oreRenderTimer = setTimeout(() => { if (terrain) { const ej = buildExportJson(); BlockChart.render(ej); } }, 150); }
 
 // ---- visual ore editor: per-biome depth lane where each vein/scatter is a draggable object ----
 // Drag an object's body to move its DepthRange, drag its right edge to change abundance (SpawnPercentChance /
@@ -7952,174 +8453,9 @@ const OreVisual = (function () {
   return { build, init };
 })();
 
-// ---- ore-distribution chart (port of WorldGenOreVisualizer) ----
-const OreChart = (function () {
-  const ELEV = { Grassland:[.02,.4], WarmForest:[.1,.5], ColdForest:[.1,.7], RainForest:[.1,.5], Desert:[.02,.2], Taiga:[.3,1], Tundra:[.4,1], Ice:[.6,1], Wetland:[.02,.3], ColdCoast:[.05,.1], WarmCoast:[.05,.1] };
-  const WEIGHTF = { RainForest:'RainforestWeight', WarmForest:'WarmForestWeight', ColdForest:'CoolForestWeight', Taiga:'TaigaWeight', Tundra:'TundraWeight', Ice:'IceWeight', Desert:'DesertWeight', Wetland:'WetlandWeight' };
-  const ALWAYS = { Grassland:1, ColdCoast:1, WarmCoast:1 };
-  const biomeOrder = ['Desert','Grassland','Wetland','WarmForest','RainForest','WarmCoast','ColdCoast','ColdForest','Taiga','Tundra','Ice'];
-  const oreOrder = ['iron','copper','gold','coal','sulfur','peat','limestone','clay'];
-  function extract(cfg) {
-    const idmap = {};
-    (function idx(o){ if (o && typeof o === 'object'){ if (!Array.isArray(o) && o['$id']) idmap[o['$id']] = o; for (const k in o) idx(o[k]); } })(cfg);
-    const deref = o => (o && o['$ref'] != null) ? idmap[o['$ref']] : o;
-    const btype = bt => { bt = deref(bt); return (bt && bt.Type) ? bt.Type : ''; };
-    const rng = (o, k, d) => { const r = o[k]; if (!r) return d; return [r.min != null ? r.min : d[0], r.max != null ? r.max : d[1]]; };
-    const meanW = o => { const dw = o.DirectionWeights || []; if (!dw.length) return [1,1,1]; let x=0,y=0,z=0; for (let i=0;i<dw.length;i++){x+=dw[i].X||0;y+=dw[i].Y||0;z+=dw[i].Z||0;} return [x/dw.length,y/dw.length,z/dw.length]; };
-    const boost = (wx,wy,wz) => { wx=Math.max(wx,1e-6);wy=Math.max(wy,1e-6);wz=Math.max(wz,1e-6); return Math.pow(wy,2/3)/Math.pow(wx*wz,1/3); };
-    let weights = null;
-    (function find(o){ if (weights||!o||typeof o!=='object') return; if (!Array.isArray(o)&&(o.CoolForestWeight!=null||o.DesertWeight!=null)){weights=o;return;} for (const k in o) find(o[k]); })(cfg);
-    const WL = cfg.WaterLevel != null ? cfg.WaterLevel : 60, MG = cfg.MaxGenerationHeight != null ? cfg.MaxGenerationHeight : 120;
-    const surfOf = name => { const e = ELEV[name] || [.1,.5]; return [Math.round(WL + e[0]*(MG-WL)), Math.round(WL + e[1]*(MG-WL))]; };
-    const presentOf = name => { if (ALWAYS[name]) return true; if (!weights) return true; const f = WEIGHTF[name]; if (!f) return true; return (weights[f]||0) > 0; };
-    const terr = deref(cfg.TerrainModule); if (!terr || !terr.Modules) throw new Error('No TerrainModule.Modules');
-    const out = {}; const add = (b,o,m) => { const k = b+'|'+o; (out[k]=out[k]||[]).push(m); };
-    terr.Modules.forEach(bm => { bm = deref(bm); const name = bm.BiomeName; if (!ELEV[name]) return;
-      const dm = deref(bm.Module); const ranges = (dm && dm.BlockDepthRanges) || [];
-      ranges.forEach(bdr => { bdr = deref(bdr); const pm = oreMaterial(btype(bdr.BlockType));
-        if (pm) add(name, pm, { t:'strat', a:Math.max(0,bdr.Min|0), b:Math.max(bdr.Min|0,bdr.Max|0), w:0.6 });
-        (bdr.SubModules||[]).forEach(sm => { sm = deref(sm); const ty = sm['$type']||''; const mat = oreMaterial(btype(sm.BlockType)); if (!mat) return;
-          if (ty.indexOf('StandardTerrainModule') >= 0) { const r = rng(sm,'DepthRange',[0,200]); add(name, mat, { t:'std', a:r[0]|0, b:r[1]|0, w:sm.PercentChance!=null?sm.PercentChance:0.05 }); }
-          else if (ty.indexOf('DepositTerrainModule') >= 0) { const sr = rng(sm,'DepthRange',[0,200]), br = rng(sm,'DepositDepthRange',[0,200]); const bc = rng(sm,'BlocksCountRange',[1,1]); const N = (bc[0]+bc[1])/2; const mw = meanW(sm);
-            const spc = sm.SpawnPercentChance!=null?sm.SpawnPercentChance:0.01;
-            add(name, mat, { t:'dep', sa:sr[0]|0, sb:sr[1]|0, ba:Math.min(sr[0],br[0])|0, bb:Math.max(sr[1],br[1])|0, w:spc*N, spc:spc, bo:boost(mw[0],mw[1],mw[2]), N:N }); }
-        });
-      });
-    });
-    const entries = []; for (const k in out) { const p = k.split('|'); entries.push({ bi:p[0], ore:p[1], surf:surfOf(p[0]), on:presentOf(p[0]), mods:out[k] }); }
-    // Seed-to-seed spread: each deposit is an independent per-block Bernoulli roll, so the count of deposit
-    // seed-points on one map is ~Poisson. Relative spread of a module is 1/sqrt(expected count); scatter has a
-    // huge count (~zero spread), rare deposits in rare biomes have few (visible spread). Combine per cell by
-    // error propagation over each module's integrated contribution. Areas are in blocks² (chance is per block).
-    // Prefer the actually-generated map for world area and biome coverage; fall back to config + constants when
-    // no map has been generated yet. Ocean is its own biome key, so per-biome coverage already excludes it.
-    let wsum = 0; if (weights) for (const bn in WEIGHTF) wsum += (weights[WEIGHTF[bn]]||0);
-    const fallbackFrac = name => { const f = WEIGHTF[name]; if (f) return Math.max(0, (weights && weights[f])||0);
-      if (name === 'Grassland') return Math.max(0.03, 1 - wsum); return 0.04; }; // coasts are thin strips
-    const dims = deref(cfg.Dimensions) || {};
-    const cfgArea = (((dims.WorldWidth|0)||72)*10) * (((dims.WorldLength|0)||72)*10);
-    const LANDSHARE = 0.6; // rough land fraction, used only in the no-map fallback
-    const map = (result && result.stats && result.worldSize) ? result : null;
-    let cellArea; // land area (blocks²) of a given ore-chart biome
-    if (map) { const worldArea = map.worldSize * map.worldSize, counts = map.stats.counts;
-      let tot = 0; for (const k in counts) tot += counts[k]; tot = tot || 1;
-      cellArea = name => { const c = counts[name]||0; return c > 0 ? worldArea*(c/tot) : cfgArea*LANDSHARE*fallbackFrac(name); }; }
-    else cellArea = name => cfgArea * LANDSHARE * fallbackFrac(name);
-    entries.forEach(e => { const area = cellArea(e.bi); let vSum = 0, iSum = 0, depI = 0, lam = 0;
-      e.mods.forEach(m => {
-        if (m.t === 'dep') { const band = Math.max(1, m.sb - m.sa + 1);
-          const lambda = Math.max(1e-6, m.spc * area * band); lam += lambda;
-          const I = m.w, cv = 1 / Math.sqrt(lambda); vSum += (I*cv)*(I*cv); iSum += I; depI += I; }
-        else iSum += m.w * Math.max(1, (m.b - m.a + 1)); }); // scatter: effectively zero variance
-      e.cv = iSum > 0 ? Math.min(1.5, Math.sqrt(vSum) / iSum) : 0; e.lambda = lam;
-      e.depShare = iSum > 0 ? depI / iSum : 0; }); // how much of this ore comes from sparse deposits vs steady scatter
-    return { entries, WL, MG, spreadFromMap: !!map };
-  }
-  let Ymax = 125, DMAX = 210;
-  function depthProfile(e) {
-    const arr = new Array(DMAX+1).fill(0);
-    e.mods.forEach(m => {
-      if (m.t === 'std' || m.t === 'strat') { for (let d = Math.max(0,m.a); d <= m.b && d <= DMAX; d++) arr[d] += m.w; return; }
-      const ey = 0.62*Math.cbrt(m.N)*m.bo, h = Math.max(1, Math.round(ey));
-      const base = new Array(DMAX+1).fill(0); for (let d = Math.max(0,m.sa); d <= m.sb && d <= DMAX; d++) base[d] = 1;
-      const sm = new Array(DMAX+1).fill(0);
-      for (let d = 0; d <= DMAX; d++) { let acc=0,ws=0; for (let k=-h;k<=h;k++){ const wk=h+1-Math.abs(k), dd=d-k; if (dd>=0&&dd<=DMAX) acc+=base[dd]*wk; ws+=wk; } sm[d]=acc/ws; }
-      for (let d2 = 0; d2 <= DMAX; d2++) if (d2 < m.ba || d2 > m.bb) sm[d2] = 0;
-      let tot = 0; for (let d3 = 0; d3 <= DMAX; d3++) tot += sm[d3];
-      if (tot > 0) for (let d4 = 0; d4 <= DMAX; d4++) arr[d4] += sm[d4]/tot*m.w;
-    });
-    return arr;
-  }
-  function smearY(dp, surf) { const lo=surf[0],hi=surf[1],cnt=hi-lo+1,arr=[];
-    for (let Y=0;Y<=Ymax;Y++){ let sum=0; for (let sft=lo;sft<=hi;sft++){ const d=sft-Y; sum+=(d>=0&&d<=DMAX)?dp[d]:0; } arr.push(sum/cnt); }
-    const sm=[]; for (let Y2=0;Y2<=Ymax;Y2++){ const a=arr[Math.max(0,Y2-1)],b=arr[Y2],c=arr[Math.min(Ymax,Y2+1)]; sm.push((a+2*b+c)/4); } return sm; }
-  let D=null, gMax=0, oreMax={}, layout=[], curW=0, plotR=0, svgEl=null, hvLine=null, hvRect=null, H=0, tipEl=null, wrapEl=null;
-  const padTop=48, sc=2.4, x0=64, subW=34, gap=10;
-  const state = { mode:'ore', style:'violin', scale:'global', spread:'off' };
-  const cssv = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-  const py = Y => padTop + (Ymax-Y)*sc;
-  function buildGroups(mode) { const E=D.entries, groups=[];
-    if (mode === 'ore') oreOrder.forEach(o => { const cells=E.filter(e=>e.ore===o).sort((a,b)=>biomeOrder.indexOf(a.bi)-biomeOrder.indexOf(b.bi)); if (cells.length) groups.push({label:ORE_NAME[o],color:ORE_COL[o],on:true,cells,sub:e=>ORE_DISP[e.bi]+(e.on?'':'*')}); });
-    else biomeOrder.forEach(b => { const cells=E.filter(e=>e.bi===b).sort((a,b2)=>oreOrder.indexOf(a.ore)-oreOrder.indexOf(b2.ore)); if (cells.length) groups.push({label:ORE_DISP[b]+(cells[0].on?'':'*'),color:null,on:cells[0].on,cells,sub:e=>ORE_NAME[e.ore]}); });
-    return groups; }
-  function render() {
-    if (!D) return;
-    const cT=cssv('--text'),cS=cssv('--text2'),cM=cssv('--muted'),cB=cssv('--border'),water=cssv('--water')||'#3987e5';
-    const groups=buildGroups(state.mode), MINGW=82; let totalSlots=0; groups.forEach(g=>{ g.slot=Math.max(g.cells.length*subW,MINGW); totalSlots+=g.slot; });
-    curW=x0+totalSlots+(groups.length-1)*gap+14; plotR=curW-14; layout=[]; const maxHW=subW/2-2, barHW=10;
-    let s='<svg id="oreSvg" xmlns="http://www.w3.org/2000/svg" width="'+curW+'" height="'+H+'" viewBox="0 0 '+curW+' '+H+'" style="display:block;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">';
-    const step=Ymax>140?40:20, ticks=[]; for (let t=0;t<=Ymax;t+=step) ticks.push(t);
-    for (let i=0;i<ticks.length;i++){ const ty=py(ticks[i]); s+='<line x1="'+x0+'" y1="'+ty+'" x2="'+plotR+'" y2="'+ty+'" stroke="'+cB+'" stroke-width="1"/><text x="'+(x0-8)+'" y="'+(ty+4)+'" text-anchor="end" fill="'+cM+'" font-size="11">'+ticks[i]+'</text>'; }
-    s+='<text x="12" y="'+py(Ymax*0.86)+'" fill="'+cS+'" font-size="12" transform="rotate(-90 12 '+py(Ymax*0.86)+')">World height (Y)</text>';
-    const wy=py(D.WL); s+='<line x1="'+x0+'" y1="'+wy+'" x2="'+plotR+'" y2="'+wy+'" stroke="'+water+'" stroke-width="1.4" stroke-dasharray="5 4"/><text x="'+plotR+'" y="'+(wy-5)+'" text-anchor="end" fill="'+water+'" font-size="10.5">water Y'+D.WL+'</text>';
-    s+='<rect id="oreHvr" x="0" y="0" width="0" height="0" fill="'+cM+'" fill-opacity="0.10" style="display:none"/>';
-    let cx=x0;
-    groups.forEach(g => { const gStart=cx, slot=g.slot, cellsW=g.cells.length*subW; let cellx=gStart+(slot-cellsW)/2; const hcol=g.color?cT:(g.on?cT:cM);
-      s+='<text x="'+(gStart+slot/2)+'" y="20" text-anchor="middle" fill="'+hcol+'" font-size="12.5" font-weight="600">'+g.label+'</text>';
-      if (g.color) s+='<rect x="'+(cellx+4)+'" y="26" width="'+(cellsW-8)+'" height="3" rx="1.5" fill="'+g.color+'"/>'; else s+='<line x1="'+(cellx+4)+'" y1="27" x2="'+(cellx+cellsW-4)+'" y2="27" stroke="'+cB+'" stroke-width="1"/>';
-      g.cells.forEach(e => { const bx=cellx, scx=bx+subW/2, col=ORE_COL[e.ore], dim=e.on?1:0.5; const norm=(state.scale==='global'?gMax:(oreMax[e.ore]||1))||1; const syT=py(Math.min(e.surf[1],Ymax)),syB=py(e.surf[0]);
-        s+='<rect x="'+(bx+2)+'" y="'+syT+'" width="'+(subW-4)+'" height="'+(syB-syT)+'" fill="'+cM+'" fill-opacity="0.08"/><line x1="'+(bx+2)+'" y1="'+syT+'" x2="'+(bx+subW-2)+'" y2="'+syT+'" stroke="'+cM+'" stroke-width="1" stroke-opacity="0.35" stroke-dasharray="2 2"/>';
-        if (state.style === 'violin') { const halo=state.spread==='on'&&e.cv>0.02, hwCap=subW/2-0.5;
-          for (let Y=0;Y<=Ymax;Y++){ const nv=e.prof[Y]/norm; if (nv<=0.004) continue; const rt=Math.sqrt(nv), hw=Math.max(1.1,rt*maxHW), op=(0.26+0.6*rt)*dim, yy=py(Y)-sc/2, hgt=(sc+0.5).toFixed(1);
-            if (halo){ const hw2=Math.min(hwCap,hw*(1+e.cv)); s+='<rect x="'+(scx-hw2).toFixed(1)+'" y="'+yy.toFixed(1)+'" width="'+(hw2*2).toFixed(1)+'" height="'+hgt+'" fill="'+col+'" fill-opacity="'+(0.13*dim).toFixed(2)+'"/>'; }
-            s+='<rect x="'+(scx-hw).toFixed(1)+'" y="'+yy.toFixed(1)+'" width="'+(hw*2).toFixed(1)+'" height="'+hgt+'" fill="'+col+'" fill-opacity="'+op.toFixed(2)+'"/>'; } }
-        else { let ylo=1e9,yhi=-1; for (let Y2=0;Y2<=Ymax;Y2++){ if (e.prof[Y2]/norm>0.03){ if (Y2<ylo)ylo=Y2; if (Y2>yhi)yhi=Y2; } } if (yhi>0){ const bt=py(yhi); s+='<rect x="'+(scx-barHW)+'" y="'+bt+'" width="'+(barHW*2)+'" height="'+(py(ylo)-bt)+'" rx="2" fill="'+col+'" fill-opacity="'+(0.82*dim).toFixed(2)+'"/>'; } }
-        s+='<text transform="rotate(-42 '+scx+' '+(H-48)+')" x="'+scx+'" y="'+(H-48)+'" text-anchor="end" fill="'+(e.on?cS:cM)+'" font-size="10">'+g.sub(e)+'</text>';
-        layout.push({x0:bx,x1:bx+subW,e}); cellx+=subW;
-      });
-      cx=gStart+slot+gap;
-    });
-    s+='<line id="oreHvl" x1="0" y1="0" x2="0" y2="0" stroke="'+cT+'" stroke-width="1" stroke-opacity="0.5" stroke-dasharray="3 3" style="display:none"/></svg>';
-    $('oreChart').innerHTML=s; svgEl=$('oreSvg'); hvLine=$('oreHvl'); hvRect=$('oreHvr');
-    svgEl.addEventListener('mousemove', onMove);
-    svgEl.addEventListener('mouseleave', () => { tipEl.style.display='none'; hvLine.style.display='none'; hvRect.style.display='none'; });
-  }
-  function onMove(e) {
-    const cM=cssv('--muted'),cS=cssv('--text2'); const r=svgEl.getBoundingClientRect();
-    const sx=(e.clientX-r.left)*(curW/r.width), sy=(e.clientY-r.top)*(H/r.height); const Y=Math.round(Ymax-(sy-padTop)/sc); let col=null;
-    for (let i=0;i<layout.length;i++){ if (sx>=layout[i].x0&&sx<layout[i].x1){ col=layout[i]; break; } }
-    if (!col||Y<0||Y>Ymax){ tipEl.style.display='none'; hvLine.style.display='none'; hvRect.style.display='none'; return; }
-    const en=col.e, val=en.prof[Y], gi=val/gMax*100, po=val/(oreMax[en.ore]||1)*100;
-    hvLine.setAttribute('x1',x0); hvLine.setAttribute('x2',plotR); hvLine.setAttribute('y1',py(Y)); hvLine.setAttribute('y2',py(Y)); hvLine.style.display='block';
-    hvRect.setAttribute('x',col.x0); hvRect.setAttribute('y',padTop); hvRect.setAttribute('width',subW); hvRect.setAttribute('height',Ymax*sc); hvRect.style.display='block';
-    const sm=(en.surf[0]+en.surf[1])/2, dep=Math.round(sm-Y); const depL=dep>=0?('≈ '+dep+' blocks deep'):('~ '+(-dep)+' above surface');
-    const giTxt=gi>=1?Math.round(gi):(gi>0.05?'<1':'0'); let bodyH;
-    if (gi<0.4 && po<2) bodyH='<div style="color:'+cM+'">negligible '+ORE_NAME[en.ore].toLowerCase()+' here</div>';
-    else bodyH='<div>Density index <span style="font-weight:600;color:'+ORE_COL[en.ore]+'">'+giTxt+'</span> / 100 <span style="color:'+cM+'">global</span></div><div style="color:'+cS+'">'+Math.round(po)+'% of peak '+ORE_NAME[en.ore].toLowerCase()+'</div>';
-    const absent=en.on?'':'<div style="color:'+cM+'">* not generated on this map</div>';
-    let spreadH='';
-    if (en.lambda>0){ const pct=Math.round(en.cv*100), depN='≈'+Math.round(Math.max(1,en.lambda))+' deposits/map';
-      if (en.cv<0.05 && en.depShare<0.5) spreadH='<div style="color:'+cS+'">steady across seeds <span style="color:'+cM+'">(scatter-dominated · '+depN+')</span></div>';
-      else { const lbl=en.cv<0.05?'barely varies':(en.cv<0.2?'mild seed variance':'high seed variance');
-        spreadH='<div style="color:'+cS+'">seed spread ±'+pct+'% · '+depN+' <span style="color:'+cM+'">('+lbl+')</span></div>'; } }
-    tipEl.innerHTML='<div style="font-weight:600">'+ORE_DISP[en.bi]+' · '+ORE_NAME[en.ore]+'</div><div style="color:'+cS+'">Y '+Y+' · '+depL+'</div>'+bodyH+spreadH+absent; tipEl.style.display='block';
-    const wr=wrapEl.getBoundingClientRect(); tipEl.style.left=(e.clientX-wr.left+wrapEl.scrollLeft+14)+'px'; tipEl.style.top=(e.clientY-wr.top+12)+'px';
-  }
-  function renderFromCfg(cfg) {
-    try { D = extract(cfg); } catch (ex) { $('oreChart').innerHTML='<div class="lbl" style="padding:12px">Ore chart unavailable: ' + ex.message + '</div>'; return; }
-    Ymax = Math.max(120, Math.ceil(D.MG/20)*20); DMAX = Ymax+90; H = padTop+Ymax*sc+70; gMax = 0; oreMax = {};
-    D.entries.forEach(e => { e.prof = smearY(depthProfile(e), e.surf); e.pk = 0; e.prof.forEach(v => { if (v>gMax) gMax=v; if (v>e.pk) e.pk=v; }); if (e.pk>(oreMax[e.ore]||0)) oreMax[e.ore]=e.pk; }); if (gMax<=0) gMax=1;
-    $('oreMeta').textContent = D.entries.length + ' biome×material bands · water Y' + D.WL + ' · gen height ' + D.MG
-      + ' · seed spread ' + (D.spreadFromMap ? 'from generated map' : 'estimated (generate for real coverage)');
-    render();
-  }
-  function seg(id, opts, key) { const c=$(id); c.innerHTML=''; opts.forEach(o => { const b=document.createElement('button'); b.textContent=o.label; b.onclick=()=>{ state[key]=o.val; [...c.children].forEach(x=>x.classList.toggle('on', x===b)); render(); }; if (o.val===state[key]) b.className='on'; c.appendChild(b); }); }
-  function init() {
-    tipEl=$('oreTip'); wrapEl=$('oreChartWrap');
-    seg('oreGrp', [{label:'Ore',val:'ore'},{label:'Biome',val:'biome'}], 'mode');
-    seg('oreSty', [{label:'Violins',val:'violin'},{label:'Bars',val:'bars'}], 'style');
-    seg('oreScl', [{label:'Global',val:'global'},{label:'Per-ore',val:'perore'}], 'scale');
-    seg('oreSpr', [{label:'Off',val:'off'},{label:'On',val:'on'}], 'spread');
-    let lg=''; oreOrder.forEach(o => { lg+='<span><span class="sw" style="background:'+ORE_COL[o]+'"></span>'+ORE_NAME[o]+'</span>'; });
-    lg+='<span style="color:var(--muted)">* biome not on this map · widths √-scaled · <b>Global</b>: full width = densest ore anywhere · <b>Per-ore</b>: full width = peak of that ore · <b>Seed spread</b>: faint halo = seed-to-seed variance (wide on rare deposits) · hover for density</span>'; $('oreLegend').innerHTML=lg;
-  }
-  return { render: renderFromCfg, init };
-})();
-
 // ---- block-composition chart: per-biome vertical "what you dig through" stack over world height ----
-// Complements the ore chart. Where the ore chart normalises each ore's density on its own axis, this shows
-// the 100%-stacked composition of ALL blocks (base strata + scatter + veins) at each Y, per biome, so you can
-// read how the mix shifts with depth. Model is a faithful aggregate of the server's TerrainDepthModule:
+// Shows the 100%-stacked composition of ALL blocks (base strata + scatter + veins) at each Y, per biome, so
+// you can read how the mix shifts with depth. Model is a faithful aggregate of the server's TerrainDepthModule:
 // each stratum's bottom is a per-column noise threshold ~U[Min,Max]; the shallowest in-order stratum whose
 // threshold >= depth wins, then that stratum's scatters apply first-wins by PercentChance, and veins carve a
 // small deposit fraction out on top. We Monte-Carlo the strata thresholds (fixed seed -> stable chart).
@@ -8129,7 +8465,7 @@ const BlockChart = (function () {
   const ALWAYS = { Grassland:1, ColdCoast:1, WarmCoast:1 };
   const biomeOrder = ['Desert','Grassland','Wetland','WarmForest','RainForest','WarmCoast','ColdCoast','ColdForest','Taiga','Tundra','Ice'];
   const cssv = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-  const state = { merge:'merge', emph:'off' };
+  const state = { merge:'separate', emph:'off' };   // fixed: separate crushed blocks, ores at true abundance
   let Ymax = 125, DMAX = 210;
   const padTop = 44, sc = 2.4, x0 = 54, colW = 50, gap = 16, maxHW = colW/2 - 3;
   const py = Y => padTop + (Ymax - Y) * sc;
@@ -8322,20 +8658,9 @@ const BlockChart = (function () {
   let lastCfg = null;
   function init() {
     tipEl = $('blockTip'); wrapEl = $('blockChartWrap');
-    seg('blkCrush', [{ label:'Merge', val:'merge' }, { label:'Separate', val:'separate' }], 'merge');
-    seg('blkEmph', [{ label:'Normal', val:'off' }, { label:'Emphasize', val:'on' }], 'emph');
   }
   return { render: function (cfg) { lastCfg = cfg; renderFromCfg(cfg); }, init };
 })();
-
-// hand-off the current (edited) config to the standalone ore visualizer via postMessage handshake
-let pendingHandoff = null;
-function oreHandoff() {
-  if (!terrain) { $('err').textContent = 'Load a config first.'; return; }
-  pendingHandoff = buildExportJson();
-  window.open('WorldGenOreVisualizer.html', '_blank');
-}
-window.addEventListener('message', e => { if (e.data && e.data.type === 'eco-oreviz-ready' && pendingHandoff && e.source) e.source.postMessage({ type: 'eco-config', cfg: pendingHandoff }, '*'); });
 
 // ---- rendering ----
 function fillPolyPath(ctx, pts, s, ox, oy) {
@@ -8436,28 +8761,24 @@ $('cv').addEventListener('mouseleave', ()=>{ $('tip').style.display='none'; });
 
 // ---- wiring ----
 buildForm();
-OreChart.init();
 BlockChart.init();
 OreVisual.init();
-// underground charts: two tabs in one panel, Block composition default
+// underground: Block composition + Editor tabs in one panel (Block composition default)
 (function initChartTabs(){
   const tabs = $('chartTabs');
-  const show = t => { $('blockTab').style.display = t === 'block' ? '' : 'none'; $('oreTab').style.display = t === 'ore' ? '' : 'none'; $('editTab').style.display = t === 'edit' ? '' : 'none';
+  const show = t => { $('blockTab').style.display = t === 'block' ? '' : 'none'; $('editTab').style.display = t === 'edit' ? '' : 'none';
     for (const b of tabs.children) b.classList.toggle('on', b.dataset.tab === t);
-    if (t === 'edit' && terrain) { if ($('oreManualTab').style.display === 'none') OreVisual.build(); else buildOreEditor(); } };
+    if (t === 'edit' && terrain) OreVisual.build(); };
   for (const b of tabs.children) b.onclick = () => show(b.dataset.tab);
+  // re-render the shown tab when Underground is expanded (it renders correctly once it has real size)
+  $('chartsPanel').addEventListener('toggle', e => {
+    if (!e.target.open || !terrain) return;
+    if ($('editTab').style.display !== 'none') OreVisual.build();
+    else { const ej = buildExportJson(); BlockChart.render(ej); }
+  });
 })();
-// block & ore editor: Visual editor / Manual knobs tabs (rebuild the shown tab so edits in the other stay in sync)
-(function initOreTabs(){
-  const tabs = $('oreTabs');
-  const show = t => { $('oreVisualTab').style.display = t === 'visual' ? '' : 'none'; $('oreManualTab').style.display = t === 'manual' ? '' : 'none';
-    for (const b of tabs.children) b.classList.toggle('on', b.dataset.tab === t);
-    if (terrain) { if (t === 'visual') OreVisual.build(); else buildOreEditor(); } };
-  for (const b of tabs.children) b.onclick = () => show(b.dataset.tab);
-})();
-$('oreHandoff').onclick = oreHandoff;
-$('gen').onclick = () => loadConfigText($('paste').value);
 $('regen').onclick = generateFromForm;
+$('loadCfg').onclick = () => loadConfigText($('paste').value, true);
 $('resetCfg').onclick = () => { if (baseCfg) populateForm(baseCfg); };
 $('dlEco').onclick = downloadEco;
 $('randSeed').onclick = () => {
@@ -8472,7 +8793,7 @@ $('expPng').onclick = () => { const a=document.createElement('a'); a.download='e
 // The worker generates + meshes real per-voxel block chunks on demand; we stream them into
 // Render3D and colour them by block type (reusing the ore chart's palette). Untick a block
 // type to hide it and see through to the strata/ore veins beneath.
-let seenBlocks = {}, hiddenBlocks = new Set(), worker3dBound = false;
+let seenBlocks = {}, hiddenBlocks = new Set(), worker3dBound = false, threeDFrom = 'map';
 const block3dColor = t => blockColorRaw(t);   // CSS colour string; THREE.Color parses it
 const SOIL_HIDE = ['Dirt','RockySoil','Grass','WetlandsSoil','FrozenSoil','Sand','DesertSand','Snow','Grass Block'];
 
@@ -8517,8 +8838,9 @@ function buildBlockToggles() {
 }
 function open3D() {
   if (!result || !terrain || !cfgUsed) { $('err').textContent = 'Wait for the world to finish generating first.'; return; }
+  threeDFrom = 'map'; $('view3dClose').textContent = '← Back to map';
   $('canvasWrap').style.display = 'none'; $('legend').style.display = 'none'; $('stats').style.display = 'none';
-  $('view3d').style.display = 'none'; $('expPng').style.display = 'none';
+  $('surfaceBar').style.display = 'none'; $('cfgPanel').style.display = 'none'; $('chartsPanel').style.display = 'none';   // hidden cfg sidebar → left column goes full width (flex)
   $('view3dWrap').style.display = 'block';
   $('view3dStatus').textContent = 'initializing…';
   seenBlocks = {}; hiddenBlocks = new Set(); buildBlockToggles();
@@ -8530,11 +8852,18 @@ function open3D() {
 function close3D() {
   Render3D.stop();
   $('view3dWrap').style.display = 'none';
+  if (threeDFrom === 'designer') { threeDFrom = 'map'; $('chartsPanel').style.display = 'block'; $('designWrap').style.display = ''; return; }   // back to the designer (Underground returns below it)
   $('canvasWrap').style.display = ''; $('legend').style.display = ''; $('stats').style.display = '';
-  $('view3d').style.display = ''; $('expPng').style.display = '';
+  $('surfaceBar').style.display = ''; $('cfgPanel').style.display = 'block'; $('chartsPanel').style.display = 'block';
+}
+function refresh3D() {
+  $('view3dStatus').textContent = 'rebuilding…';
+  if (threeDFrom === 'designer') { if (window.Designer && Designer.post3D) Designer.post3D(); }
+  else worker.postMessage({ type: '3d-init', terrain, cfg: cfgUsed });
 }
 $('view3d').onclick = open3D;
 $('view3dClose').onclick = close3D;
+$('view3dRefresh').onclick = refresh3D;
 $('view3dHideSoil').onclick = () => { SOIL_HIDE.forEach(s => { for (const t in seenBlocks) if (shortBlock(t) === s || prettyName(shortBlock(t)) === s) hiddenBlocks.add(t); }); buildBlockToggles(); Render3D.setHidden(Array.from(hiddenBlocks)); };
 $('view3dHideAll').onclick = () => { hiddenBlocks = new Set(Object.keys(seenBlocks)); buildBlockToggles(); Render3D.setHidden(Array.from(hiddenBlocks)); };
 $('view3dShowAll').onclick = () => { hiddenBlocks = new Set(); buildBlockToggles(); Render3D.setHidden([]); };
@@ -8544,11 +8873,1159 @@ const drop = $('drop');
 drop.addEventListener('drop', e => { const f=e.dataTransfer.files[0]; if(f) readFile(f); });
 drop.addEventListener('click', ()=>$('file').click());
 $('file').addEventListener('change', e => { const f=e.target.files[0]; if(f) readFile(f); });
-function readFile(f){ const r=new FileReader(); r.onload=()=>{ $('paste').value=r.result; loadConfigText(r.result); }; r.readAsText(f); }
+function readFile(f){ const r=new FileReader(); r.onload=()=>{ $('paste').value=r.result; loadConfigText(r.result, true); }; r.readAsText(f); }
 
 // load the bundled default world on startup (embedded, so it works from file:// too)
 const DEFAULT_ECO = ($('defaultcfg').textContent || '').trim();
 if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
+</script>
+<script>// src/designer.js — "Design a map": draw a target biome layout, invert it to a starting config,
+// then run a parallel best-of-N seed search for a real, playable world that resembles the drawing.
+//
+// Injected RAW into the page (like render3d.js), AFTER the main script, so it can use template
+// literals freely and reference the main-thread globals ($, baseCfg, readForm, populateForm,
+// generateMap, makeWorker, VT, sharesToWeights, WEIGHT_KEYS, terrain, cfgUsed) and the inlined
+// search core (SCLASS, SC, NUM_CLASSES, scoreGrids, histogram).
+//
+// Honest scope: the generator has NO spatial-placement knobs — where a biome lands is a chaotic
+// function of the seed. So this is a lottery scored by similarity, not an optimizer that converges.
+// It reliably matches the biome MIX and macro land-shape; exact layout is best-effort (best-of-N).
+(function () {
+  const G = 128;                         // paint + scoring grid resolution (finer = more drawable detail; bestShift stride scales with G)
+  const NC = NUM_CLASSES;
+  const CN = SCLASS;                     // class id -> name
+  // display colors per score class (kept close to the map's biome palette)
+  const COL = {
+    Ocean: [64, 120, 190], Coast: [246, 238, 188], Grassland: [124, 200, 110], WarmForest: [176, 132, 38],
+    ColdForest: [40, 132, 52], RainForest: [42, 172, 158], Desert: [232, 196, 116], Taiga: [110, 140, 60],
+    Tundra: [190, 184, 120], Ice: [238, 246, 252], Wetland: [30, 104, 62],
+  };
+  const LABEL = {
+    Ocean: 'Ocean / water', Coast: 'Coast', Grassland: 'Grassland', WarmForest: 'Warm forest',
+    ColdForest: 'Cold forest', RainForest: 'Rainforest', Desert: 'Desert', Taiga: 'Taiga',
+    Tundra: 'Tundra', Ice: 'Ice', Wetland: 'Wetland',
+  };
+  // palette order shown to the user (grouped: water, then cool->warm land)
+  const PALETTE = ['Ocean', 'Coast', 'Grassland', 'WarmForest', 'ColdForest', 'RainForest', 'Wetland', 'Desert', 'Taiga', 'Tundra', 'Ice'];
+  const colCss = c => { const r = COL[CN[c]] || [128, 128, 128]; return 'rgb(' + r[0] + ',' + r[1] + ',' + r[2] + ')'; };
+  // class id -> the generator's "min blob count" field
+  const CLASS_NUM = { ColdForest: 'numCoolForests', Taiga: 'numTaigas', Tundra: 'numTundras', Ice: 'numIces', WarmForest: 'numWarmForests', Wetland: 'numWetlands', RainForest: 'numRainforests', Desert: 'numDeserts' };
+
+  let target = new Uint8Array(G * G);    // painted target (generation orientation; y=0 is array row 0)
+  let brushClass = SC.Grassland, brushSize = 5, tool = 'paint';
+  // authored-world layers (for the "export a real world" flow, distinct from the seed search)
+  let elev = new Float32Array(G * G);          // painted elevation [0..1], 0.5 = sea level
+  let elevPainted = new Uint8Array(G * G);     // 1 where the user painted elevation (else biome-derived default)
+  let rough = new Float32Array(G * G);         // per-cell micro-relief amount, baked from the brush at paint time
+  let water = new Uint8Array(G * G);           // 1 where the user painted a river/lake (carved + water-filled)
+  let paintMode = 'biome';                     // 'biome' | 'elevation' | 'water'
+  let designMode = 'design';                    // 'design' (paint → exact export/3D) | 'find' (paint → seed search)
+  let elevValue = 0.66;                        // current elevation brush value
+  let paintRoughness = 0.08;                   // natural micro-relief added to painted areas (0 = perfectly flat)
+  const RIVER_CARVE = 0.045, RIVER_LIP = 0.012; // channel depth + how far the water sits below the banks (in [0,1] height)
+
+  // Exact Eco biome colors (System.Drawing names, ARGB) for the exported biome map, keyed by score class.
+  const ECO_BIOME_COLOR = {
+    Ocean: [70, 130, 180], Coast: [250, 250, 210], Grassland: [144, 238, 144], WarmForest: [184, 134, 11],
+    ColdForest: [34, 139, 34], RainForest: [32, 178, 170], Desert: [244, 164, 96], Taiga: [107, 142, 35],
+    Tundra: [189, 183, 107], Ice: [255, 255, 255], Wetland: [0, 100, 0],
+  };
+  // Default elevation BAND per biome as [low, high] (0.5 = sea level), derived from Eco's own biome
+  // elevation ranges. Unpainted land is placed within its band by distance-to-ocean (coast=low,
+  // interior=high) + noise, mirroring a regular server: coastal lowlands rising to interior hills, with
+  // cold/mountain biomes taller. Blurred so biome edges are slopes.
+  const ECO_BIOME_ELEV = {
+    Ocean: [0.18, 0.44], Coast: [0.50, 0.54], Grassland: [0.52, 0.66], WarmForest: [0.54, 0.70],
+    ColdForest: [0.54, 0.74], RainForest: [0.53, 0.68], Desert: [0.51, 0.60], Wetland: [0.51, 0.60],
+    Taiga: [0.60, 0.80], Tundra: [0.64, 0.85], Ice: [0.70, 0.88],
+  };
+  const HEIGHT_BLUR_PASSES = 2;   // box-blur passes; enough to soften biome-height steps without washing out relief
+  let layoutWeight = 0.6;
+  let invBase = null;                    // inverted starting config (all fields), seed varied per candidate
+  let pool = [];                         // kept candidates: { seed, grid, s }  (s = score breakdown)
+  const POOL_MAX = 120, SHOW_STEP = 12;
+  let galShow = 12, gallerySort = 'score', galleryMin = 0;   // gallery view state (Find mode)
+  let workers = [], running = false, evaluated = 0, tStart = 0, seedSet = new Set(), lastUiPaint = 0;
+  let classgridBound = false, painting = false, built = false, cfgBySeed = {}, poolTargetSig = null;
+  let undoStack = [], lastGX = -1, lastGY = -1;
+  let lastTerrain = null;                       // last computed {height,waterVal} — for the elevation hover readout
+  // image-import color legend: dominant source colors + their (user-overridable) biome assignment
+  let legend = [];               // [{ rgb:[r,g,b], count, cls }]
+  let imgLegendIdx = null;       // Int16Array(G*G) legend index per image cell (-1 = transparent -> ocean)
+  const MAX_LEGEND = 12;         // cap on distinct source colors offered for remapping
+  let importMode = 'colors';     // 'colors' (nearest hue) | 'brightness' (luminance ramp — better for photos)
+  let lastImgData = null;        // last decoded G*G RGBA, so switching import mode re-maps without re-loading
+  let importedImg = null;        // the decoded source Image, kept so export can resample it at high resolution
+  let paintedSinceImport = false; // once the user hand-edits an import, export falls back to the 64² grid
+  const IMPORT_RES = 320;        // biome/height resolution exported for a pure image import (vs the 64² paint grid)
+  // dark -> light biome ramp for brightness mode (low/dark = deep water, high/light = snow), reads as terrain
+  const BRIGHT_RAMP = ['Ocean', 'Wetland', 'ColdForest', 'Taiga', 'RainForest', 'Grassland', 'WarmForest', 'Desert', 'Tundra', 'Coast', 'Ice'];
+
+  // ================================================================= styling
+  function injectStyle() {
+    if (document.getElementById('dsnStyle')) return;
+    const s = document.createElement('style'); s.id = 'dsnStyle';
+    s.textContent = `
+    #designWrap{margin-top:6px}
+    .dsnCols{display:flex;gap:22px;flex-wrap:wrap;align-items:flex-start}
+    .dsnLeft{flex:0 0 auto;max-width:calc(var(--cw) + 20px);--cw:min(880px,64vw,88vh)} .dsnRight{flex:1 1 320px;min-width:300px;max-width:460px}
+    .dsnLeft .dsnMini{max-width:var(--cw)}
+    #dsnCanvasWrap{position:relative;border:0.5px solid var(--border);border-radius:12px;background:var(--surf);padding:8px;line-height:0;display:inline-block}
+    #dsnCanvas{border-radius:6px;cursor:crosshair;touch-action:none;image-rendering:pixelated;width:var(--cw);height:var(--cw)}
+    .dsnPal{display:flex;flex-wrap:wrap;gap:5px;margin:8px 0}
+    .dsnPal button{display:flex;align-items:center;gap:6px;font-size:12px;padding:4px 9px}
+    .dsnPal button.on{outline:2px solid var(--accent);outline-offset:1px;font-weight:600}
+    .dsnPal .sw{width:13px;height:13px;border-radius:3px;border:0.5px solid var(--border2)}
+    .dsnTools{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:6px 0}
+    .dsnCard{border:0.5px solid var(--border);border-radius:10px;background:var(--surf);padding:10px 12px;margin:0 0 12px}
+    .dsnCard h4{margin:0 0 6px;font-size:13px;font-weight:600}
+    .dsnSectionLbl{font-size:12px;font-weight:600;color:var(--text2);margin:16px 0 6px;padding-top:12px;border-top:0.5px solid var(--border)}
+    .dsnSectionLbl i{color:var(--muted);font-weight:500}
+    .dsnGallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+    #dsnFindGallery{margin-top:16px;border-top:0.5px solid var(--border);padding-top:12px}
+    #dsnFindGallery .dsnGallery{grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}
+    .dsnGalBar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:2px}
+    .dsnGalBar select{font-size:12px;padding:2px 6px;border-radius:6px;border:0.5px solid var(--border);background:var(--surf);color:var(--text)}
+    #dsnCompare{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;margin:10px 0 12px}
+    .dsnCmp{text-align:center}
+    .dsnCmp canvas{width:120px;height:120px;border-radius:8px;image-rendering:pixelated;border:0.5px solid var(--border);display:block}
+    .dsnCandidate{border:0.5px solid var(--border);border-radius:8px;background:var(--surf);padding:6px;text-align:center;font-size:11px;color:var(--text2)}
+    .dsnCandidate canvas{width:100%;height:auto;border-radius:5px;image-rendering:pixelated;display:block;margin-bottom:4px;cursor:pointer}
+    .dsnCandidate .sc{font-size:15px;font-weight:700;color:var(--text)}
+    .dsnCandidate button{width:100%;font-size:11px;padding:3px 0;margin-top:4px}
+    .dsnCandidate.best{outline:2px solid var(--accent)}
+    .dsnBars{display:flex;height:14px;border-radius:4px;overflow:hidden;border:0.5px solid var(--border);margin:6px 0}
+    .dsnBars>span{display:block}
+    #dsnStatus{font-size:12px;color:var(--text2)}
+    .dsnMini{font-size:11px;color:var(--muted)}
+    .dsnRange{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text2)}
+    .dsnRange input[type=range]{flex:1}
+    .dsnLegend{margin:8px 0 0;padding:8px 10px;border:0.5px solid var(--border);border-radius:8px;background:var(--surf);width:var(--cw);box-sizing:border-box}
+    .dsnLegend .lgHead{font-size:12px;color:var(--text2);margin-bottom:7px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+    .dsnLegend .lgRows{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px}
+    .dsnLegend .lgRow{display:flex;align-items:center;gap:6px;font-size:11px;border:0.5px solid var(--border);border-radius:6px;padding:3px 6px;background:var(--bg)}
+    .dsnLegend .lgRow select{flex:1;min-width:0}
+    .dsnLegend .lgSw{width:16px;height:16px;border-radius:4px;border:0.5px solid var(--border2);flex:0 0 auto}
+    .dsnLegend .lgPct{color:var(--muted);min-width:26px;text-align:right}
+    .dsnLegend select{font-size:11px;padding:1px 2px}
+    `;
+    document.head.appendChild(s);
+  }
+
+  // ================================================================= UI build
+  function buildUI() {
+    injectStyle();
+    const host = $('designWrap');
+    host.innerHTML =
+      '<div class="row" style="margin:2px 0 10px"><strong style="font-size:15px" id="dsnTitle">🎨 Design a map</strong>' +
+      '<span class="dsnMini" id="dsnSubtitle" style="margin-left:6px">paint a world → preview it in 3D → export it exactly</span>' +
+      '<button id="dsnClose" style="margin-left:auto">← Back to map</button></div>' +
+      '<div class="dsnCols">' +
+        '<div class="dsnLeft">' +
+          '<div class="dsnPal" id="dsnPal"></div>' +
+          '<div id="dsnCanvasWrap"><canvas id="dsnCanvas" width="' + G + '" height="' + G + '"></canvas></div>' +
+          '<div class="dsnTools">' +
+            '<span class="dsnRange" style="width:190px">Brush <input type="range" id="dsnBrush" min="1" max="16" value="' + brushSize + '"><span id="dsnBrushV" class="dsnMini">' + brushSize + '</span></span>' +
+            '<label class="dsnMini" style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="dsnFill"> flood fill</label>' +
+            '<button id="dsnUndo" title="Undo (Ctrl+Z)">↶ Undo</button>' +
+            '<button id="dsnSeedFromMap">Seed from current map</button>' +
+            '<button id="dsnImport" title="Map an image\'s colors to biomes — auto-nearest, then remap any color you like">📁 Import image</button>' +
+            '<input type="file" id="dsnImgFile" accept="image/*" style="display:none">' +
+            '<button id="dsnImportDesign" title="Load a previously exported design .zip to keep tuning it">📂 Import design</button>' +
+            '<input type="file" id="dsnDesignFile" accept=".zip,application/zip" style="display:none">' +
+            '<button id="dsnClear">Clear</button>' +
+          '</div>' +
+          '<div class="dsnTools" style="margin-top:0">' +
+            '<span class="dsnMini">Paint</span><span class="seg" id="dsnPaintMode"><button type="button" data-pm="biome" class="on">Biomes</button><button type="button" data-pm="elevation">Elevation</button><button type="button" data-pm="water">Water</button></span>' +
+            '<span class="dsnRange" id="dsnElevWrap" style="display:none;gap:14px;flex-wrap:wrap">' +
+              '<span class="dsnRange" style="gap:6px">Height <input type="range" id="dsnElev" min="0" max="100" value="' + Math.round(elevValue * 100) + '" style="width:120px"><span id="dsnElevV" class="dsnMini"></span></span>' +
+              '<span class="dsnRange" style="gap:6px" title="Natural variation the brush bakes into what you paint NEXT. Change it between strokes to make some areas smooth and others rugged. 0 = perfectly flat.">Roughness <input type="range" id="dsnRough" min="0" max="100" value="' + Math.round(paintRoughness / 0.16 * 100) + '" style="width:100px"><span id="dsnRoughV" class="dsnMini"></span></span>' +
+            '</span>' +
+          '</div>' +
+          '<div id="dsnElevLegend" style="display:none;margin:2px 0 0;max-width:320px">' +
+            '<div class="dsnMini" id="dsnElevRead" style="margin-bottom:4px"></div>' +
+            '<div style="position:relative">' +
+              '<canvas id="dsnElevBar" width="280" height="16" style="width:100%;height:16px;display:block;border-radius:4px;border:0.5px solid var(--border)"></canvas>' +
+              '<div id="dsnElevMark" style="position:absolute;top:-3px;left:0;width:2px;height:22px;background:var(--text);box-shadow:0 0 0 1px rgba(0,0,0,.45)"></div>' +
+            '</div>' +
+            '<div class="dsnMini" style="display:flex;justify-content:space-between;margin-top:1px"><span>deep</span><span>◄ sea</span><span>hills</span><span>peak</span></div>' +
+          '</div>' +
+          '<div class="dsnMini">Left-drag paints · right-drag erases · <b>flood fill</b> bucket-fills a biome region. <b>Elevation</b>: sculpt height (unpainted areas use a natural biome-based default). <b>Water</b>: paint rivers/lakes — they carve a channel and fill with water (route them downhill along your terrain).</div>' +
+          '<div id="dsnLegendWrap" class="dsnLegend" style="display:none"></div>' +
+          '<div id="dsnWrapPrev" style="margin-top:8px">' +
+            '<div class="dsnMini" style="margin-bottom:4px">Wrap preview — your map tiled 2×2. The world is a torus: it joins across these <b>dashed seams</b>. Strokes wrap around, so paint straight across a border and it continues on the far side — the edges line up automatically.</div>' +
+            '<canvas id="dsnWrapCv" width="256" height="256" style="width:230px;height:230px;image-rendering:pixelated;border:0.5px solid var(--border);border-radius:8px"></canvas>' +
+          '</div>' +
+        '</div>' +
+        '<div class="dsnRight">' +
+          // "Design a map" mode: exact authored world (+ 3D preview)
+          '<div id="dsnRightDesign">' +
+          '<div class="dsnCard"><h4 style="margin:0 0 4px">Your world <span class="dsnMini">— exact</span></h4>' +
+            '<div class="dsnMini" style="margin:0 0 8px"><b>🧊 3D preview</b> flies through your design here. <b>Export</b> writes a bundle for the <code>EcoWorldGenCLI</code> tool → a stock-loadable <code>.eco</code> whose biomes + terrain match your drawing <b>exactly</b> (needs the C# tool + an Eco server build).</div>' +
+            '<div class="row" style="gap:6px"><button id="dsnPreview3D" class="primary" title="Fly through your design in the 3D voxel world">🧊 3D preview</button>' +
+            '<button id="dsnExport">⬇ Export (.zip)</button></div>' +
+            '<div class="dsnMini" id="dsnExportStatus" style="margin-top:8px"></div></div>' +
+          '</div>' +
+          // "Find a map" mode: closest naturally-generated world (seed search)
+          '<div id="dsnRightFind" style="display:none">' +
+          '<div class="dsnCard"><h4>1 · Target</h4><div id="dsnAnalysis" class="dsnMini">Draw the layout you want (or seed it from the current map), then analyze it.</div>' +
+            '<div class="dsnBars" id="dsnMixBars" style="display:none"></div>' +
+            '<button id="dsnAnalyze" class="primary" style="margin-top:8px">Analyze drawing → set up search</button></div>' +
+          '<div class="dsnCard" id="dsnSearchCard" style="opacity:.5;pointer-events:none"><h4>2 · Search</h4>' +
+            '<div class="dsnMini" style="margin:0 0 8px">The generator can\'t place a biome where you choose — layout comes from the seed. This tries many seeds and keeps the closest by biome mix + land shape (exact placement only loosely).</div>' +
+            '<div class="dsnRange" style="margin-bottom:8px">Match&nbsp;<span class="dsnMini">mix</span><input type="range" id="dsnWeight" min="0" max="100" value="' + Math.round(layoutWeight * 100) + '"><span class="dsnMini">layout</span></div>' +
+            '<div class="row" style="margin:2px 0"><button id="dsnStart" class="primary">▶ Start search</button><button id="dsnStop" disabled>■ Stop</button>' +
+              '<label class="dsnMini" style="display:inline-flex;align-items:center;gap:4px;margin-left:4px" title="Also wobble land% and biome weights ±6% while searching, to explore around the inversion"><input type="checkbox" id="dsnJitter"> vary knobs</label></div>' +
+            '<div id="dsnStatus" style="margin-top:8px">idle</div>' +
+            '<div class="dsnMini" id="dsnSpeedHint" style="margin-top:6px"></div></div>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+      // "Find a map" full-width results gallery (ecoatlas-style tiles + filters)
+      '<div id="dsnFindGallery" style="display:none">' +
+        '<div class="dsnGalBar">' +
+          '<strong style="font-size:15px">Closest worlds</strong><span class="dsnMini" id="dsnGalCount"></span>' +
+          '<span class="dsnMini" style="margin-left:auto">Sort</span>' +
+          '<select id="dsnSort"><option value="score">Overall</option><option value="prop">Biome mix</option><option value="iou">Land shape</option><option value="soft">Biome fit</option></select>' +
+          '<span class="dsnRange" style="width:200px" title="Hide results below this overall score"><span class="dsnMini">min score</span><input type="range" id="dsnMinScore" min="0" max="100" value="0"><span class="dsnMini" id="dsnMinScoreV">0%</span></span>' +
+        '</div>' +
+        '<div id="dsnCompare">' +
+          '<div class="dsnCmp"><canvas id="dsnTargetRef" width="' + G + '" height="' + G + '"></canvas><div class="dsnMini">your drawing</div></div>' +
+          '<div style="font-size:26px;color:var(--muted)">→</div>' +
+          '<div class="dsnCmp"><canvas id="dsnBestRef" width="' + G + '" height="' + G + '"></canvas><div class="dsnMini" id="dsnBestLbl">best match</div></div>' +
+          '<div class="dsnMini" style="max-width:380px;align-self:center">Click any tile to apply it as your real world. Scores are relative — even the best is an approximation.<br><b>mix</b> = biome proportions · <b>shape</b> = land-mass overlap · <b>fit</b> = biome-type agreement</div>' +
+        '</div>' +
+        '<div class="dsnGallery" id="dsnGallery"><div class="dsnMini">No candidates yet — run a search.</div></div>' +
+        '<div class="row" style="margin-top:12px;justify-content:center"><button id="dsnShowMore" style="display:none">Show more</button></div>' +
+      '</div>';
+
+    // palette
+    const pal = $('dsnPal');
+    pal.innerHTML = PALETTE.map(name => {
+      const c = SC[name];
+      return '<button data-c="' + c + '"><span class="sw" style="background:' + colCss(c) + '"></span>' + LABEL[name] + '</button>';
+    }).join('');
+    pal.querySelectorAll('button').forEach(b => b.onclick = () => { brushClass = +b.dataset.c; tool = 'paint'; markPalette(); });
+    markPalette();
+
+    // tools + wiring
+    $('dsnBrush').oninput = e => { brushSize = +e.target.value; $('dsnBrushV').textContent = brushSize; };
+    $('dsnClear').onclick = () => { pushUndo(); target.fill(SC.Ocean); elevPainted.fill(0); rough.fill(0); water.fill(0); hideLegend(); renderPaint(); };
+    $('dsnUndo').onclick = undo;
+    $('dsnSeedFromMap').onclick = seedFromMap;
+    $('dsnImport').onclick = () => $('dsnImgFile').click();
+    $('dsnImgFile').onchange = e => { const f = e.target.files[0]; if (f) importImage(f); e.target.value = ''; };
+    $('dsnImportDesign').onclick = () => $('dsnDesignFile').click();
+    $('dsnDesignFile').onchange = e => { const f = e.target.files[0]; if (f) importDesignZip(f); e.target.value = ''; };
+    $('dsnClose').onclick = close;
+    $('dsnAnalyze').onclick = analyze;
+    $('dsnStart').onclick = startSearch;
+    $('dsnStop').onclick = stopSearch;
+    $('dsnWeight').oninput = e => { layoutWeight = +e.target.value / 100; rescorePool(); };
+    $('dsnSort').onchange = e => { gallerySort = e.target.value; renderGallery(); };
+    $('dsnMinScore').oninput = e => { galleryMin = +e.target.value / 100; $('dsnMinScoreV').textContent = e.target.value + '%'; renderGallery(); };
+    $('dsnShowMore').onclick = () => { galShow += SHOW_STEP; renderGallery(); };
+    // infinite scroll: auto-load more tiles as the Show-more sentinel nears the viewport bottom
+    window.addEventListener('scroll', maybeAutoLoad, { passive: true });
+    window.addEventListener('resize', maybeAutoLoad, { passive: true });
+    $('dsnExport').onclick = exportBundle;
+    $('dsnPreview3D').onclick = preview3D;
+    $('dsnPaintMode').querySelectorAll('button').forEach(b => b.onclick = () => { paintMode = b.dataset.pm; markPaintMode(); renderPaint(); });
+    $('dsnElev').oninput = e => { elevValue = +e.target.value / 100; $('dsnElevV').textContent = elevLabel(elevValue); drawElevLegend(); };
+    $('dsnElevV').textContent = elevLabel(elevValue);
+    $('dsnRough').oninput = e => { paintRoughness = +e.target.value / 100 * 0.16; $('dsnRoughV').textContent = roughLabel(paintRoughness); };   // applies to the NEXT strokes, not existing paint
+    $('dsnRoughV').textContent = roughLabel(paintRoughness);
+    const cv = $('dsnCanvas');
+    cv.addEventListener('contextmenu', e => e.preventDefault());
+    cv.addEventListener('pointerdown', e => { pushUndo(); onPointer(e); });
+    cv.addEventListener('pointermove', e => { if (painting) onPointer(e); updateElevReadout(e); });
+    cv.addEventListener('pointerleave', () => { if (paintMode === 'elevation') drawElevLegend(); });
+    window.addEventListener('pointerup', () => { painting = false; lastGX = -1; lastGY = -1; });
+    window.addEventListener('keydown', e => { if ($('designWrap').style.display === 'none') return; if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); undo(); } });
+    built = true;
+  }
+  function markPalette() { $('dsnPal').querySelectorAll('button').forEach(b => b.classList.toggle('on', +b.dataset.c === brushClass)); }
+  function elevLabel(v) { return v < 0.45 ? 'deep water' : v < 0.52 ? 'sea level' : v < 0.65 ? 'lowland' : v < 0.8 ? 'hills' : 'peaks'; }
+  function formatElev(v) { return Math.round(v * 100) + ' · ' + elevLabel(v); }
+  function roughLabel(r) { return r < 0.005 ? 'flat' : r < 0.05 ? 'subtle' : r < 0.11 ? 'natural' : 'rugged'; }
+  // Draw the hypsometric scale bar (matches the map's ramp) with a sea-level tick + a marker at the brush.
+  function drawElevLegend() {
+    const cv = $('dsnElevBar'); if (!cv) return;
+    const ctx = cv.getContext('2d'), W = cv.width, H = cv.height;
+    for (let x = 0; x < W; x++) { const hh = x / (W - 1), c = hh < SEA_LEVEL ? waterColor(hh) : landColor(hh); ctx.fillStyle = 'rgb(' + (c[0] | 0) + ',' + (c[1] | 0) + ',' + (c[2] | 0) + ')'; ctx.fillRect(x, 0, 1, H); }
+    ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fillRect(Math.round(SEA_LEVEL * W), 0, 1, H);   // sea line
+    const mk = $('dsnElevMark'); if (mk) mk.style.left = 'calc(' + (elevValue * 100) + '% - 1px)';
+    const rd = $('dsnElevRead'); if (rd) rd.innerHTML = 'Brush paints <b>' + formatElev(elevValue) + '</b> — hover the map to read a spot';
+  }
+  // Live readout of the elevation under the cursor while in elevation mode (reads the last rendered field).
+  function updateElevReadout(e) {
+    if (paintMode !== 'elevation' || !lastTerrain) return;
+    const cv = $('dsnCanvas'), r = cv.getBoundingClientRect();
+    const dispX = Math.floor((e.clientX - r.left) / r.width * G), dispY = Math.floor((e.clientY - r.top) / r.height * G);
+    const rd = $('dsnElevRead'); if (!rd) return;
+    if (dispX < 0 || dispX >= G || dispY < 0 || dispY >= G) return;
+    const i = (G - 1 - dispY) * G + dispX, hv = lastTerrain.height[i];
+    const isW = target[i] === SC.Ocean || water[i] || hv < SEA_LEVEL;
+    rd.innerHTML = 'Here: <b>' + formatElev(hv) + (isW ? ' · underwater' : '') + '</b> &nbsp;·&nbsp; brush: <b>' + formatElev(elevValue) + '</b>';
+  }
+
+  // ================================================================= image import
+  // nearest biome (by weighted RGB distance) to a source color — green-weighted like human vision
+  function nearestClass(r, g, b) {
+    let best = 0, bd = Infinity;
+    for (let c = 0; c < NC; c++) {
+      const p = ECO_BIOME_COLOR[CN[c]]; if (!p) continue;
+      const dr = r - p[0], dg = g - p[1], db = b - p[2], d = 2 * dr * dr + 4 * dg * dg + 3 * db * db;
+      if (d < bd) { bd = d; best = c; }
+    }
+    return best;
+  }
+  // Cluster the image's pixels into its dominant colors (the legend). Colors are quantized to 16
+  // levels/channel and bucketed; the biggest buckets are kept, the tail is merged into the nearest.
+  function buildLegend(d) {
+    const buckets = new Map();
+    for (let i = 0; i < G * G; i++) {
+      const o = i * 4; if (d[o + 3] < 128) continue;         // transparent -> handled as ocean, not a legend color
+      const key = ((d[o] >> 4) << 8) | ((d[o + 1] >> 4) << 4) | (d[o + 2] >> 4);
+      let b = buckets.get(key);
+      if (!b) { b = { r: 0, g: 0, bl: 0, n: 0 }; buckets.set(key, b); }
+      b.r += d[o]; b.g += d[o + 1]; b.bl += d[o + 2]; b.n++;
+    }
+    const all = [...buckets.values()].map(b => ({ rgb: [Math.round(b.r / b.n), Math.round(b.g / b.n), Math.round(b.bl / b.n)], count: b.n }));
+    all.sort((a, b) => b.count - a.count);
+    const kept = all.slice(0, MAX_LEGEND);
+    for (const e of all.slice(MAX_LEGEND)) {                 // fold rare colors into the nearest kept color
+      let bi = 0, bd = Infinity;
+      for (let k = 0; k < kept.length; k++) { const p = kept[k].rgb, dr = e.rgb[0] - p[0], dg = e.rgb[1] - p[1], db = e.rgb[2] - p[2], dd = dr * dr + dg * dg + db * db; if (dd < bd) { bd = dd; bi = k; } }
+      kept[bi].count += e.count;
+    }
+    for (const e of kept) { e.cls = nearestClass(e.rgb[0], e.rgb[1], e.rgb[2]); e.def = e.cls; }   // default = nearest biome
+    return kept;
+  }
+  // Brightness mode: map each pixel's luminance onto the dark->light biome ramp, histogram-equalized so
+  // a low-contrast/dark image still uses the full ramp. Preserves tonal structure (best for photos).
+  // Sets `legend` (one gray band per ramp step) + `imgLegendIdx` (band per cell) directly.
+  function buildBrightness(d) {
+    const nB = BRIGHT_RAMP.length, lum = new Float32Array(G * G), idx = new Int16Array(G * G), opaque = [];
+    for (let i = 0; i < G * G; i++) {
+      const o = i * 4;
+      if (d[o + 3] < 128) { idx[i] = -1; lum[i] = -1; continue; }
+      const L = 0.299 * d[o] + 0.587 * d[o + 1] + 0.114 * d[o + 2];
+      lum[i] = L; opaque.push(L);
+    }
+    opaque.sort((a, b) => a - b);
+    const N = opaque.length || 1;
+    const rankOf = L => { let lo = 0, hi = opaque.length; while (lo < hi) { const m = (lo + hi) >> 1; if (opaque[m] < L) lo = m + 1; else hi = m; } return lo; };
+    const counts = new Array(nB).fill(0);
+    for (let i = 0; i < G * G; i++) {
+      if (idx[i] === -1) continue;
+      let b = Math.floor(rankOf(lum[i]) / N * nB); if (b >= nB) b = nB - 1;
+      idx[i] = b; counts[b]++;
+    }
+    imgLegendIdx = idx;
+    legend = [];
+    for (let b = 0; b < nB; b++) { const g = Math.round(255 * b / (nB - 1)), cls = SC[BRIGHT_RAMP[b]]; legend.push({ rgb: [g, g, g], count: counts[b], cls: cls, def: cls }); }
+  }
+  // Build the legend + per-cell assignment for the current import mode.
+  function mapImage(d) {
+    if (importMode === 'brightness') buildBrightness(d);
+    else { legend = buildLegend(d); imgLegendIdx = assignLegendIdx(d); }
+  }
+  // Per-cell legend index (which dominant color each pixel belongs to); -1 = transparent.
+  function assignLegendIdx(d) {
+    const idx = new Int16Array(G * G);
+    for (let i = 0; i < G * G; i++) {
+      const o = i * 4;
+      if (d[o + 3] < 128) { idx[i] = -1; continue; }
+      let bi = 0, bd = Infinity;
+      for (let k = 0; k < legend.length; k++) { const p = legend[k].rgb, dr = d[o] - p[0], dg = d[o + 1] - p[1], db = d[o + 2] - p[2], dd = dr * dr + dg * dg + db * db; if (dd < bd) { bd = dd; bi = k; } }
+      idx[i] = bi;
+    }
+    return idx;
+  }
+  // Paint the target from the stored per-cell legend + each legend color's current biome assignment.
+  function applyLegend() {
+    const count = {};
+    for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) {
+      const i = y * G + x, li = imgLegendIdx[i];
+      const cls = li < 0 ? SC.Ocean : legend[li].cls;
+      target[(G - 1 - y) * G + x] = cls;                     // flip Y so the image reads upright in the display
+      count[cls] = (count[cls] || 0) + 1;
+    }
+    renderPaint();
+    const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target, true);
+    return count;
+  }
+  function flashMix(count) {
+    const top = Object.keys(count).map(k => [LABEL[CN[+k]], count[k]]).sort((a, b) => b[1] - a[1]).slice(0, 5).map(e => e[0]).join(', ');
+    flashAnalysis('Imported image → biomes (' + top + '). Remap any band below, edit, or Analyze — then export.');
+  }
+  // Re-run the mapping in a different mode on the already-loaded image (no re-decode), then refresh.
+  function setImportMode(m) {
+    if (!lastImgData || importMode === m) { importMode = m; return; }
+    pushUndo(); importMode = m; mapImage(lastImgData); renderLegend(); flashMix(applyLegend());
+  }
+  // Legend UI: one row per source color (or brightness band) with a live biome dropdown, plus a
+  // Colors/Brightness mode toggle — Brightness maps luminance onto a terrain ramp (best for photos).
+  function renderLegend() {
+    const wrap = $('dsnLegendWrap'); if (!wrap) return;
+    if (!legend.length) { wrap.style.display = 'none'; wrap.innerHTML = ''; return; }
+    const total = G * G, bright = importMode === 'brightness';
+    const opts = PALETTE.map(n => '<option value="' + SC[n] + '">' + LABEL[n] + '</option>').join('');
+    wrap.innerHTML =
+      '<div class="lgHead"><b>' + (bright ? 'Brightness → biomes' : 'Image colors → biomes') + '</b>' +
+      '<span class="seg" id="lgMode"><button type="button" data-im="colors"' + (bright ? '' : ' class="on"') + '>Colors</button>' +
+      '<button type="button" data-im="brightness"' + (bright ? ' class="on"' : '') + '>Brightness</button></span>' +
+      '<span class="dsnMini">' + (bright ? 'dark→light mapped to a terrain ramp' : 'nearest hue per color') + ' · <b>Brightness</b> suits photos</span>' +
+      '<button id="lgAuto" style="margin-left:auto" title="Reset every entry to its default biome">Auto</button></div>' +
+      '<div class="lgRows">' + legend.map((e, i) => {
+        const pct = Math.round(e.count / total * 100);
+        return '<div class="lgRow"><span class="lgSw" style="background:rgb(' + e.rgb[0] + ',' + e.rgb[1] + ',' + e.rgb[2] + ')"></span>' +
+          '<span class="lgPct">' + (pct < 1 ? '<1' : pct) + '%</span>' +
+          '<select data-i="' + i + '">' + opts + '</select></div>';
+      }).join('') + '</div>';
+    wrap.style.display = '';
+    wrap.querySelectorAll('#lgMode button').forEach(b => b.onclick = () => setImportMode(b.dataset.im));
+    wrap.querySelectorAll('select').forEach(sel => {
+      sel.value = legend[+sel.dataset.i].cls;
+      sel.onchange = () => { pushUndo(); legend[+sel.dataset.i].cls = +sel.value; flashMix(applyLegend()); };
+    });
+    $('lgAuto').onclick = () => { pushUndo(); legend.forEach(e => e.cls = e.def); renderLegend(); flashMix(applyLegend()); };
+  }
+  function hideLegend() { legend = []; imgLegendIdx = null; lastImgData = null; importedImg = null; paintedSinceImport = false; const w = $('dsnLegendWrap'); if (w) { w.style.display = 'none'; w.innerHTML = ''; } }
+  // Resample the ORIGINAL imported image at a higher resolution and produce aligned biome + height maps
+  // (bypassing the coarse 64² paint grid) so a photo/portrait exports with far sharper features. Uses the
+  // current legend + mode; height follows the picture (dark/low = deep water, light/high = land) so the
+  // land/water outline stays crisp and matched to the biome tint.
+  function imageToMaps(res) {
+    const c = document.createElement('canvas'); c.width = res; c.height = res;
+    const cx = c.getContext('2d'); cx.imageSmoothingEnabled = true; cx.drawImage(importedImg, 0, 0, res, res);
+    const d = cx.getImageData(0, 0, res, res).data, n = res * res;
+    const biome = new Uint8Array(n), height = new Uint8Array(n);
+    const put = (x, y, cls, h01) => { const j = (res - 1 - y) * res + x; biome[j] = cls; height[j] = Math.max(0, Math.min(255, Math.round(h01 * 255))); };  // flip Y like the 64² path
+    if (importMode === 'brightness') {
+      const lum = new Float32Array(n), trans = new Uint8Array(n), op = [];
+      for (let i = 0; i < n; i++) { const o = i * 4; if (d[o + 3] < 128) { trans[i] = 1; continue; } const L = 0.299 * d[o] + 0.587 * d[o + 1] + 0.114 * d[o + 2]; lum[i] = L; op.push(L); }
+      op.sort((a, b) => a - b); const N = op.length || 1, nB = legend.length;
+      const rank = L => { let lo = 0, hi = op.length; while (lo < hi) { const m = (lo + hi) >> 1; if (op[m] < L) lo = m + 1; else hi = m; } return lo; };
+      for (let y = 0; y < res; y++) for (let x = 0; x < res; x++) {
+        const i = y * res + x;
+        if (trans[i]) { put(x, y, SC.Ocean, 0.30); continue; }
+        const rf = rank(lum[i]) / N; let b = Math.floor(rf * nB); if (b >= nB) b = nB - 1;
+        put(x, y, legend[b].cls, 0.32 + 0.53 * rf);          // dark→deep water .. light→peaks
+      }
+    } else {
+      for (let y = 0; y < res; y++) for (let x = 0; x < res; x++) {
+        const o = (y * res + x) * 4;
+        let cls;
+        if (d[o + 3] < 128) cls = SC.Ocean;
+        else { let bi = 0, bd = Infinity; for (let k = 0; k < legend.length; k++) { const p = legend[k].rgb, dr = d[o] - p[0], dg = d[o + 1] - p[1], db = d[o + 2] - p[2], dd = dr * dr + dg * dg + db * db; if (dd < bd) { bd = dd; bi = k; } } cls = legend[bi].cls; }
+        const band = ECO_BIOME_ELEV[CN[cls]] || [0.52, 0.62];
+        put(x, y, cls, cls === SC.Ocean ? 0.30 : (band[0] + band[1]) / 2);
+      }
+    }
+    return { res, biome, height };
+  }
+  // Load an image, stretch it to the world grid, cluster its colors, and map each color to a biome
+  // (nearest by default — the user can then remap any color via the legend below the canvas).
+  function importImage(file) {
+    const img = new Image();
+    img.onload = () => {
+      pushUndo();
+      const c = document.createElement('canvas'); c.width = G; c.height = G;
+      const cx = c.getContext('2d'); cx.imageSmoothingEnabled = true;
+      cx.drawImage(img, 0, 0, G, G);                          // stretch to the square world grid
+      const d = cx.getImageData(0, 0, G, G).data;
+      lastImgData = d; importedImg = img; paintedSinceImport = false;
+      mapImage(d);
+      paintMode = 'biome'; markPaintMode();
+      const count = applyLegend();
+      renderLegend();
+      flashMix(count);
+    };
+    img.onerror = () => flashAnalysis('Could not read that image.');
+    const reader = new FileReader();
+    reader.onload = () => { img.src = reader.result; };
+    reader.readAsDataURL(file);
+  }
+  function markPaintMode() {
+    const t = $('dsnPaintMode'); if (t) t.querySelectorAll('button').forEach(x => x.classList.toggle('on', x.dataset.pm === paintMode));
+    const isElev = paintMode === 'elevation';
+    const w = $('dsnElevWrap'); if (w) w.style.display = isElev ? '' : 'none';
+    const lg = $('dsnElevLegend'); if (lg) { lg.style.display = isElev ? '' : 'none'; if (isElev) drawElevLegend(); }
+  }
+
+  // ================================================================= painter
+  // Everything is stored in generation orientation; we DISPLAY flipped-Y to match the map view.
+  function drawGrid(canvas, grid, flip) {
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width;                 // canvas is G x G backing store (pixelated upscaled by CSS)
+    const img = ctx.createImageData(W, W);
+    const d = img.data;
+    for (let y = 0; y < W; y++) {
+      const gy = flip ? (G - 1 - y) : y;
+      for (let x = 0; x < W; x++) {
+        const c = grid[gy * G + x], rgb = COL[CN[c]] || [128, 128, 128];
+        const o = (y * W + x) * 4;
+        d[o] = rgb[0]; d[o + 1] = rgb[1]; d[o + 2] = rgb[2]; d[o + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+  function renderPaint() {
+    if (paintMode === 'elevation') drawHeight($('dsnCanvas'));
+    else if (paintMode === 'water') drawWaterView($('dsnCanvas'));
+    else drawGrid($('dsnCanvas'), target, true);
+    drawWrapPreview();
+  }
+  // Tile the current view 2×2 so the toroidal seams (left↔right, top↔bottom) are visible while drawing.
+  function drawWrapPreview() {
+    const pv = $('dsnWrapCv'); if (!pv) return;
+    const src = $('dsnCanvas'), ctx = pv.getContext('2d'), W = pv.width, h = W / 2;
+    ctx.imageSmoothingEnabled = false;
+    for (let i = 0; i < 2; i++) for (let j = 0; j < 2; j++) ctx.drawImage(src, 0, 0, src.width, src.height, i * h, j * h, h, h);
+    ctx.strokeStyle = 'rgba(255,70,70,.85)'; ctx.lineWidth = 1; ctx.setLineDash([5, 4]);
+    ctx.beginPath(); ctx.moveTo(h + .5, 0); ctx.lineTo(h + .5, W); ctx.moveTo(0, h + .5); ctx.lineTo(W, h + .5); ctx.stroke(); ctx.setLineDash([]);
+  }
+  // biomes with the painted rivers/lakes overlaid in blue
+  function drawWaterView(canvas) {
+    drawGrid(canvas, target, true);
+    const ctx = canvas.getContext('2d'), W = canvas.width, img = ctx.getImageData(0, 0, W, W), d = img.data;
+    for (let y = 0; y < W; y++) { const gy = G - 1 - y; for (let x = 0; x < W; x++) { if (water[gy * G + x]) { const o = (y * W + x) * 4; d[o] = 30; d[o + 1] = 110; d[o + 2] = 230; } } }
+    ctx.putImageData(img, 0, 0);
+  }
+  function pushUndo() { undoStack.push({ t: target.slice(), e: elev.slice(), p: elevPainted.slice(), w: water.slice(), r: rough.slice() }); if (undoStack.length > 40) undoStack.shift(); }
+  function undo() { if (!undoStack.length) return; const s = undoStack.pop(); target = s.t; elev = s.e; elevPainted = s.p; water = s.w; rough = s.r; renderPaint(); }
+  function onPointer(e) {
+    const cv = $('dsnCanvas'), r = cv.getBoundingClientRect();
+    const dispX = Math.floor((e.clientX - r.left) / r.width * G);
+    const dispY = Math.floor((e.clientY - r.top) / r.height * G);
+    if (dispX < 0 || dispX >= G || dispY < 0 || dispY >= G) return;
+    paintedSinceImport = true;              // hand edits win over the imported image at export time
+    const gx = dispX, gy = G - 1 - dispY;   // flip display->grid
+    const erase = (e.buttons & 2) === 2 || e.button === 2;
+    if (paintMode === 'elevation') {
+      const v = erase ? -1 : elevValue;     // right-drag reverts to the biome-derived default
+      if (painting && lastGX >= 0) stampLine(lastGX, lastGY, gx, gy, v, stampElev); else stampElev(gx, gy, v);
+      painting = true; lastGX = gx; lastGY = gy; renderPaint(); return;
+    }
+    if (paintMode === 'water') {
+      const v = erase ? 0 : 1;              // right-drag erases the river/lake
+      if (painting && lastGX >= 0) stampLine(lastGX, lastGY, gx, gy, v, stampWater); else stampWater(gx, gy, v);
+      painting = true; lastGX = gx; lastGY = gy; renderPaint(); return;
+    }
+    const cls = erase ? SC.Ocean : brushClass;
+    if ($('dsnFill').checked && !painting) { floodFill(gx, gy, cls); renderPaint(); return; }
+    // interpolate along the drag so fast strokes don't leave gaps between discrete stamps
+    if (painting && lastGX >= 0) stampLine(lastGX, lastGY, gx, gy, cls); else stampBrush(gx, gy, cls);
+    painting = true; lastGX = gx; lastGY = gy;
+    renderPaint();
+  }
+  function stampElev(cx, cy, v) {
+    const rad = brushSize - 1, r2 = (rad + 0.5) * (rad + 0.5);
+    for (let dy = -rad; dy <= rad; dy++) for (let dx = -rad; dx <= rad; dx++) {
+      if (dx * dx + dy * dy > r2) continue;
+      const x = ((cx + dx) % G + G) % G, y = ((cy + dy) % G + G) % G;
+      const i = y * G + x;
+      if (v < 0) { elevPainted[i] = 0; } else { elev[i] = v; elevPainted[i] = 1; rough[i] = paintRoughness; }   // bake the brush's roughness per cell
+    }
+  }
+  function stampWater(cx, cy, v) {
+    const rad = brushSize - 1, r2 = (rad + 0.5) * (rad + 0.5);
+    for (let dy = -rad; dy <= rad; dy++) for (let dx = -rad; dx <= rad; dx++) {
+      if (dx * dx + dy * dy > r2) continue;
+      const x = ((cx + dx) % G + G) % G, y = ((cy + dy) % G + G) % G;
+      water[y * G + x] = v;
+    }
+  }
+  // Smooth value-noise (2 octaves, deterministic) for gentle within-biome roll.
+  function h2(x, y) { let n = (Math.imul(x, 374761393) + Math.imul(y, 668265263)) | 0; n = Math.imul(n ^ (n >>> 13), 1274126177) | 0; return ((n ^ (n >>> 16)) >>> 0) / 4294967295; }
+  // value noise on a lattice that WRAPS every P cells, so it tiles seamlessly across the toroidal world
+  function vnW(x, y, P) { const x0 = Math.floor(x), y0 = Math.floor(y), tx = x - x0, ty = y - y0; const w = v => ((v % P) + P) % P; const a = h2(w(x0), w(y0)), b = h2(w(x0 + 1), w(y0)), c = h2(w(x0), w(y0 + 1)), d = h2(w(x0 + 1), w(y0 + 1)); const sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty); return (a + (b - a) * sx) * (1 - sy) + (c + (d - c) * sx) * sy; }
+  // fractal (multi-octave) noise, seamless across the wrap (each octave tiles: k lattice cells span G)
+  function fbm(x, y) { const u = x / G, v = y / G; return 0.5 * vnW(u * 5, v * 5, 5) + 0.3 * vnW(u * 12 + 3, v * 12 + 7, 12) + 0.2 * vnW(u * 27 + 1, v * 27 + 2, 27); }
+  // toroidal distance (in cells) to the nearest ocean cell — chamfer transform with wrapped neighbors
+  function oceanDistField() {
+    const INF = 1e6, d = new Float32Array(G * G);
+    for (let i = 0; i < G * G; i++) d[i] = target[i] === SC.Ocean ? 0 : INF;
+    const idx = (x, y) => (((y % G) + G) % G) * G + (((x % G) + G) % G);
+    const rel = (x, y, nx, ny, w) => { const i = idx(x, y), j = idx(nx, ny); if (d[j] + w < d[i]) d[i] = d[j] + w; };
+    for (let pass = 0; pass < 2; pass++) {   // 2 full sweeps so distances propagate around the torus
+      for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) { rel(x, y, x - 1, y, 1); rel(x, y, x, y - 1, 1); rel(x, y, x - 1, y - 1, 1.414); rel(x, y, x + 1, y - 1, 1.414); }
+      for (let y = G - 1; y >= 0; y--) for (let x = G - 1; x >= 0; x--) { rel(x, y, x + 1, y, 1); rel(x, y, x, y + 1, 1); rel(x, y, x + 1, y + 1, 1.414); rel(x, y, x - 1, y + 1, 1.414); }
+    }
+    return d;
+  }
+
+  // Full-field height in [0,1]. Unpainted land is placed within its biome's [low,high] band by distance
+  // to the coast (shore=low, interior=high) plus multi-octave rolling relief; ocean stays below sea
+  // level. Painted values override. Blurred so biome edges are slopes, not cliffs.
+  const OCEAN_FALLOFF = G / 4, RELIEF_AMP = 0.10;   // coast→interior ramp, kept proportional to grid size
+  function computeHeightField() {
+    const dist = oceanDistField();
+    let a = new Float32Array(G * G);
+    for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) {
+      const i = y * G + x;
+      if (elevPainted[i]) {                                             // painted: add the per-cell micro-relief baked at paint time
+        const v = elev[i] + (fbm(x, y) - 0.5) * rough[i];
+        a[i] = elev[i] >= 0.505 ? Math.max(0.505, v) : v;               // painted land stays above sea (no accidental puddles)
+        continue;
+      }
+      const band = ECO_BIOME_ELEV[CN[target[i]]] || [0.52, 0.62], lo = band[0], hi = band[1];
+      if (target[i] === SC.Ocean) { a[i] = lo + (hi - lo) * fbm(x, y); continue; }           // below sea level -> water
+      const fall = Math.min(1, dist[i] / OCEAN_FALLOFF), s = fall * fall * (3 - 2 * fall);    // smoothstep coast->inland
+      const base = lo + (hi - lo) * s;                                                        // rise from shore to interior
+      a[i] = Math.max(0.505, base + (fbm(x, y) - 0.5) * RELIEF_AMP * (0.4 + 0.6 * s));         // rolling hills, gentler near shore
+    }
+    let b = new Float32Array(G * G);
+    for (let p = 0; p < HEIGHT_BLUR_PASSES; p++) {
+      for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) {
+        let sum = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const xx = ((x + dx) % G + G) % G, yy = ((y + dy) % G + G) % G; sum += a[yy * G + xx]; }   // wrapped neighbours (toroidal)
+        b[y * G + x] = sum / 9;
+      }
+      const t = a; a = b; b = t;
+    }
+    return a;
+  }
+  // Final terrain for export + height preview: the base field, with painted rivers/lakes carved into a
+  // channel and a matching water-surface value per cell (0 elsewhere). height/water are both [0,1].
+  function computeTerrain() {
+    const height = computeHeightField();               // f_land (fresh array; safe to carve in place)
+    const waterVal = new Float32Array(G * G);
+    for (let i = 0; i < G * G; i++) {
+      if (!water[i]) continue;
+      const fLand = height[i];
+      waterVal[i] = Math.max(0, Math.min(1, 2 * (fLand - RIVER_LIP) - 1));   // water surface, just below the banks
+      height[i] = Math.max(0.02, fLand - RIVER_CARVE);                       // carve the channel bottom
+    }
+    return { height, waterVal };
+  }
+  // ---- elevation visualization: hypsometric tint + hillshade + contours ----------------------------
+  // Sea level in the [0,1] height field; below is water, above is land (matches computeHeightField).
+  const SEA_LEVEL = 0.5, HS_Z = 22, CONTOUR = 0.05;    // HS_Z exaggerates slope for shading; CONTOUR = isoline spacing
+  function lerp3(a, b, t) { return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]; }
+  // hypsometric land ramp keyed by height ABOVE sea, normalized to [0,1]: sand→green→tan→brown→rock→snow
+  const LAND_RAMP = [[0, [236, 226, 170]], [0.08, [186, 208, 128]], [0.20, [120, 178, 96]], [0.38, [176, 172, 96]], [0.55, [156, 120, 72]], [0.74, [120, 92, 72]], [0.90, [198, 196, 198]], [1, [255, 255, 255]]];
+  function landColor(h, sea) { sea = sea == null ? SEA_LEVEL : sea; let t = (h - sea) / (1 - sea); t = t < 0 ? 0 : t > 1 ? 1 : t; for (let k = 1; k < LAND_RAMP.length; k++) { if (t <= LAND_RAMP[k][0]) { const a = LAND_RAMP[k - 1], b = LAND_RAMP[k], u = (t - a[0]) / ((b[0] - a[0]) || 1); return lerp3(a[1], b[1], u); } } return LAND_RAMP[LAND_RAMP.length - 1][1]; }
+  function waterColor(h, sea) { sea = sea == null ? SEA_LEVEL : sea; let dd = (sea - h) / sea; dd = dd < 0 ? 0 : dd > 1 ? 1 : dd; return lerp3([120, 175, 215], [16, 38, 86], Math.pow(dd, 0.6)); }  // shallow→deep blue
+  // A relief-shaded, colour-graded height view: colour tells absolute height, shading + contour lines
+  // reveal the shape (and make small paint changes visible). One backing pixel per grid cell.
+  function drawHeight(canvas) {
+    const t = computeTerrain(); lastTerrain = t; const h = t.height;
+    const ctx = canvas.getContext('2d'), W = canvas.width, img = ctx.createImageData(W, W), d = img.data;
+    const hAt = (dx, dy) => h[(((G - 1 - dy) % G + G) % G) * G + ((dx % G + G) % G)];   // display→grid, wrapped (toroidal)
+    for (let y = 0; y < W; y++) { const gy = G - 1 - y; for (let x = 0; x < W; x++) {
+      const i = gy * G + x, hv = h[i], o = (y * W + x) * 4;
+      const isW = target[i] === SC.Ocean || water[i] || hv < SEA_LEVEL;
+      const c = isW ? waterColor(hv) : landColor(hv);
+      // hillshade: surface normal vs a NW light; flat ground stays at the base tint (shade≈1)
+      const dzdx = (hAt(x + 1, y) - hAt(x - 1, y)) * HS_Z, dzdy = (hAt(x, y + 1) - hAt(x, y - 1)) * HS_Z;
+      const nz = 1 / Math.sqrt(dzdx * dzdx + dzdy * dzdy + 1);
+      let sh = (0.5206 * (dzdx + dzdy) + 0.6767) * nz / 0.6767;
+      sh = sh < 0.42 ? 0.42 : sh > 1.6 ? 1.6 : sh;
+      let r = c[0] * sh, g = c[1] * sh, bl = c[2] * sh;
+      if (!isW) {   // contour line where the height band changes (darken slightly) — quantitative + shows edits
+        const a0 = Math.floor((hv - SEA_LEVEL) / CONTOUR);
+        if (a0 !== Math.floor((hAt(x + 1, y) - SEA_LEVEL) / CONTOUR) || a0 !== Math.floor((hAt(x, y + 1) - SEA_LEVEL) / CONTOUR)) { r *= 0.72; g *= 0.72; bl *= 0.72; }
+      }
+      d[o] = r > 255 ? 255 : r; d[o + 1] = g > 255 ? 255 : g; d[o + 2] = bl > 255 ? 255 : bl; d[o + 3] = 255;
+    } }
+    ctx.putImageData(img, 0, 0);
+  }
+  function stampLine(x0, y0, x1, y1, val, fn) {
+    fn = fn || stampBrush;
+    const steps = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0));
+    if (steps === 0) { fn(x1, y1, val); return; }
+    for (let s = 0; s <= steps; s++) fn(Math.round(x0 + (x1 - x0) * s / steps), Math.round(y0 + (y1 - y0) * s / steps), val);
+  }
+  function stampBrush(cx, cy, cls) {
+    const rad = brushSize - 1, r2 = (rad + 0.5) * (rad + 0.5);
+    for (let dy = -rad; dy <= rad; dy++) for (let dx = -rad; dx <= rad; dx++) {
+      if (dx * dx + dy * dy > r2) continue;
+      const x = ((cx + dx) % G + G) % G, y = ((cy + dy) % G + G) % G;   // torus: strokes wrap to the opposite edge
+      target[y * G + x] = cls;
+    }
+  }
+  function floodFill(sx, sy, cls) {
+    const from = target[sy * G + sx];
+    if (from === cls) return;
+    const st = [sy * G + sx];
+    while (st.length) {
+      const i = st.pop();
+      if (target[i] !== from) continue;
+      target[i] = cls;
+      const x = i % G, y = (i / G) | 0;   // torus: regions that touch a border continue on the opposite edge
+      st.push(((x + G - 1) % G) + y * G); st.push(((x + 1) % G) + y * G);
+      st.push(x + ((y + G - 1) % G) * G); st.push(x + ((y + 1) % G) * G);
+    }
+  }
+  function seedFromMap() {
+    if (typeof result === 'undefined' || !result) { $('dsnAnalysis').textContent = 'Generate a map first, then seed from it.'; return; }
+    pushUndo();
+    if (!classgridBound) { worker.addEventListener('message', ev => { if (ev.data && ev.data.type === 'classgrid' && ev.data.grid) { target = new Uint8Array(ev.data.grid); hideLegend(); renderPaint(); flashAnalysis('Seeded from the current map. Edit it, then analyze.'); } }); classgridBound = true; }
+    worker.postMessage({ type: 'classgrid', G: G });
+  }
+  function flashAnalysis(msg) { $('dsnAnalysis').innerHTML = '<b>' + msg + '</b>'; }
+
+  // ================================================================= inversion
+  // toroidal 4-neighbour connected-component sizes for cells matching pred(i)
+  function ccSizes(pred) {
+    const seen = new Uint8Array(G * G), sizes = [], st = [];
+    for (let i = 0; i < G * G; i++) {
+      if (seen[i] || !pred(i)) continue;
+      let sz = 0; st.length = 0; st.push(i); seen[i] = 1;
+      while (st.length) {
+        const c = st.pop(); sz++;
+        const x = c % G, y = (c / G) | 0;
+        const nb = [((x + 1) % G) + y * G, ((x + G - 1) % G) + y * G, x + ((y + 1) % G) * G, x + ((y + G - 1) % G) * G];
+        for (let k = 0; k < 4; k++) { const n = nb[k]; if (!seen[n] && pred(n)) { seen[n] = 1; st.push(n); } }
+      }
+      sizes.push(sz);
+    }
+    return sizes.sort((a, b) => b - a);
+  }
+  function analyze() {
+    invBase = null;                              // cleared until a valid analysis succeeds
+    const total = G * G;
+    const h = histogram(target);                 // fraction per class
+    const landFrac = (() => { let s = 0; for (let c = SC.Grassland; c < NC; c++) s += h[c]; return s; })();
+    if (landFrac < 0.005) { flashAnalysis('Almost no land drawn — paint some biomes first.'); setSearchEnabled(false); return; }
+
+    // shares of land -> weights (reuse the app's exact biome-mix math)
+    const need = name => h[SC[name]] / landFrac;
+    const share = {
+      coldforest: need('ColdForest'), taiga: need('Taiga'), tundra: need('Tundra'), ice: need('Ice'),
+      warmforest: need('WarmForest'), wetland: need('Wetland'), rainforest: need('RainForest'), desert: need('Desert'),
+      highdesert: 0, steppe: 0, grassland: 0,
+    };
+    const weights = sharesToWeights(share);
+
+    const cfg = JSON.parse(JSON.stringify(readForm()));   // start from the current form (size, pointRadius, elevation…)
+    for (const k of WEIGHT_KEYS) cfg[k] = +(weights[k] || 0).toFixed(4);
+
+    const L = Math.max(0.03, Math.min(0.97, landFrac));
+    cfg.landPercentRange = { min: +L.toFixed(3), max: +L.toFixed(3) };
+
+    // per-biome min blob counts
+    const minPatch = 0.004 * total;
+    for (const name in CLASS_NUM) {
+      const cls = SC[name];
+      const n = ccSizes(i => target[i] === cls).filter(s => s >= minPatch).length;
+      cfg[CLASS_NUM[name]] = Math.max(0, n);
+    }
+    // any land biome with weight>0 must have count>=1 or it never spawns
+    const WK_NUM = { coolForestWeight: 'numCoolForests', taigaWeight: 'numTaigas', tundraWeight: 'numTundras', iceWeight: 'numIces', warmForestWeight: 'numWarmForests', wetlandWeight: 'numWetlands', rainforestWeight: 'numRainforests', desertWeight: 'numDeserts' };
+    for (const wk in WK_NUM) if ((cfg[wk] || 0) > 0.0005 && (cfg[WK_NUM[wk]] || 0) < 1) cfg[WK_NUM[wk]] = 1;
+
+    // continents / islands from the land mask
+    const landSizes = ccSizes(i => target[i] >= SC.Grassland);
+    const totalLand = landSizes.reduce((a, b) => a + b, 0) || 1;
+    const contThresh = 0.04 * total, isleThresh = 0.0025 * total;
+    const nc = landSizes.filter(s => s > contThresh).length;
+    const ni = landSizes.filter(s => s > isleThresh && s <= contThresh).length;
+    const islandArea = landSizes.filter(s => s > isleThresh && s <= contThresh).reduce((a, b) => a + b, 0);
+    cfg.numContinentsRange = { min: Math.max(1, nc), max: Math.max(1, nc) };
+    cfg.numSmallIslandsRange = { min: Math.max(1, ni), max: Math.max(1, ni) };
+    cfg.islandWeight = +Math.max(0, Math.min(0.6, islandArea / totalLand)).toFixed(3);
+
+    invBase = cfg;
+    updateSpeedHint();
+
+    // summary UI
+    const parts = [];
+    for (let c = SC.Grassland; c < NC; c++) if (h[c] > 0.008) parts.push([CN[c], h[c]]);
+    parts.sort((a, b) => b[1] - a[1]);
+    $('dsnMixBars').style.display = 'flex';
+    $('dsnMixBars').innerHTML =
+      (h[SC.Ocean] > 0.004 ? '<span title="Ocean" style="flex:0 0 ' + (h[SC.Ocean] * 100).toFixed(2) + '%;background:' + colCss(SC.Ocean) + '"></span>' : '') +
+      (h[SC.Coast] > 0.004 ? '<span title="Coast" style="flex:0 0 ' + (h[SC.Coast] * 100).toFixed(2) + '%;background:' + colCss(SC.Coast) + '"></span>' : '') +
+      parts.map(([n, f]) => '<span title="' + LABEL[n] + ' ' + (f * 100).toFixed(0) + '% of world" style="flex:0 0 ' + (f * 100).toFixed(2) + '%;background:' + colCss(SC[n]) + '"></span>').join('');
+    $('dsnAnalysis').innerHTML =
+      'Land <b>' + (landFrac * 100).toFixed(0) + '%</b> · <b>' + Math.max(1, nc) + '</b> continent(s), <b>' + Math.max(1, ni) + '</b> island group(s)<br>' +
+      '<span class="dsnMini">mix (of land): ' + parts.slice(0, 6).map(([n, f]) => LABEL[n] + ' ' + (f / landFrac * 100).toFixed(0) + '%').join(' · ') + '</span>';
+    setSearchEnabled(true);
+    $('dsnStatus').textContent = 'ready — press Start search';
+  }
+  function setSearchEnabled(on) { const c = $('dsnSearchCard'); c.style.opacity = on ? '' : '.5'; c.style.pointerEvents = on ? '' : 'none'; }
+
+  // ================================================================= search pool
+  function poolWorkerCount() { return Math.max(2, Math.min(8, (navigator.hardwareConcurrency || 4) - 1)); }
+  function randSeed() { let s; do { s = (Math.floor(Math.random() * 2147483646) + 1) | 0; } while (seedSet.has(s)); return s; }
+
+  function ensureWorkers(cb) {
+    if (workers.length) { cb(); return; }
+    const n = poolWorkerCount();
+    let ready = 0;
+    for (let i = 0; i < n; i++) {
+      const w = makeWorker(); w._busy = false;
+      w.onmessage = ev => onWorkerMsg(w, ev.data);
+      w.postMessage({ type: 'init', vt: VT });
+      w.postMessage({ type: 'search-init', target: target, G: G, layoutWeight: layoutWeight });
+      w._readyCb = () => { if (++ready === n) cb(); };
+      workers.push(w);
+    }
+  }
+  function onWorkerMsg(w, m) {
+    if (m.type === 'ready') return;                       // init ack
+    if (m.type === 'search-ready') { if (w._readyCb) { w._readyCb(); w._readyCb = null; } return; }
+    if (m.type === 'search-error') { w._busy = false; if (running) dispatch(w); return; }
+    if (m.type === 'search-result') {
+      w._busy = false; evaluated++;
+      recordCandidate(m);
+      if (running) dispatch(w);
+      throttledUi();
+    }
+  }
+  function dispatch(w) {
+    if (!running || w._busy) return;
+    const seed = randSeed(); seedSet.add(seed);
+    const cfg = JSON.parse(JSON.stringify(invBase)); cfg.seed = seed;
+    if ($('dsnJitter').checked) jitter(cfg);
+    cfgBySeed[seed] = cfg;               // remember the exact cfg so Apply reproduces this candidate (esp. with jitter)
+    w._busy = true;
+    w.postMessage({ type: 'search-eval', cfg: cfg });
+  }
+  function jitter(cfg) {
+    // gentle ±6% multiplicative wobble on land% and each biome weight, to explore near the inversion
+    const wob = v => Math.max(0, v * (1 + (Math.random() - 0.5) * 0.12));
+    const L = Math.max(0.03, Math.min(0.97, wob(cfg.landPercentRange.min)));
+    cfg.landPercentRange = { min: +L.toFixed(3), max: +L.toFixed(3) };
+    for (const k of WEIGHT_KEYS) if (cfg[k] > 0) cfg[k] = +wob(cfg[k]).toFixed(4);
+  }
+  // Combine the weight-independent similarity components into a score for the current layoutWeight.
+  // (prop/soft/iou/exact are computed by the worker at the best toroidal shift and don't depend on w,
+  // so re-weighting the whole pool is pure arithmetic — no re-scoring of grids on the main thread.)
+  function combine(c, w) {
+    const layout = 0.5 * c.soft + 0.3 * c.iou + 0.2 * c.exact;
+    return { score: (1 - w) * c.prop + w * layout, layout: layout, prop: c.prop, soft: c.soft, iou: c.iou, exact: c.exact };
+  }
+  function recordCandidate(m) {
+    const grid = new Uint8Array(m.grid);
+    const comp = { prop: m.prop, soft: m.soft, iou: m.iou, exact: m.exact };
+    const s = combine(comp, layoutWeight);
+    const cfg = cfgBySeed[m.seed]; delete cfgBySeed[m.seed];
+    const item = { seed: m.seed, grid: grid, comp: comp, s: s, cfg: cfg };
+    // insert sorted desc by score
+    let lo = 0, hi = pool.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (pool[mid].s.score < s.score) hi = mid; else lo = mid + 1; }
+    pool.splice(lo, 0, item);
+    if (pool.length > POOL_MAX) { const dropped = pool.splice(POOL_MAX); for (const d of dropped) if (d.cfg && d.cfg.seed != null) delete cfgBySeed[d.cfg.seed]; }
+  }
+  function targetSig() {                // cheap FNV-1a hash so we can tell if the drawing changed
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < target.length; i++) { h ^= target[i]; h = Math.imul(h, 16777619) >>> 0; }
+    return h;
+  }
+  function startSearch() {
+    if (running) return;
+    analyze();                          // always re-derive invBase from the current drawing (keeps it in sync)
+    if (!invBase) return;
+    const sig = targetSig();            // if the drawing changed, the old pool was scored vs a different target
+    if (sig !== poolTargetSig) { pool = []; seedSet = new Set(); cfgBySeed = {}; poolTargetSig = sig; renderGallery(); }
+    running = true; tStart = performance.now(); evaluated = 0;
+    $('dsnStart').disabled = true; $('dsnStop').disabled = false;
+    $('dsnStatus').textContent = 'starting workers…';
+    ensureWorkers(() => {
+      if (!running) return;             // user may have stopped/closed during worker spin-up
+      // (re)sync each worker's target + weight in case the drawing/weight changed since last run
+      for (const w of workers) w.postMessage({ type: 'search-init', target: target, G: G, layoutWeight: layoutWeight });
+      for (const w of workers) dispatch(w);
+    });
+  }
+  function stopSearch() {
+    running = false;
+    $('dsnStart').disabled = false; $('dsnStop').disabled = true;
+    renderGallery(); updateStatus();
+  }
+  function rescorePool() {
+    // pure arithmetic re-weight of the stored components — instant, no grid work
+    for (const it of pool) it.s = combine(it.comp, layoutWeight);
+    pool.sort((a, b) => b.s.score - a.s.score);
+    renderGallery(); updateStatus();
+  }
+
+  // ================================================================= results UI
+  function throttledUi() {
+    const now = performance.now();
+    if (now - lastUiPaint < 250) return;
+    lastUiPaint = now;
+    renderGallery(); updateStatus();
+  }
+  function updateSpeedHint() {
+    const el = $('dsnSpeedHint'); if (!el) return;
+    const ww = (invBase && invBase.worldWidth) || (typeof baseCfg !== 'undefined' && baseCfg ? baseCfg.worldWidth : 72);
+    const m = ww * 10;
+    const note = ww <= 90 ? 'fast — many candidates/second' : ww <= 130 ? 'moderate — a few candidates/second' : 'slow — big worlds take ~seconds per candidate; let it run longer';
+    el.innerHTML = 'World <b>' + m + '×' + m + ' m</b> · ' + poolWorkerCount() + ' parallel workers · ' + note + '.<br>More candidates = better matches. Leave it running and pick from the best.';
+  }
+  function updateStatus() {
+    const secs = (performance.now() - tStart) / 1000;
+    const rate = running && secs > 0 ? (evaluated / secs) : 0;
+    const best = pool.length ? (pool[0].s.score * 100).toFixed(1) + '%' : '—';
+    $('dsnStatus').innerHTML =
+      (running ? '<b>searching…</b> ' : 'stopped · ') +
+      'evaluated <b>' + evaluated + '</b>' + (running ? ' · ~' + rate.toFixed(1) + '/s' : '') +
+      ' · best <b>' + best + '</b> · ' + poolWorkerCount() + ' workers';
+  }
+  // infinite scroll: load the next page when the Show-more sentinel nears the viewport bottom
+  function maybeAutoLoad() {
+    if (designMode !== 'find') return;
+    const dw = $('designWrap'); if (!dw || dw.style.display === 'none') return;
+    const sm = $('dsnShowMore'); if (!sm || sm.style.display === 'none') return;
+    if (sm.getBoundingClientRect().top < window.innerHeight + 300) { galShow += SHOW_STEP; renderGallery(); }
+  }
+  function renderGallery() {
+    const gal = $('dsnGallery');
+    const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target, true);   // keep the "your drawing" thumbnail in sync
+    const bestRef = $('dsnBestRef'), bestLbl = $('dsnBestLbl');
+    if (bestRef) { if (pool.length) { drawGrid(bestRef, pool[0].grid, true); if (bestLbl) bestLbl.textContent = 'best match · ' + (pool[0].s.score * 100).toFixed(1) + '%'; } else { bestRef.getContext('2d').clearRect(0, 0, G, G); if (bestLbl) bestLbl.textContent = 'best match'; } }
+    if (!pool.length) { $('dsnGalCount').textContent = ''; gal.innerHTML = '<div class="dsnMini">No candidates yet — run a search.</div>'; const sm = $('dsnShowMore'); if (sm) sm.style.display = 'none'; return; }
+    // sort a copy by the chosen key, filter by min overall score, page with galShow (Find-mode gallery)
+    const list = pool.filter(it => it.s.score >= galleryMin).slice().sort((a, b) => b.s[gallerySort] - a.s[gallerySort]);
+    $('dsnGalCount').textContent = '(' + list.length + (galleryMin > 0 ? ' of ' + pool.length : '') + ' kept)';
+    const show = list.slice(0, galShow);
+    gal.innerHTML = show.map((it, i) =>
+      '<div class="dsnCandidate' + (i === 0 ? ' best' : '') + '" data-i="' + i + '">' +
+        '<canvas width="' + G + '" height="' + G + '" data-i="' + i + '"></canvas>' +
+        '<div class="sc">' + (it.s.score * 100).toFixed(1) + '%</div>' +
+        '<div>seed ' + it.seed + '</div>' +
+        '<div class="dsnMini">mix ' + (it.s.prop * 100).toFixed(0) + ' · shape ' + (it.s.iou * 100).toFixed(0) + ' · fit ' + (it.s.soft * 100).toFixed(0) + '</div>' +
+        '<button data-apply="' + i + '">Apply this world</button>' +
+      '</div>').join('');
+    gal.querySelectorAll('canvas[data-i]').forEach(c => drawGrid(c, show[+c.dataset.i].grid, true));
+    gal.querySelectorAll('button[data-apply]').forEach(b => b.onclick = () => applyCandidate(show[+b.dataset.apply]));
+    gal.querySelectorAll('canvas[data-i]').forEach(c => c.onclick = () => applyCandidate(show[+c.dataset.i]));
+    const sm = $('dsnShowMore'); if (sm) { const more = list.length - show.length; sm.style.display = more > 0 ? '' : 'none'; sm.textContent = more > 0 ? 'Show more (' + more + ')' : 'Show more'; }
+  }
+  function applyCandidate(item) {
+    // the candidate's exact cfg (jitter-safe); fall back to invBase+seed for older pool items
+    const src = item.cfg || Object.assign(JSON.parse(JSON.stringify(invBase)), { seed: item.seed });
+    const cfg = JSON.parse(JSON.stringify(src));
+    populateForm(cfg);                    // fills every form field incl. weights + seed; readForm() will reproduce cfg
+    close();
+    generateMap(cfg);                     // baseCfg is left as the loaded config so "Reset to loaded" still works
+  }
+
+  // ================================================================= open / close
+  function open(mode) {
+    if (typeof baseCfg === 'undefined' || !baseCfg) { $('err').textContent = 'Load a WorldGenerator.eco config first.'; return; }
+    if (!built) buildUI();
+    designMode = mode === 'find' ? 'find' : 'design';
+    const t = $('dsnTitle'), st = $('dsnSubtitle'), find = designMode === 'find';
+    if (t) t.textContent = find ? '🔍 Find a map' : '🎨 Design a map';
+    if (st) st.textContent = find ? 'paint the layout you want, then search seeds for the closest real world' : 'paint a world → preview it in 3D → export it exactly';
+    $('dsnRightDesign').style.display = find ? 'none' : '';
+    $('dsnRightFind').style.display = find ? '' : 'none';
+    $('dsnFindGallery').style.display = find ? '' : 'none';
+    // hide the map view + panels (mirror open3D), show the designer
+    $('canvasWrap').style.display = 'none'; $('legend').style.display = 'none'; $('stats').style.display = 'none';
+    const sb = $('surfaceBar'); if (sb) sb.style.display = 'none';   // hide the map's cfg sidebar → left column (designer + Underground) goes full width
+    const cfp = $('cfgPanel');
+    if (cfp) { cfp._dsnPrev = cfp.style.display; cfp.style.display = 'none'; }
+    $('designWrap').style.display = 'block';   // Underground (#chartsPanel) stays visible below, usable while designing
+    // first time in: seed the canvas from the current map so there's something to edit (not blank ocean)
+    let empty = true; for (let i = 0; i < target.length; i++) if (target[i] !== SC.Ocean) { empty = false; break; }
+    if (empty && typeof result !== 'undefined' && result) seedFromMap();
+    updateSpeedHint();
+    const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target, true);
+    renderPaint();
+  }
+  function close() {
+    stopSearch();
+    $('designWrap').style.display = 'none';
+    $('canvasWrap').style.display = ''; $('legend').style.display = ''; $('stats').style.display = '';
+    const sb = $('surfaceBar'); if (sb) sb.style.display = '';
+    const cfp = $('cfgPanel');
+    if (cfp) cfp.style.display = cfp._dsnPrev != null ? cfp._dsnPrev : '';
+  }
+
+  // ================================================================= authored-world export
+  // Render a G x G grid to a PNG (generation orientation, no flip — the mod reads pixel (x,y) as world
+  // (x,z)). Returns a Uint8Array of PNG bytes. `pix(x,y)` -> [r,g,b].
+  function gridToPng(pix) {
+    return new Promise(resolve => {
+      const cv = document.createElement('canvas'); cv.width = G; cv.height = G;
+      const ctx = cv.getContext('2d'), img = ctx.createImageData(G, G), d = img.data;
+      for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) { const c = pix(x, y), o = (y * G + x) * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = 255; }
+      ctx.putImageData(img, 0, 0);
+      cv.toBlob(b => b.arrayBuffer().then(ab => resolve(new Uint8Array(ab))), 'image/png');
+    });
+  }
+  // minimal STORE-method zip (no compression; PNGs are already compressed)
+  const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); t[n] = c >>> 0; } return t; })();
+  function crc32(buf) { let c = 0xFFFFFFFF; for (let i = 0; i < buf.length; i++) c = CRC[(c ^ buf[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+  function strBytes(s) { return new TextEncoder().encode(s); }
+  // typed-array <-> base64 (for round-tripping the editable design layers in design.json)
+  function abToB64(buf) { const u8 = new Uint8Array(buf); let s = ''; const CH = 0x8000; for (let i = 0; i < u8.length; i += CH) s += String.fromCharCode.apply(null, u8.subarray(i, i + CH)); return btoa(s); }
+  function b64ToU8(b64) { const s = atob(b64); const u8 = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u8[i] = s.charCodeAt(i); return u8; }
+  // minimal reader for our STORE-method zips: returns { name: Uint8Array }
+  function unzipStore(bytes) {
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), out = {}; let p = 0;
+    while (p + 30 <= bytes.length && dv.getUint32(p, true) === 0x04034b50) {
+      const method = dv.getUint16(p + 8, true), compSize = dv.getUint32(p + 18, true);
+      const nameLen = dv.getUint16(p + 26, true), extraLen = dv.getUint16(p + 28, true);
+      const name = new TextDecoder().decode(bytes.subarray(p + 30, p + 30 + nameLen));
+      const dataStart = p + 30 + nameLen + extraLen;
+      out[name] = method === 0 ? bytes.subarray(dataStart, dataStart + compSize) : null;   // STORE only
+      p = dataStart + compSize;
+    }
+    return out;
+  }
+  function makeZip(files) {                       // files: [{name, data:Uint8Array}]
+    const chunks = [], central = []; let offset = 0;
+    const u16 = v => [v & 255, (v >> 8) & 255], u32 = v => [v & 255, (v >> 8) & 255, (v >> 16) & 255, (v >>> 24) & 255];
+    for (const f of files) {
+      const name = strBytes(f.name), crc = crc32(f.data), sz = f.data.length;
+      const local = [].concat([0x50, 0x4b, 0x03, 0x04], u16(20), u16(0), u16(0), u16(0), u16(0), u32(crc), u32(sz), u32(sz), u16(name.length), u16(0));
+      const lh = new Uint8Array(local.length + name.length + sz); lh.set(local, 0); lh.set(name, local.length); lh.set(f.data, local.length + name.length);
+      chunks.push(lh);
+      const cen = [].concat([0x50, 0x4b, 0x01, 0x02], u16(20), u16(20), u16(0), u16(0), u16(0), u16(0), u32(crc), u32(sz), u32(sz), u16(name.length), u16(0), u16(0), u16(0), u16(0), u32(0), u32(offset));
+      const ch = new Uint8Array(cen.length + name.length); ch.set(cen, 0); ch.set(name, cen.length); central.push(ch);
+      offset += lh.length;
+    }
+    const cenSize = central.reduce((a, c) => a + c.length, 0);
+    const end = new Uint8Array([].concat([0x50, 0x4b, 0x05, 0x06], u16(0), u16(0), u16(files.length), u16(files.length), u32(cenSize), u32(offset), u16(0)));
+    const total = offset + cenSize + end.length, out = new Uint8Array(total); let p = 0;
+    for (const c of chunks) { out.set(c, p); p += c.length; }
+    for (const c of central) { out.set(c, p); p += c.length; }
+    out.set(end, p);
+    return out;
+  }
+  function downloadBlob(bytes, name, type) {
+    const blob = new Blob([bytes], { type: type || 'application/octet-stream' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  }
+  async function buildBundleFiles() {
+    const cfg = buildExportJson();              // the WorldGenerator.eco (main-thread), current form values
+    // Raw maps (what the mod actually reads — unambiguous, no PNG decode). Generation orientation, row-major.
+    const terrain = computeTerrain();           // carved height + water-surface per cell
+    const biomeBin = new Uint8Array(G * G);     // per-cell score-class index (matches the mod's BIOME_BY_INDEX)
+    const heightBin = new Uint8Array(G * G);    // per-cell height byte 0..255 (mod maps to [-1,1], then bilinear-upscales)
+    const waterBin = new Uint8Array(G * G);     // per-cell water surface as waterValue*255 (0 = sea level; mod fills to it)
+    let anyWater = false;
+    for (let i = 0; i < G * G; i++) {
+      biomeBin[i] = target[i];
+      heightBin[i] = Math.max(0, Math.min(255, Math.round(terrain.height[i] * 255)));
+      waterBin[i] = Math.max(0, Math.min(255, Math.round(terrain.waterVal[i] * 255)));
+      if (water[i]) anyWater = true;
+    }
+    // A pure image import exports hi-res biome + height straight from the source image (the coarse 64²
+    // paint grid would waste an ~11-block chunk per pixel). Hand-painting over the import opts back out.
+    let biomeOut = biomeBin, heightOut = heightBin, hi = null;
+    if (importedImg && !paintedSinceImport) { hi = imageToMaps(IMPORT_RES); biomeOut = hi.biome; heightOut = hi.height; anyWater = false; }
+    // PNGs kept for human inspection only (not read by the mod).
+    const biomePng = await gridToPng((x, y) => water[y * G + x] ? [40, 90, 200] : (ECO_BIOME_COLOR[CN[target[y * G + x]]] || ECO_BIOME_COLOR.Ocean));
+    const heightPng = await gridToPng((x, y) => { const b = heightBin[y * G + x]; return [b, b, b]; });
+    const files = [
+      { name: 'WorldGenerator.eco', data: strBytes(JSON.stringify(cfg, null, 2)) },
+      { name: 'biome.bin', data: biomeOut },
+      { name: 'height.bin', data: heightOut },
+      { name: 'biome.png', data: biomePng },
+      { name: 'height.png', data: heightPng },
+      { name: 'authored.json', data: strBytes('{ "enabled": true, "source": "eco-map-generator" }') },
+    ];
+    if (anyWater) files.push({ name: 'water.bin', data: waterBin });   // only when rivers/lakes were painted
+    // raw editable layers, so the design can be re-imported for tuning (the .bin files are computed output)
+    const design = { v: 1, G: G, importMode: importMode, paintRoughness: paintRoughness, elevValue: elevValue, layoutWeight: layoutWeight,
+      target: abToB64(target.buffer), elev: abToB64(elev.buffer), elevPainted: abToB64(elevPainted.buffer), rough: abToB64(rough.buffer), water: abToB64(water.buffer) };
+    files.push({ name: 'design.json', data: strBytes(JSON.stringify(design)) });
+    return { size: (cfg && findWorldWidth(cfg)) || 72, files: files, hiRes: hi ? hi.res : 0 };
+  }
+  async function exportBundle() {
+    if (typeof baseCfg === 'undefined' || !baseCfg) { $('dsnExportStatus').textContent = 'Load a config first.'; return; }
+    $('dsnExportStatus').textContent = 'building bundle…';
+    try {
+      const b = await buildBundleFiles();
+      downloadBlob(makeZip(b.files), 'authored-world-' + b.size + 'x' + b.size + '.zip', 'application/zip');
+      const hi = b.hiRes ? ' · biome/height at <b>' + b.hiRes + '²</b> (hi-res from the imported image)' : '';
+      $('dsnExportStatus').innerHTML = '<b>Exported authored-world-' + b.size + 'x' + b.size + '.zip</b>' + hi + ' — unzip, then run: EcoWorldGenCLI --server &lt;server&gt; --bundle &lt;dir&gt; --out Game.eco';
+    } catch (e) { $('dsnExportStatus').textContent = 'Export error: ' + e.message; }
+  }
+  function findWorldWidth(j) { let r = null; (function w(o) { if (!o || typeof o !== 'object' || r) return; if (Object.prototype.hasOwnProperty.call(o, 'WorldWidth')) { r = o.WorldWidth; return; } for (const k in o) w(o[k]); })(j); return r; }
+
+  // Re-import a previously exported design .zip: restore the editable layers (design.json) + the world
+  // config (WorldGenerator.eco), so you can keep tuning and re-export/regenerate.
+  function importDesignZip(file) {
+    const setStatus = m => { const a = $('dsnExportStatus'); if (a) a.innerHTML = m; const b = $('dsnAnalysis'); if (b) b.innerHTML = '<b>' + m + '</b>'; };
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const zf = unzipStore(new Uint8Array(reader.result));
+        const dj = zf['design.json'];
+        if (!dj) { setStatus('That .zip has no design.json — only designs exported from this version can be re-imported.'); return; }
+        const d = JSON.parse(new TextDecoder().decode(dj));
+        if (d.G !== G) { setStatus('This design uses a ' + d.G + '² grid but the current one is ' + G + '² — can\'t import it exactly.'); return; }
+        pushUndo();
+        target = b64ToU8(d.target);
+        elev = new Float32Array(b64ToU8(d.elev).buffer);
+        elevPainted = b64ToU8(d.elevPainted);
+        rough = new Float32Array(b64ToU8(d.rough).buffer);
+        water = b64ToU8(d.water);
+        hideLegend();                                   // clears any stale image-import state
+        importMode = d.importMode || 'colors';
+        if (d.paintRoughness != null) { paintRoughness = d.paintRoughness; const rg = $('dsnRough'); if (rg) rg.value = Math.round(paintRoughness / 0.16 * 100); const rv = $('dsnRoughV'); if (rv) rv.textContent = roughLabel(paintRoughness); }
+        if (d.elevValue != null) { elevValue = d.elevValue; const el = $('dsnElev'); if (el) el.value = Math.round(elevValue * 100); const ev = $('dsnElevV'); if (ev) ev.textContent = elevLabel(elevValue); }
+        if (d.layoutWeight != null) { layoutWeight = d.layoutWeight; const w = $('dsnWeight'); if (w) w.value = Math.round(layoutWeight * 100); }
+        // restore the world config (size, biomes, terrain/ore) from the bundle if present
+        const eco = zf['WorldGenerator.eco'];
+        if (eco && typeof loadConfigText === 'function') {
+          loadConfigText(new TextDecoder().decode(eco), true);
+          $('cfgPanel').style.display = 'none'; const sb = $('surfaceBar'); if (sb) sb.style.display = 'none';   // stay in the designer overlay
+        }
+        paintMode = 'biome'; markPaintMode(); renderPaint();
+        const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target, true);
+        setStatus('Imported design — tune it, then re-export or preview.');
+      } catch (e) { setStatus('Could not read that design .zip: ' + e.message); }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  // test/automation hook: returns the bundle files base64-encoded (no download prompt)
+  async function bundleBase64() {
+    const b = await buildBundleFiles();
+    const b64 = u8 => { let s = ''; for (let i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]); return btoa(s); };
+    const out = { size: b.size }; for (const f of b.files) out[f.name] = b64(f.data); return out;
+  }
+
+  // ---- 3D preview of the authored design (reuses the main 3D voxel view + worker) ----
+  // Builds the same biome + carved-height maps the export produces and hands them to the voxel worker,
+  // which upscales them to world size and meshes real block chunks — so you can fly through the design.
+  function build3DPayload() {
+    const cfg = readForm();                               // internal cfg (worldWidth, waterLevel, maxGenerationHeight)
+    const t = computeTerrain();
+    const heightBytes = new Uint8Array(G * G);
+    for (let i = 0; i < G * G; i++) heightBytes[i] = Math.max(0, Math.min(255, Math.round(t.height[i] * 255)));
+    return { type: '3d-authored', G: G, biome: target.slice(), height: heightBytes, cfg: cfg, terrain: terrain };
+  }
+  function post3D() {
+    const p = build3DPayload();
+    $('view3dStatus').textContent = 'building 3D preview…';
+    worker.postMessage(p, [p.biome.buffer, p.height.buffer]);
+  }
+  function preview3D() {
+    if (typeof baseCfg === 'undefined' || !baseCfg) { $('dsnExportStatus').textContent = 'Load a config first.'; return; }
+    if (typeof terrain === 'undefined' || !terrain) { $('dsnExportStatus').textContent = 'No terrain loaded — load/generate a config first.'; return; }
+    $('designWrap').style.display = 'none';
+    const cp = $('chartsPanel'); if (cp) cp.style.display = 'none';   // 3D view is a full-screen preview; Underground returns on Back
+    $('view3dWrap').style.display = 'block';
+    threeDFrom = 'designer';
+    const cb = $('view3dClose'); if (cb) cb.textContent = '← Back to design';
+    seenBlocks = {}; hiddenBlocks = new Set(); buildBlockToggles();
+    Render3D.init($('view3dCanvas'), THREE);
+    if (!worker3dBound) { worker.addEventListener('message', worker3dHandler); worker3dBound = true; }
+    requestAnimationFrame(() => Render3D.resize());
+    post3D();
+  }
+
+  async function zipBase64() { const b = await buildBundleFiles(); return abToB64(makeZip(b.files).buffer); }   // test hook
+  window.Designer = { open, close, bundleBase64, preview3D, post3D, zipBase64 };
+  const btn = document.getElementById('designOpen');
+  if (btn) btn.onclick = () => open('design');
+  const fbtn = document.getElementById('findOpen');
+  if (fbtn) fbtn.onclick = () => open('find');
+})();
 </script>
 </body>
 </html>
