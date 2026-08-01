@@ -9129,6 +9129,9 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     $('dsnSort').onchange = e => { gallerySort = e.target.value; renderGallery(); };
     $('dsnMinScore').oninput = e => { galleryMin = +e.target.value / 100; $('dsnMinScoreV').textContent = e.target.value + '%'; renderGallery(); };
     $('dsnShowMore').onclick = () => { galShow += SHOW_STEP; renderGallery(); };
+    // infinite scroll: auto-load more tiles as the Show-more sentinel nears the viewport bottom
+    window.addEventListener('scroll', maybeAutoLoad, { passive: true });
+    window.addEventListener('resize', maybeAutoLoad, { passive: true });
     $('dsnExport').onclick = exportBundle;
     $('dsnPreview3D').onclick = preview3D;
     $('dsnPaintMode').querySelectorAll('button').forEach(b => b.onclick = () => { paintMode = b.dataset.pm; markPaintMode(); renderPaint(); });
@@ -9768,6 +9771,13 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
       (running ? '<b>searching…</b> ' : 'stopped · ') +
       'evaluated <b>' + evaluated + '</b>' + (running ? ' · ~' + rate.toFixed(1) + '/s' : '') +
       ' · best <b>' + best + '</b> · ' + poolWorkerCount() + ' workers';
+  }
+  // infinite scroll: load the next page when the Show-more sentinel nears the viewport bottom
+  function maybeAutoLoad() {
+    if (designMode !== 'find') return;
+    const dw = $('designWrap'); if (!dw || dw.style.display === 'none') return;
+    const sm = $('dsnShowMore'); if (!sm || sm.style.display === 'none') return;
+    if (sm.getBoundingClientRect().top < window.innerHeight + 300) { galShow += SHOW_STEP; renderGallery(); }
   }
   function renderGallery() {
     const gal = $('dsnGallery');
