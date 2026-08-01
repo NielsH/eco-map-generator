@@ -189,6 +189,10 @@ const html = `<!DOCTYPE html>
   #panel{display:none; margin-top:18px;}
   #canvasWrap{display:inline-block; position:relative; border:0.5px solid var(--border); border-radius:12px; background:var(--surf); padding:8px; line-height:0;}
   canvas{border-radius:6px; max-width:100%; height:auto; image-rendering:auto; cursor:crosshair;}
+  #cv{width:100%;}   /* fill the left column so the map sits snug against the config sidebar */
+  #srcBox{border:0.5px solid var(--border); border-radius:10px; background:var(--surf); padding:6px 12px; margin-bottom:6px;}
+  #srcBox summary{cursor:pointer; font-weight:600; font-size:13px; user-select:none; padding:2px 0;}
+  #srcBox[open] summary{margin-bottom:6px;}
   #legend{display:flex; flex-wrap:wrap; gap:8px 16px; margin-top:12px; font-size:12px; color:var(--text2); align-items:center;}
   .sw{width:12px; height:12px; border-radius:2px; display:inline-block; vertical-align:-1px; margin-right:6px; border:0.5px solid var(--border);}
   #stats{font-size:13px; color:var(--text2); margin-top:10px;}
@@ -271,13 +275,16 @@ const html = `<!DOCTYPE html>
   <h1>Eco WorldGen map preview</h1>
   <p class="sub">A default Eco world is shown on load — drop, upload, or paste your own <code>WorldGenerator.eco</code> to replace it, or edit any knob below and regenerate. Previews the generated surface (biomes, elevation, climate, rivers &amp; lakes) and block/ore composition, entirely in your browser using a faithful port of the server's generator.</p>
 
-  <div id="drop">
-    <strong>Drop a WorldGenerator.eco file here</strong>, or <label style="color:var(--accent); cursor:pointer; text-decoration:underline">browse<input id="file" type="file" accept=".eco,.json,application/json" style="display:none"></label>
-    <div style="font-size:13px; margin-top:4px;">— or paste the JSON below —</div>
-  </div>
-  <textarea id="paste" placeholder="Paste WorldGenerator.eco JSON here, then click Load"></textarea>
-  <div class="row">
-    <button class="primary" id="loadCfg">Load pasted config</button>
+  <details id="srcBox">
+    <summary id="srcSummary">📁 Config source <span class="lbl">— using the default world · click to load your own</span></summary>
+    <div id="drop" style="margin-top:8px">
+      <strong>Drop a WorldGenerator.eco file here</strong>, or <label style="color:var(--accent); cursor:pointer; text-decoration:underline">browse<input id="file" type="file" accept=".eco,.json,application/json" style="display:none"></label>
+      <div style="font-size:13px; margin-top:4px;">— or paste the JSON below —</div>
+    </div>
+    <textarea id="paste" placeholder="Paste WorldGenerator.eco JSON here, then click Load"></textarea>
+    <div class="row"><button class="primary" id="loadCfg">Load pasted config</button></div>
+  </details>
+  <div class="row" style="margin-top:8px">
     <span class="lbl">Seed override</span><input type="text" id="seed" placeholder="(from config)"><button id="randSeed" title="Random seed &amp; regenerate">🎲 Randomize</button>
   </div>
   <div id="err"></div>
@@ -365,7 +372,7 @@ const html = `<!DOCTYPE html>
     <div class="cfgActions">
       <button class="primary" id="regen">Regenerate map</button>
       <button id="resetCfg">Reset to loaded</button>
-      <label class="lbl" style="display:inline-flex;align-items:center;gap:5px;margin-left:auto" title="Max canvas resolution for the 2D map render">Max render px <input type="number" id="maxpx" value="900" min="200" max="2000" step="100" style="width:74px"></label>
+      <label class="lbl" style="display:inline-flex;align-items:center;gap:5px;margin-left:auto" title="Max canvas resolution for the 2D map render">Max render px <input type="number" id="maxpx" value="1200" min="200" max="2000" step="100" style="width:74px"></label>
       <button id="dlEco">Download .eco</button>
     </div>
   </div>
@@ -509,7 +516,7 @@ function fieldHtml([key, label, type, step]) {
 function buildForm() {
   const host = $('cfgForm'); host.innerHTML = '';
   CFG_GROUPS.forEach(([title, fields], gi) => {
-    const d = document.createElement('details'); if (gi < 3) d.open = true;
+    const d = document.createElement('details');   // all groups collapsed by default — expand what you need
     if (title === 'Biome mix') { d.innerHTML = \`<summary>\${title}</summary>\` + biomeMixHtml(fields); host.appendChild(d); return; }
     d.innerHTML = \`<summary>\${title}</summary><div class="cfgGrid">\${fields.map(fieldHtml).join('')}</div>\`;
     host.appendChild(d);
@@ -688,6 +695,8 @@ function loadConfigText(text) {
   OreVisual.build();
   $('chartsPanel').style.display = terrain ? 'block' : 'none';
   if (terrain) { const ej = buildExportJson(); BlockChart.render(ej); }
+  const sb = $('srcBox'); if (sb) sb.open = false;   // collapse the source area once a config is loaded
+  const ss = $('srcSummary'); if (ss) ss.innerHTML = '📁 Config source <span class="lbl">— loaded · click to load another</span>';
   generateMap(cfg);
 }
 function generateFromForm() {
