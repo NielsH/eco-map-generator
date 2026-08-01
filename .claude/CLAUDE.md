@@ -179,6 +179,10 @@ off to a C# tool in the Eco repo (`~/Documents/GitHub/Eco/Tools/`, not in git):
   **contour** lines (`CONTOUR` spacing) reveal shape and make edits visible. A `#dsnElevBar` scale bar
   (`drawElevLegend`) shows the ramp + a brush marker, and a hover readout (`updateElevReadout`, off the
   cached `lastTerrain`) reads the elevation under the cursor.
+- **3D view is toroidal**: `render3d.streamChunks` requests chunks around the camera with no bounds clamp;
+  the worker's `genChunkColumns` wraps the data lookups (`(x0+lx)%W`) but meshes at the un-wrapped world
+  position, so flying off any edge continues into the wrapped world seamlessly (matches the real round
+  world). Far chunks are dropped so memory stays bounded.
 - **3D preview** (`designer.preview3D`/`post3D` → worker `3d-authored`): the designer's "🧊 3D preview"
   button hands the painted biome + carved-height maps to the voxel worker, which upscales them to world
   size (nearest biome, bilinear+toroidal height — matching the mod), maps painter classes → `RASTER_BIOMES`,
