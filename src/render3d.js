@@ -135,7 +135,8 @@ var Render3D = (function () {
   function updateHud() {
     if (!hud) return;
     var p = camera.position, b = biomeAt(p.x, p.z);
-    hud.textContent = 'Y ' + Math.round(p.y) + '   X ' + Math.round(p.x) + '  Z ' + Math.round(p.z) +
+    var wrap = v => Wg ? Math.round(((v % Wg) + Wg) % Wg) : Math.round(v);   // torus: report position within [0, W)
+    hud.textContent = 'Y ' + Math.round(p.y) + '   X ' + wrap(p.x) + '  Z ' + wrap(p.z) +
       (b ? '   ·   ' + b : '') + (curSlice != null ? '   ✂ cutaway' : '');
   }
 
