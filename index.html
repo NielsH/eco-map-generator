@@ -134,8 +134,8 @@
   <h1>Eco WorldGen map preview</h1>
   <p class="sub">A default Eco world is shown on load — drop, upload, or paste your own <code>WorldGenerator.eco</code> to replace it, or edit any knob below and regenerate. Previews the generated surface (biomes, elevation, climate, rivers &amp; lakes) and block/ore composition, entirely in your browser using a faithful port of the server's generator.</p>
 
-  <details id="srcBox">
-    <summary id="srcSummary">📁 Config source <span class="lbl">— using the default world · click to load your own</span></summary>
+  <details id="srcBox" open>
+    <summary id="srcSummary">📁 Config source <span class="lbl">— using the default world · drop or paste your own below</span></summary>
     <div id="drop" style="margin-top:8px">
       <strong>Drop a WorldGenerator.eco file here</strong>, or <label style="color:var(--accent); cursor:pointer; text-decoration:underline">browse<input id="file" type="file" accept=".eco,.json,application/json" style="display:none"></label>
       <div style="font-size:13px; margin-top:4px;">— or paste the JSON below —</div>
@@ -7981,7 +7981,7 @@ function generateMap(cfg) {
   else { worker.postMessage({ type: 'init', vt: VT }); workerReady = true; }
 }
 // parse a pasted/loaded config, fill the form, then generate
-function loadConfigText(text) {
+function loadConfigText(text, userInitiated) {
   text = (text || '').trim();
   $('err').textContent = '';
   if (!text) { $('err').textContent = 'Paste or drop a WorldGenerator.eco config first.'; return; }
@@ -7996,8 +7996,10 @@ function loadConfigText(text) {
   OreVisual.build();
   $('chartsPanel').style.display = terrain ? 'block' : 'none';
   if (terrain) { const ej = buildExportJson(); BlockChart.render(ej); }
-  const sb = $('srcBox'); if (sb) sb.open = false;   // collapse the source area once a config is loaded
-  const ss = $('srcSummary'); if (ss) ss.innerHTML = '📁 Config source <span class="lbl">— loaded · click to load another</span>';
+  if (userInitiated) {   // collapse the source area only after the user loads their own config (not the initial default)
+    const sb = $('srcBox'); if (sb) sb.open = false;
+    const ss = $('srcSummary'); if (ss) ss.innerHTML = '📁 Config source <span class="lbl">— loaded · click to load another</span>';
+  }
   generateMap(cfg);
 }
 function generateFromForm() {
@@ -8784,7 +8786,7 @@ OreVisual.init();
   });
 })();
 $('regen').onclick = generateFromForm;
-$('loadCfg').onclick = () => loadConfigText($('paste').value);
+$('loadCfg').onclick = () => loadConfigText($('paste').value, true);
 $('resetCfg').onclick = () => { if (baseCfg) populateForm(baseCfg); };
 $('dlEco').onclick = downloadEco;
 $('randSeed').onclick = () => {
@@ -8879,7 +8881,7 @@ const drop = $('drop');
 drop.addEventListener('drop', e => { const f=e.dataTransfer.files[0]; if(f) readFile(f); });
 drop.addEventListener('click', ()=>$('file').click());
 $('file').addEventListener('change', e => { const f=e.target.files[0]; if(f) readFile(f); });
-function readFile(f){ const r=new FileReader(); r.onload=()=>{ $('paste').value=r.result; loadConfigText(r.result); }; r.readAsText(f); }
+function readFile(f){ const r=new FileReader(); r.onload=()=>{ $('paste').value=r.result; loadConfigText(r.result, true); }; r.readAsText(f); }
 
 // load the bundled default world on startup (embedded, so it works from file:// too)
 const DEFAULT_ECO = ($('defaultcfg').textContent || '').trim();
