@@ -169,7 +169,11 @@ off to a C# tool in the Eco repo (`~/Documents/GitHub/Eco/Tools/`, not in git):
 - **`src/designer.js` (`buildBundleFiles`)** builds a bundle: `WorldGenerator.eco` (from `buildExportJson`),
   `biome.bin` (one score-class index per cell, row-major, generation orientation), `height.bin` (one 0–255
   byte per cell), plus `biome.png`/`height.png` for humans, zipped (minimal STORE zip + PNG via canvas).
-  The **Export** button downloads it; `Designer.bundleBase64()` is a test hook.
+  The **Export** button downloads it; `Designer.bundleBase64()` / `zipBase64()` are test hooks. The bundle
+  also includes **`design.json`** — the raw editable layers (target/elev/elevPainted/rough/water, base64
+  typed arrays, + importMode/roughness/etc.) so the design can be re-imported for tuning ("📂 Import
+  design" → `importDesignZip`: `unzipStore` the STORE zip, restore the layers + `loadConfigText` the
+  bundled config). The `.bin` files are computed output; `design.json` is the source of truth for editing.
 - **Elevation layer**: a paint-mode toggle adds an `elev`/`elevPainted` layer; `heightAt()` uses the painted
   value or a biome-derived default (`ECO_BIOME_ELEV`). `ECO_BIOME_COLOR` holds the exact Eco biome colors.
   Painted cells get natural micro-relief (fbm) so they aren't dead flat; the amount is **per-cell** (`rough`

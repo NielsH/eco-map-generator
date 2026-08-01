@@ -150,6 +150,8 @@
             '<button id="dsnSeedFromMap">Seed from current map</button>' +
             '<button id="dsnImport" title="Map an image\'s colors to biomes — auto-nearest, then remap any color you like">📁 Import image</button>' +
             '<input type="file" id="dsnImgFile" accept="image/*" style="display:none">' +
+            '<button id="dsnImportDesign" title="Load a previously exported design .zip to keep tuning it">📂 Import design</button>' +
+            '<input type="file" id="dsnDesignFile" accept=".zip,application/zip" style="display:none">' +
             '<button id="dsnClear">Clear</button>' +
           '</div>' +
           '<div class="dsnTools" style="margin-top:0">' +
@@ -232,6 +234,8 @@
     $('dsnSeedFromMap').onclick = seedFromMap;
     $('dsnImport').onclick = () => $('dsnImgFile').click();
     $('dsnImgFile').onchange = e => { const f = e.target.files[0]; if (f) importImage(f); e.target.value = ''; };
+    $('dsnImportDesign').onclick = () => $('dsnDesignFile').click();
+    $('dsnDesignFile').onchange = e => { const f = e.target.files[0]; if (f) importDesignZip(f); e.target.value = ''; };
     $('dsnClose').onclick = close;
     $('dsnAnalyze').onclick = analyze;
     $('dsnStart').onclick = startSearch;
@@ -972,6 +976,22 @@
   const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); t[n] = c >>> 0; } return t; })();
   function crc32(buf) { let c = 0xFFFFFFFF; for (let i = 0; i < buf.length; i++) c = CRC[(c ^ buf[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
   function strBytes(s) { return new TextEncoder().encode(s); }
+  // typed-array <-> base64 (for round-tripping the editable design layers in design.json)
+  function abToB64(buf) { const u8 = new Uint8Array(buf); let s = ''; const CH = 0x8000; for (let i = 0; i < u8.length; i += CH) s += String.fromCharCode.apply(null, u8.subarray(i, i + CH)); return btoa(s); }
+  function b64ToU8(b64) { const s = atob(b64); const u8 = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u8[i] = s.charCodeAt(i); return u8; }
+  // minimal reader for our STORE-method zips: returns { name: Uint8Array }
+  function unzipStore(bytes) {
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), out = {}; let p = 0;
+    while (p + 30 <= bytes.length && dv.getUint32(p, true) === 0x04034b50) {
+      const method = dv.getUint16(p + 8, true), compSize = dv.getUint32(p + 18, true);
+      const nameLen = dv.getUint16(p + 26, true), extraLen = dv.getUint16(p + 28, true);
+      const name = new TextDecoder().decode(bytes.subarray(p + 30, p + 30 + nameLen));
+      const dataStart = p + 30 + nameLen + extraLen;
+      out[name] = method === 0 ? bytes.subarray(dataStart, dataStart + compSize) : null;   // STORE only
+      p = dataStart + compSize;
+    }
+    return out;
+  }
   function makeZip(files) {                       // files: [{name, data:Uint8Array}]
     const chunks = [], central = []; let offset = 0;
     const u16 = v => [v & 255, (v >> 8) & 255], u32 = v => [v & 255, (v >> 8) & 255, (v >> 16) & 255, (v >>> 24) & 255];
@@ -1027,6 +1047,10 @@
       { name: 'authored.json', data: strBytes('{ "enabled": true, "source": "eco-map-generator" }') },
     ];
     if (anyWater) files.push({ name: 'water.bin', data: waterBin });   // only when rivers/lakes were painted
+    // raw editable layers, so the design can be re-imported for tuning (the .bin files are computed output)
+    const design = { v: 1, G: G, importMode: importMode, paintRoughness: paintRoughness, elevValue: elevValue, layoutWeight: layoutWeight,
+      target: abToB64(target.buffer), elev: abToB64(elev.buffer), elevPainted: abToB64(elevPainted.buffer), rough: abToB64(rough.buffer), water: abToB64(water.buffer) };
+    files.push({ name: 'design.json', data: strBytes(JSON.stringify(design)) });
     return { size: (cfg && findWorldWidth(cfg)) || 72, files: files, hiRes: hi ? hi.res : 0 };
   }
   async function exportBundle() {
@@ -1040,6 +1064,43 @@
     } catch (e) { $('dsnExportStatus').textContent = 'Export error: ' + e.message; }
   }
   function findWorldWidth(j) { let r = null; (function w(o) { if (!o || typeof o !== 'object' || r) return; if (Object.prototype.hasOwnProperty.call(o, 'WorldWidth')) { r = o.WorldWidth; return; } for (const k in o) w(o[k]); })(j); return r; }
+
+  // Re-import a previously exported design .zip: restore the editable layers (design.json) + the world
+  // config (WorldGenerator.eco), so you can keep tuning and re-export/regenerate.
+  function importDesignZip(file) {
+    const setStatus = m => { const a = $('dsnExportStatus'); if (a) a.innerHTML = m; const b = $('dsnAnalysis'); if (b) b.innerHTML = '<b>' + m + '</b>'; };
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const zf = unzipStore(new Uint8Array(reader.result));
+        const dj = zf['design.json'];
+        if (!dj) { setStatus('That .zip has no design.json — only designs exported from this version can be re-imported.'); return; }
+        const d = JSON.parse(new TextDecoder().decode(dj));
+        if (d.G !== G) { setStatus('This design uses a ' + d.G + '² grid but the current one is ' + G + '² — can\'t import it exactly.'); return; }
+        pushUndo();
+        target = b64ToU8(d.target);
+        elev = new Float32Array(b64ToU8(d.elev).buffer);
+        elevPainted = b64ToU8(d.elevPainted);
+        rough = new Float32Array(b64ToU8(d.rough).buffer);
+        water = b64ToU8(d.water);
+        hideLegend();                                   // clears any stale image-import state
+        importMode = d.importMode || 'colors';
+        if (d.paintRoughness != null) { paintRoughness = d.paintRoughness; const rg = $('dsnRough'); if (rg) rg.value = Math.round(paintRoughness / 0.16 * 100); const rv = $('dsnRoughV'); if (rv) rv.textContent = roughLabel(paintRoughness); }
+        if (d.elevValue != null) { elevValue = d.elevValue; const el = $('dsnElev'); if (el) el.value = Math.round(elevValue * 100); const ev = $('dsnElevV'); if (ev) ev.textContent = elevLabel(elevValue); }
+        if (d.layoutWeight != null) { layoutWeight = d.layoutWeight; const w = $('dsnWeight'); if (w) w.value = Math.round(layoutWeight * 100); }
+        // restore the world config (size, biomes, terrain/ore) from the bundle if present
+        const eco = zf['WorldGenerator.eco'];
+        if (eco && typeof loadConfigText === 'function') {
+          loadConfigText(new TextDecoder().decode(eco), true);
+          $('cfgPanel').style.display = 'none'; const sb = $('surfaceBar'); if (sb) sb.style.display = 'none';   // stay in the designer overlay
+        }
+        paintMode = 'biome'; markPaintMode(); renderPaint();
+        const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target, true);
+        setStatus('Imported design — tune it, then re-export or preview.');
+      } catch (e) { setStatus('Could not read that design .zip: ' + e.message); }
+    };
+    reader.readAsArrayBuffer(file);
+  }
 
   // test/automation hook: returns the bundle files base64-encoded (no download prompt)
   async function bundleBase64() {
@@ -1078,7 +1139,8 @@
     post3D();
   }
 
-  window.Designer = { open, close, bundleBase64, preview3D, post3D };
+  async function zipBase64() { const b = await buildBundleFiles(); return abToB64(makeZip(b.files).buffer); }   // test hook
+  window.Designer = { open, close, bundleBase64, preview3D, post3D, zipBase64 };
   const btn = document.getElementById('designOpen');
   if (btn) btn.onclick = () => open('design');
   const fbtn = document.getElementById('findOpen');
