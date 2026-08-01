@@ -157,6 +157,7 @@
       <span class="lbl">Layer</span><span class="seg" id="layers"></span>
       <label class="lbl" style="display:inline-flex;align-items:center;gap:5px;margin-left:8px"><input type="checkbox" id="waterToggle" checked> Rivers &amp; lakes</label>
       <button id="designOpen" style="margin-left:auto">🎨 Design a map</button>
+      <button id="findOpen">🔍 Find a map</button>
       <button id="view3d">🧊 3D view</button>
       <button id="expPng">Export PNG</button>
     </div>
@@ -8924,6 +8925,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
   let rough = new Float32Array(G * G);         // per-cell micro-relief amount, baked from the brush at paint time
   let water = new Uint8Array(G * G);           // 1 where the user painted a river/lake (carved + water-filled)
   let paintMode = 'biome';                     // 'biome' | 'elevation' | 'water'
+  let designMode = 'design';                    // 'design' (paint → exact export/3D) | 'find' (paint → seed search)
   let elevValue = 0.66;                        // current elevation brush value
   let paintRoughness = 0.08;                   // natural micro-relief added to painted areas (0 = perfectly flat)
   const RIVER_CARVE = 0.045, RIVER_LIP = 0.012; // channel depth + how far the water sits below the banks (in [0,1] height)
@@ -8984,7 +8986,9 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     .dsnCard h4{margin:0 0 6px;font-size:13px;font-weight:600}
     .dsnSectionLbl{font-size:12px;font-weight:600;color:var(--text2);margin:16px 0 6px;padding-top:12px;border-top:0.5px solid var(--border)}
     .dsnSectionLbl i{color:var(--muted);font-weight:500}
-    .dsnGallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px}
+    .dsnGallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+    .findMode .dsnRight{max-width:600px}
+    .findMode .dsnGallery{grid-template-columns:repeat(auto-fill,minmax(180px,1fr))}
     .dsnCandidate{border:0.5px solid var(--border);border-radius:8px;background:var(--surf);padding:6px;text-align:center;font-size:11px;color:var(--text2)}
     .dsnCandidate canvas{width:100%;height:auto;border-radius:5px;image-rendering:pixelated;display:block;margin-bottom:4px;cursor:pointer}
     .dsnCandidate .sc{font-size:15px;font-weight:700;color:var(--text)}
@@ -9013,8 +9017,8 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     injectStyle();
     const host = $('designWrap');
     host.innerHTML =
-      '<div class="row" style="margin:2px 0 10px"><strong style="font-size:15px">🎨 Design a map</strong>' +
-      '<span class="dsnMini" style="margin-left:6px">paint a world → preview it in 3D → export it exactly, or find the closest real seed</span>' +
+      '<div class="row" style="margin:2px 0 10px"><strong style="font-size:15px" id="dsnTitle">🎨 Design a map</strong>' +
+      '<span class="dsnMini" id="dsnSubtitle" style="margin-left:6px">paint a world → preview it in 3D → export it exactly</span>' +
       '<button id="dsnClose" style="margin-left:auto">← Back to map</button></div>' +
       '<div class="dsnCols">' +
         '<div class="dsnLeft">' +
@@ -9052,15 +9056,17 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
           '</div>' +
         '</div>' +
         '<div class="dsnRight">' +
-          // Primary path: exact authored world (+ 3D preview)
+          // "Design a map" mode: exact authored world (+ 3D preview)
+          '<div id="dsnRightDesign">' +
           '<div class="dsnCard"><h4 style="margin:0 0 4px">Your world <span class="dsnMini">— exact</span></h4>' +
             '<div class="dsnMini" style="margin:0 0 8px"><b>🧊 3D preview</b> flies through your design here. <b>Export</b> writes a bundle for the <code>EcoWorldGenCLI</code> tool → a stock-loadable <code>.eco</code> whose biomes + terrain match your drawing <b>exactly</b> (needs the C# tool + an Eco server build).</div>' +
             '<div class="row" style="gap:6px"><button id="dsnPreview3D" class="primary" title="Fly through your design in the 3D voxel world">🧊 3D preview</button>' +
             '<button id="dsnExport">⬇ Export (.zip)</button></div>' +
             '<div class="dsnMini" id="dsnExportStatus" style="margin-top:8px"></div></div>' +
-          // Secondary path: closest naturally-generated world (seed search)
-          '<div class="dsnSectionLbl">Or: find the closest <i>naturally-generated</i> world</div>' +
-          '<div class="dsnCard"><h4>1 · Target</h4><div id="dsnAnalysis" class="dsnMini">Draw a layout (or seed it from the current map), then analyze it.</div>' +
+          '</div>' +
+          // "Find a map" mode: closest naturally-generated world (seed search)
+          '<div id="dsnRightFind" style="display:none">' +
+          '<div class="dsnCard"><h4>1 · Target</h4><div id="dsnAnalysis" class="dsnMini">Draw the layout you want (or seed it from the current map), then analyze it.</div>' +
             '<div class="dsnBars" id="dsnMixBars" style="display:none"></div>' +
             '<button id="dsnAnalyze" class="primary" style="margin-top:8px">Analyze drawing → set up search</button></div>' +
           '<div class="dsnCard" id="dsnSearchCard" style="opacity:.5;pointer-events:none"><h4>2 · Search</h4>' +
@@ -9071,14 +9077,15 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
             '<div id="dsnStatus" style="margin-top:8px">idle</div>' +
             '<div class="dsnMini" id="dsnSpeedHint" style="margin-top:6px"></div></div>' +
           '<div class="dsnCard"><h4 style="margin:0 0 6px">3 · Closest worlds <span class="dsnMini" id="dsnGalCount"></span></h4>' +
-            '<div id="dsnCompare" style="display:flex;gap:12px;align-items:center;justify-content:center;margin:2px 0 8px">' +
-              '<div style="text-align:center"><canvas id="dsnTargetRef" width="' + G + '" height="' + G + '" style="width:88px;height:88px;border-radius:6px;image-rendering:pixelated;border:0.5px solid var(--border)"></canvas><div class="dsnMini">your drawing</div></div>' +
-              '<div style="font-size:22px;color:var(--muted)">→</div>' +
-              '<div style="text-align:center"><canvas id="dsnBestRef" width="' + G + '" height="' + G + '" style="width:88px;height:88px;border-radius:6px;image-rendering:pixelated;border:0.5px solid var(--border)"></canvas><div class="dsnMini" id="dsnBestLbl">best match</div></div>' +
+            '<div id="dsnCompare" style="display:flex;gap:14px;align-items:center;justify-content:center;margin:2px 0 10px">' +
+              '<div style="text-align:center"><canvas id="dsnTargetRef" width="' + G + '" height="' + G + '" style="width:130px;height:130px;border-radius:8px;image-rendering:pixelated;border:0.5px solid var(--border)"></canvas><div class="dsnMini">your drawing</div></div>' +
+              '<div style="font-size:24px;color:var(--muted)">→</div>' +
+              '<div style="text-align:center"><canvas id="dsnBestRef" width="' + G + '" height="' + G + '" style="width:130px;height:130px;border-radius:8px;image-rendering:pixelated;border:0.5px solid var(--border)"></canvas><div class="dsnMini" id="dsnBestLbl">best match</div></div>' +
             '</div>' +
             '<div class="dsnMini" style="margin:2px 0 2px">click any card to apply it as your real world · scores are relative — even the best is an approximation</div>' +
             '<div class="dsnMini" style="margin:0 0 8px"><b>mix</b> = biome proportions · <b>shape</b> = land-mass overlap · <b>fit</b> = biome-type agreement</div>' +
             '<div class="dsnGallery" id="dsnGallery"><div class="dsnMini">No candidates yet — run a search.</div></div></div>' +
+          '</div>' +
         '</div>' +
       '</div>';
 
@@ -9773,9 +9780,16 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
   }
 
   // ================================================================= open / close
-  function open() {
+  function open(mode) {
     if (typeof baseCfg === 'undefined' || !baseCfg) { $('err').textContent = 'Load a WorldGenerator.eco config first.'; return; }
     if (!built) buildUI();
+    designMode = mode === 'find' ? 'find' : 'design';
+    const t = $('dsnTitle'), st = $('dsnSubtitle'), find = designMode === 'find';
+    if (t) t.textContent = find ? '🔍 Find a map' : '🎨 Design a map';
+    if (st) st.textContent = find ? 'paint the layout you want, then search seeds for the closest real world' : 'paint a world → preview it in 3D → export it exactly';
+    $('dsnRightDesign').style.display = find ? 'none' : '';
+    $('dsnRightFind').style.display = find ? '' : 'none';
+    $('designWrap').classList.toggle('findMode', find);
     // hide the map view + panels (mirror open3D), show the designer
     $('canvasWrap').style.display = 'none'; $('legend').style.display = 'none'; $('stats').style.display = 'none';
     const sb = $('surfaceBar'); if (sb) sb.style.display = 'none';   // hide the map's cfg sidebar → left column (designer + Underground) goes full width
@@ -9922,7 +9936,9 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
 
   window.Designer = { open, close, bundleBase64, preview3D, post3D };
   const btn = document.getElementById('designOpen');
-  if (btn) btn.onclick = open;
+  if (btn) btn.onclick = () => open('design');
+  const fbtn = document.getElementById('findOpen');
+  if (fbtn) fbtn.onclick = () => open('find');
 })();
 </script>
 </body>

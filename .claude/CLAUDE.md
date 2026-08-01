@@ -47,9 +47,16 @@ node test/verify-core.js  # Random + 66 noise checks vs references captured from
 `.wrap` holds a header + config-source area (drop/paste/**Load pasted config**), then `#mainCols` — a CSS
 grid (`grid-template-areas: 'map cfg' / 'charts charts'`): **left** = `#panel` (surface map + layers +
 the `#view3dWrap`/`#designWrap` overlays), **right** = `#cfgPanel` (config form, collapsible `<details>`
-per `CFG_GROUPS`), **full-width below** = `#chartsPanel` (Underground). Opening the 3D view or the
-designer adds `.solo` to `#mainCols` (→ `display:block`, one column) and hides `#cfgPanel`/`#chartsPanel`/
-`#surfaceBar` so the overlay is full-width; closing restores the grid. Generate model: **Load pasted
+per `CFG_GROUPS`), **full-width below** = `#chartsPanel` (Underground). `#leftCol` is a flex column; `#chartsPanel` (Underground) is a collapsed-by-default `<details>` pinned
+above the map via `order:-1`, shown in both the map and the designer. The map canvas is `width:100%` so
+it fills the column. The config-source (drop/paste/Load) is a `<details id="srcBox">` that auto-collapses
+after a load. Opening the 3D view or the designer hides `#cfgPanel`/`#surfaceBar` (and, for 3D,
+`#chartsPanel`) so the left column takes the full width via flex — no `.solo` class.
+
+**Designer modes** (`designer.open(mode)`): `'design'` shows `#dsnRightDesign` (exact authored export +
+🧊 3D preview); `'find'` shows `#dsnRightFind` (the seed search: Target → Search → Closest, with larger
+previews via `.findMode`). The `🎨 Design a map` and `🔍 Find a map` buttons open the two modes; both
+share the painter. Generate model: **Load pasted
 config** (`loadConfigText`) parses+populates+generates; **Regenerate map** (`generateFromForm`) applies
 form edits — the single generate action (there is no separate top "Generate" button any more).
 

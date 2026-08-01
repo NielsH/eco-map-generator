@@ -300,6 +300,7 @@ const html = `<!DOCTYPE html>
       <span class="lbl">Layer</span><span class="seg" id="layers"></span>
       <label class="lbl" style="display:inline-flex;align-items:center;gap:5px;margin-left:8px"><input type="checkbox" id="waterToggle" checked> Rivers &amp; lakes</label>
       <button id="designOpen" style="margin-left:auto">🎨 Design a map</button>
+      <button id="findOpen">🔍 Find a map</button>
       <button id="view3d">🧊 3D view</button>
       <button id="expPng">Export PNG</button>
     </div>
