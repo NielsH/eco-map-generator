@@ -62,7 +62,8 @@
   let layoutWeight = 0.6;
   let invBase = null;                    // inverted starting config (all fields), seed varied per candidate
   let pool = [];                         // kept candidates: { seed, grid, s }  (s = score breakdown)
-  const POOL_MAX = 120, SHOW = 12;
+  const POOL_MAX = 120, SHOW_STEP = 12;
+  let galShow = 12, gallerySort = 'score', galleryMin = 0;   // gallery view state (Find mode)
   let workers = [], running = false, evaluated = 0, tStart = 0, seedSet = new Set(), lastUiPaint = 0;
   let classgridBound = false, painting = false, built = false, cfgBySeed = {}, poolTargetSig = null;
   let undoStack = [], lastGX = -1, lastGY = -1;
@@ -100,8 +101,13 @@
     .dsnSectionLbl{font-size:12px;font-weight:600;color:var(--text2);margin:16px 0 6px;padding-top:12px;border-top:0.5px solid var(--border)}
     .dsnSectionLbl i{color:var(--muted);font-weight:500}
     .dsnGallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
-    .findMode .dsnRight{max-width:600px}
-    .findMode .dsnGallery{grid-template-columns:repeat(auto-fill,minmax(180px,1fr))}
+    #dsnFindGallery{margin-top:16px;border-top:0.5px solid var(--border);padding-top:12px}
+    #dsnFindGallery .dsnGallery{grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}
+    .dsnGalBar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:2px}
+    .dsnGalBar select{font-size:12px;padding:2px 6px;border-radius:6px;border:0.5px solid var(--border);background:var(--surf);color:var(--text)}
+    #dsnCompare{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;margin:10px 0 12px}
+    .dsnCmp{text-align:center}
+    .dsnCmp canvas{width:120px;height:120px;border-radius:8px;image-rendering:pixelated;border:0.5px solid var(--border);display:block}
     .dsnCandidate{border:0.5px solid var(--border);border-radius:8px;background:var(--surf);padding:6px;text-align:center;font-size:11px;color:var(--text2)}
     .dsnCandidate canvas{width:100%;height:auto;border-radius:5px;image-rendering:pixelated;display:block;margin-bottom:4px;cursor:pointer}
     .dsnCandidate .sc{font-size:15px;font-weight:700;color:var(--text)}
@@ -189,17 +195,25 @@
               '<label class="dsnMini" style="display:inline-flex;align-items:center;gap:4px;margin-left:4px" title="Also wobble land% and biome weights ±6% while searching, to explore around the inversion"><input type="checkbox" id="dsnJitter"> vary knobs</label></div>' +
             '<div id="dsnStatus" style="margin-top:8px">idle</div>' +
             '<div class="dsnMini" id="dsnSpeedHint" style="margin-top:6px"></div></div>' +
-          '<div class="dsnCard"><h4 style="margin:0 0 6px">3 · Closest worlds <span class="dsnMini" id="dsnGalCount"></span></h4>' +
-            '<div id="dsnCompare" style="display:flex;gap:14px;align-items:center;justify-content:center;margin:2px 0 10px">' +
-              '<div style="text-align:center"><canvas id="dsnTargetRef" width="' + G + '" height="' + G + '" style="width:130px;height:130px;border-radius:8px;image-rendering:pixelated;border:0.5px solid var(--border)"></canvas><div class="dsnMini">your drawing</div></div>' +
-              '<div style="font-size:24px;color:var(--muted)">→</div>' +
-              '<div style="text-align:center"><canvas id="dsnBestRef" width="' + G + '" height="' + G + '" style="width:130px;height:130px;border-radius:8px;image-rendering:pixelated;border:0.5px solid var(--border)"></canvas><div class="dsnMini" id="dsnBestLbl">best match</div></div>' +
-            '</div>' +
-            '<div class="dsnMini" style="margin:2px 0 2px">click any card to apply it as your real world · scores are relative — even the best is an approximation</div>' +
-            '<div class="dsnMini" style="margin:0 0 8px"><b>mix</b> = biome proportions · <b>shape</b> = land-mass overlap · <b>fit</b> = biome-type agreement</div>' +
-            '<div class="dsnGallery" id="dsnGallery"><div class="dsnMini">No candidates yet — run a search.</div></div></div>' +
           '</div>' +
         '</div>' +
+      '</div>' +
+      // "Find a map" full-width results gallery (ecoatlas-style tiles + filters)
+      '<div id="dsnFindGallery" style="display:none">' +
+        '<div class="dsnGalBar">' +
+          '<strong style="font-size:15px">Closest worlds</strong><span class="dsnMini" id="dsnGalCount"></span>' +
+          '<span class="dsnMini" style="margin-left:auto">Sort</span>' +
+          '<select id="dsnSort"><option value="score">Overall</option><option value="prop">Biome mix</option><option value="iou">Land shape</option><option value="soft">Biome fit</option></select>' +
+          '<span class="dsnRange" style="width:200px" title="Hide results below this overall score"><span class="dsnMini">min score</span><input type="range" id="dsnMinScore" min="0" max="100" value="0"><span class="dsnMini" id="dsnMinScoreV">0%</span></span>' +
+        '</div>' +
+        '<div id="dsnCompare">' +
+          '<div class="dsnCmp"><canvas id="dsnTargetRef" width="' + G + '" height="' + G + '"></canvas><div class="dsnMini">your drawing</div></div>' +
+          '<div style="font-size:26px;color:var(--muted)">→</div>' +
+          '<div class="dsnCmp"><canvas id="dsnBestRef" width="' + G + '" height="' + G + '"></canvas><div class="dsnMini" id="dsnBestLbl">best match</div></div>' +
+          '<div class="dsnMini" style="max-width:380px;align-self:center">Click any tile to apply it as your real world. Scores are relative — even the best is an approximation.<br><b>mix</b> = biome proportions · <b>shape</b> = land-mass overlap · <b>fit</b> = biome-type agreement</div>' +
+        '</div>' +
+        '<div class="dsnGallery" id="dsnGallery"><div class="dsnMini">No candidates yet — run a search.</div></div>' +
+        '<div class="row" style="margin-top:12px;justify-content:center"><button id="dsnShowMore" style="display:none">Show more</button></div>' +
       '</div>';
 
     // palette
@@ -223,6 +237,9 @@
     $('dsnStart').onclick = startSearch;
     $('dsnStop').onclick = stopSearch;
     $('dsnWeight').oninput = e => { layoutWeight = +e.target.value / 100; rescorePool(); };
+    $('dsnSort').onchange = e => { gallerySort = e.target.value; renderGallery(); };
+    $('dsnMinScore').oninput = e => { galleryMin = +e.target.value / 100; $('dsnMinScoreV').textContent = e.target.value + '%'; renderGallery(); };
+    $('dsnShowMore').onclick = () => { galShow += SHOW_STEP; renderGallery(); };
     $('dsnExport').onclick = exportBundle;
     $('dsnPreview3D').onclick = preview3D;
     $('dsnPaintMode').querySelectorAll('button').forEach(b => b.onclick = () => { paintMode = b.dataset.pm; markPaintMode(); renderPaint(); });
@@ -868,20 +885,23 @@
     const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target, true);   // keep the "your drawing" thumbnail in sync
     const bestRef = $('dsnBestRef'), bestLbl = $('dsnBestLbl');
     if (bestRef) { if (pool.length) { drawGrid(bestRef, pool[0].grid, true); if (bestLbl) bestLbl.textContent = 'best match · ' + (pool[0].s.score * 100).toFixed(1) + '%'; } else { bestRef.getContext('2d').clearRect(0, 0, G, G); if (bestLbl) bestLbl.textContent = 'best match'; } }
-    $('dsnGalCount').textContent = pool.length ? '(' + pool.length + ' kept)' : '';
-    if (!pool.length) { gal.innerHTML = '<div class="dsnMini">No candidates yet — run a search.</div>'; return; }
-    const show = pool.slice(0, SHOW);
+    if (!pool.length) { $('dsnGalCount').textContent = ''; gal.innerHTML = '<div class="dsnMini">No candidates yet — run a search.</div>'; const sm = $('dsnShowMore'); if (sm) sm.style.display = 'none'; return; }
+    // sort a copy by the chosen key, filter by min overall score, page with galShow (Find-mode gallery)
+    const list = pool.filter(it => it.s.score >= galleryMin).slice().sort((a, b) => b.s[gallerySort] - a.s[gallerySort]);
+    $('dsnGalCount').textContent = '(' + list.length + (galleryMin > 0 ? ' of ' + pool.length : '') + ' kept)';
+    const show = list.slice(0, galShow);
     gal.innerHTML = show.map((it, i) =>
       '<div class="dsnCandidate' + (i === 0 ? ' best' : '') + '" data-i="' + i + '">' +
         '<canvas width="' + G + '" height="' + G + '" data-i="' + i + '"></canvas>' +
         '<div class="sc">' + (it.s.score * 100).toFixed(1) + '%</div>' +
         '<div>seed ' + it.seed + '</div>' +
         '<div class="dsnMini">mix ' + (it.s.prop * 100).toFixed(0) + ' · shape ' + (it.s.iou * 100).toFixed(0) + ' · fit ' + (it.s.soft * 100).toFixed(0) + '</div>' +
-        '<button data-apply="' + i + '">Apply</button>' +
+        '<button data-apply="' + i + '">Apply this world</button>' +
       '</div>').join('');
     gal.querySelectorAll('canvas[data-i]').forEach(c => drawGrid(c, show[+c.dataset.i].grid, true));
     gal.querySelectorAll('button[data-apply]').forEach(b => b.onclick = () => applyCandidate(show[+b.dataset.apply]));
     gal.querySelectorAll('canvas[data-i]').forEach(c => c.onclick = () => applyCandidate(show[+c.dataset.i]));
+    const sm = $('dsnShowMore'); if (sm) { const more = list.length - show.length; sm.style.display = more > 0 ? '' : 'none'; sm.textContent = more > 0 ? 'Show more (' + more + ')' : 'Show more'; }
   }
   function applyCandidate(item) {
     // the candidate's exact cfg (jitter-safe); fall back to invBase+seed for older pool items
@@ -902,6 +922,7 @@
     if (st) st.textContent = find ? 'paint the layout you want, then search seeds for the closest real world' : 'paint a world → preview it in 3D → export it exactly';
     $('dsnRightDesign').style.display = find ? 'none' : '';
     $('dsnRightFind').style.display = find ? '' : 'none';
+    $('dsnFindGallery').style.display = find ? '' : 'none';
     $('designWrap').classList.toggle('findMode', find);
     // hide the map view + panels (mirror open3D), show the designer
     $('canvasWrap').style.display = 'none'; $('legend').style.display = 'none'; $('stats').style.display = 'none';

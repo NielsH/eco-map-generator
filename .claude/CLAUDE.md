@@ -54,9 +54,10 @@ after a load. Opening the 3D view or the designer hides `#cfgPanel`/`#surfaceBar
 `#chartsPanel`) so the left column takes the full width via flex — no `.solo` class.
 
 **Designer modes** (`designer.open(mode)`): `'design'` shows `#dsnRightDesign` (exact authored export +
-🧊 3D preview); `'find'` shows `#dsnRightFind` (the seed search: Target → Search → Closest, with larger
-previews via `.findMode`). The `🎨 Design a map` and `🔍 Find a map` buttons open the two modes; both
-share the painter. Generate model: **Load pasted
+🧊 3D preview); `'find'` shows `#dsnRightFind` (Target + Search controls) plus a full-width `#dsnFindGallery` below the
+painter — an ecoatlas-style results grid with big tiles, a sort dropdown (`gallerySort`: overall/mix/
+shape/fit), a min-score filter (`galleryMin`), and Show-more paging (`galShow`/`SHOW_STEP`). The
+`🎨 Design a map` and `🔍 Find a map` buttons open the two modes; both share the painter. Generate model: **Load pasted
 config** (`loadConfigText`) parses+populates+generates; **Regenerate map** (`generateFromForm`) applies
 form edits — the single generate action (there is no separate top "Generate" button any more).
 
