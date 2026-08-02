@@ -8979,6 +8979,10 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     .dsnTools{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:6px 0}
     .dsnCard{border:0.5px solid var(--border);border-radius:10px;background:var(--surf);padding:10px 12px;margin:0 0 12px}
     .dsnCard h4{margin:0 0 6px;font-size:13px;font-weight:600}
+    .dsnField{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text2);margin:5px 0}
+    .dsnField>span:first-child{flex:0 0 96px}
+    .dsnField input{width:76px;font-size:12px;padding:3px 6px;border-radius:6px;border:0.5px solid var(--border);background:var(--bg);color:var(--text)}
+    .dsnField .dsnMini{flex:1}
     .dsnSectionLbl{font-size:12px;font-weight:600;color:var(--text2);margin:16px 0 6px;padding-top:12px;border-top:0.5px solid var(--border)}
     .dsnSectionLbl i{color:var(--muted);font-weight:500}
     .dsnGallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
@@ -9060,6 +9064,11 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
         '<div class="dsnRight">' +
           // "Design a map" mode: exact authored world (+ 3D preview)
           '<div id="dsnRightDesign">' +
+          '<div class="dsnCard" id="dsnWorldCard"><h4 style="margin:0 0 8px">World settings</h4>' +
+            '<label class="dsnField"><span>World size</span><input type="number" id="dsnWorldW" min="8" max="600" step="4"><span class="dsnMini" id="dsnWorldMeta"></span></label>' +
+            '<label class="dsnField" title="Sea-level height. Terrain below it is underwater in the preview and export."><span>Water level</span><input type="number" id="dsnWaterLvl" min="0" max="255" step="1"><span class="dsnMini">block height of the sea</span></label>' +
+            '<label class="dsnField" title="Vertical scale — how tall the highest terrain can be. Bigger = more dramatic mountains."><span>Max height</span><input type="number" id="dsnMaxGen" min="10" max="255" step="1"><span class="dsnMini">peak terrain height</span></label>' +
+          '</div>' +
           '<div class="dsnCard"><h4 style="margin:0 0 4px">Your world <span class="dsnMini">— exact</span></h4>' +
             '<div class="dsnMini" style="margin:0 0 8px"><b>🧊 3D preview</b> flies through your design here. <b>Export</b> writes a bundle for the <code>EcoWorldGenCLI</code> tool → a stock-loadable <code>.eco</code> whose biomes + terrain match your drawing <b>exactly</b> (needs the C# tool + an Eco server build).</div>' +
             '<div class="row" style="gap:6px"><button id="dsnPreview3D" class="primary" title="Fly through your design in the 3D voxel world">🧊 3D preview</button>' +
@@ -9130,6 +9139,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     window.addEventListener('resize', maybeAutoLoad, { passive: true });
     $('dsnExport').onclick = exportBundle;
     $('dsnPreview3D').onclick = preview3D;
+    wireWorldFields();
     $('dsnPaintMode').querySelectorAll('button').forEach(b => b.onclick = () => { paintMode = b.dataset.pm; markPaintMode(); renderPaint(); });
     $('dsnElev').oninput = e => { elevValue = +e.target.value / 100; $('dsnElevV').textContent = elevLabel(elevValue); drawElevLegend(); };
     $('dsnElevV').textContent = elevLabel(elevValue);
@@ -9807,6 +9817,26 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     generateMap(cfg);                     // baseCfg is left as the loaded config so "Reset to loaded" still works
   }
 
+  // ---- world settings (size / water / height): the only config knobs that shape an authored world ----
+  // Two-way bound to the main form's #cf_* inputs, which readForm()/buildExportJson() read live at
+  // export/preview time — so mirroring the value there is all that's needed (no separate state).
+  const WORLD_FIELDS = [['dsnWorldW', 'cf_worldWidth'], ['dsnWaterLvl', 'cf_waterLevel'], ['dsnMaxGen', 'cf_maxGenerationHeight']];
+  function updateWorldMeta() {
+    const el = $('dsnWorldW'), m = $('dsnWorldMeta'); if (!m) return;
+    const w = el ? parseInt(el.value, 10) : NaN;
+    m.textContent = isFinite(w) ? (w + ' chunks · ' + (w * 10) + '×' + (w * 10) + ' m') : '';
+  }
+  function syncWorldFields() {                 // pull current main-form values into the designer inputs
+    for (const [d, c] of WORLD_FIELDS) { const src = $(c), dst = $(d); if (src && dst) dst.value = src.value; }
+    updateWorldMeta();
+  }
+  function wireWorldFields() {                 // designer input → mirror onto the main form's #cf_* input
+    for (const [d, c] of WORLD_FIELDS) {
+      const dst = $(d); if (!dst) continue;
+      dst.oninput = () => { const src = $(c); if (src) src.value = dst.value; updateWorldMeta(); };
+    }
+  }
+
   // ================================================================= open / close
   function open(mode) {
     if (typeof baseCfg === 'undefined' || !baseCfg) { $('err').textContent = 'Load a WorldGenerator.eco config first.'; return; }
@@ -9817,6 +9847,8 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     if (st) st.textContent = find ? 'paint the layout you want, then search seeds for the closest real world' : 'paint a world → preview it in 3D → export it exactly';
     $('dsnRightDesign').style.display = find ? 'none' : '';
     $('dsnRightFind').style.display = find ? '' : 'none';
+    if (!find) syncWorldFields();   // reflect the current config's size/water/height on the Design page
+
     $('dsnFindGallery').style.display = find ? '' : 'none';
     // hide the map view + panels (mirror open3D), show the designer
     $('canvasWrap').style.display = 'none'; $('legend').style.display = 'none'; $('stats').style.display = 'none';
@@ -9973,6 +10005,8 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
         if (eco && typeof loadConfigText === 'function') {
           loadConfigText(new TextDecoder().decode(eco), true);
           $('cfgPanel').style.display = 'none'; const sb = $('surfaceBar'); if (sb) sb.style.display = 'none';   // stay in the designer overlay
+          syncWorldFields();   // the bundle may carry a different world size/water/height
+
         }
         paintMode = 'biome'; markPaintMode(); renderPaint();
         const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target, true);

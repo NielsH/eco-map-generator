@@ -53,13 +53,21 @@ it fills the column. The config-source (drop/paste/Load) is a `<details id="srcB
 after a load. Opening the 3D view or the designer hides `#cfgPanel`/`#surfaceBar` (and, for 3D,
 `#chartsPanel`) so the left column takes the full width via flex — no `.solo` class.
 
-**Designer modes** (`designer.open(mode)`): `'design'` shows `#dsnRightDesign` (exact authored export +
-🧊 3D preview); `'find'` shows `#dsnRightFind` (Target + Search controls) plus a full-width `#dsnFindGallery` below the
+**Designer modes** (`designer.open(mode)`): `'design'` shows `#dsnRightDesign` (a **World settings** card +
+exact authored export + 🧊 3D preview); `'find'` shows `#dsnRightFind` (Target + Search controls) plus a full-width `#dsnFindGallery` below the
 painter — an ecoatlas-style results grid with big tiles, a sort dropdown (`gallerySort`: overall/mix/
 shape/fit), a min-score filter (`galleryMin`), and Show-more paging (`galShow`/`SHOW_STEP`). The
 `🎨 Design a map` and `🔍 Find a map` buttons open the two modes; both share the painter. Generate model: **Load pasted
 config** (`loadConfigText`) parses+populates+generates; **Regenerate map** (`generateFromForm`) applies
 form edits — the single generate action (there is no separate top "Generate" button any more).
+
+**World settings on the Design page** (`#dsnWorldCard`): the only config knobs that shape an *authored* world —
+World size (`dsnWorldW`→`cf_worldWidth`), Water level (`dsnWaterLvl`→`cf_waterLevel`), Max height
+(`dsnMaxGen`→`cf_maxGenerationHeight`). They're **two-way bound** to the main form's `#cf_*` inputs (which
+`readForm()`/`buildExportJson()` read live at export/3D-preview time), so mirroring `.value` is the whole
+mechanism — no separate state. `syncWorldFields()` pulls current values in on `open('design')` and after a
+design-zip re-import; `wireWorldFields()` mirrors edits back out; `updateWorldMeta()` shows `w chunks · w·10×w·10 m`.
+Other config knobs (pointRadius, biome weights, continents…) don't affect authored output, so they stay on the map page.
 
 Removed in the cleanup pass: the Ore-distribution chart (`OreChart`) + its toggles, the Block-composition
 Crushed/Emphasize toggles (fixed to separate/normal), the Manual-knobs ore editor (`buildOreEditor` is a
