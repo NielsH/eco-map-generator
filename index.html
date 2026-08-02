@@ -8961,6 +8961,11 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
   // dark -> light biome ramp for brightness mode (low/dark = deep water, high/light = snow), reads as terrain
   const BRIGHT_RAMP = ['Ocean', 'Wetland', 'ColdForest', 'Taiga', 'RainForest', 'Grassland', 'WarmForest', 'Desert', 'Tundra', 'Coast', 'Ice'];
 
+  // Hosted generation service (eco-worldgen-service). Override for local testing: window.ECO_WORLDGEN_API = 'http://localhost:3010'.
+  const WORLDGEN_API = ((typeof window !== 'undefined' && window.ECO_WORLDGEN_API) || 'https://tools.factoreco.org/map').replace(/\/$/, '');
+  const WORLDGEN_MAX_SIZE = 200;   // service cap (MAX_WORLD_SIZE); world size must be a multiple of 4 in 12..this
+  let genPollTimer = null;         // inline status poll started after "Generate Eco save"
+
   // ================================================================= styling
   function injectStyle() {
     if (document.getElementById('dsnStyle')) return;
@@ -9069,8 +9074,12 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
             '<label class="dsnField" title="Sea-level height. Terrain below it is underwater in the preview and export."><span>Water level</span><input type="number" id="dsnWaterLvl" min="0" max="255" step="1"><span class="dsnMini">block height of the sea</span></label>' +
             '<label class="dsnField" title="Vertical scale — how tall the highest terrain can be. Bigger = more dramatic mountains."><span>Max height</span><input type="number" id="dsnMaxGen" min="10" max="255" step="1"><span class="dsnMini">peak terrain height</span></label>' +
           '</div>' +
-          '<div class="dsnCard"><h4 style="margin:0 0 4px">Your world <span class="dsnMini">— exact</span></h4>' +
-            '<div class="dsnMini" style="margin:0 0 8px"><b>🧊 3D preview</b> flies through your design here. <b>Export</b> writes a bundle for the <code>EcoWorldGenCLI</code> tool → a stock-loadable <code>.eco</code> whose biomes + terrain match your drawing <b>exactly</b> (needs the C# tool + an Eco server build).</div>' +
+          '<div class="dsnCard"><h4 style="margin:0 0 4px">Generate Eco save <span class="dsnMini">— hosted</span></h4>' +
+            '<div class="dsnMini" style="margin:0 0 8px">Send your design to the generation service and get a link to download the finished <code>.eco</code> world (biomes + terrain match your drawing <b>exactly</b>). Generation takes a few minutes — bookmark the link and come back any time.</div>' +
+            '<button id="dsnGenSave" class="primary">☁ Generate Eco save</button>' +
+            '<div id="dsnGenStatus" style="margin-top:8px"></div></div>' +
+          '<div class="dsnCard"><h4 style="margin:0 0 4px">Preview &amp; advanced <span class="dsnMini">— local</span></h4>' +
+            '<div class="dsnMini" style="margin:0 0 8px"><b>🧊 3D preview</b> flies through your design here. <b>Export</b> downloads the raw bundle to run the <code>EcoWorldGenCLI</code> tool yourself.</div>' +
             '<div class="row" style="gap:6px"><button id="dsnPreview3D" class="primary" title="Fly through your design in the 3D voxel world">🧊 3D preview</button>' +
             '<button id="dsnExport">⬇ Export (.zip)</button></div>' +
             '<div class="dsnMini" id="dsnExportStatus" style="margin-top:8px"></div></div>' +
@@ -9139,6 +9148,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     window.addEventListener('resize', maybeAutoLoad, { passive: true });
     $('dsnExport').onclick = exportBundle;
     $('dsnPreview3D').onclick = preview3D;
+    $('dsnGenSave').onclick = generateSave;
     wireWorldFields();
     $('dsnPaintMode').querySelectorAll('button').forEach(b => b.onclick = () => { paintMode = b.dataset.pm; markPaintMode(); renderPaint(); });
     $('dsnElev').oninput = e => { elevValue = +e.target.value / 100; $('dsnElevV').textContent = elevLabel(elevValue); drawElevLegend(); };
@@ -9891,6 +9901,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
   }
   function close() {
     stopSearch();
+    clearTimeout(genPollTimer);   // stop any inline generation-status poll
     $('designWrap').style.display = 'none';
     $('canvasWrap').style.display = ''; $('legend').style.display = ''; $('stats').style.display = '';
     const sb = $('surfaceBar'); if (sb) sb.style.display = '';
@@ -10000,6 +10011,97 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
       const hi = b.hiRes ? ' · biome/height at <b>' + b.hiRes + '²</b> (hi-res from the imported image)' : '';
       $('dsnExportStatus').innerHTML = '<b>Exported authored-world-' + b.size + 'x' + b.size + '.zip</b>' + hi + ' — unzip, then run: EcoWorldGenCLI --server &lt;server&gt; --bundle &lt;dir&gt; --out Game.eco';
     } catch (e) { $('dsnExportStatus').textContent = 'Export error: ' + e.message; }
+  }
+
+  // ---- hosted generation: POST the bundle to eco-worldgen-service, then poll status inline ----
+  // The service error strings are plain text (never HTML) — always insert them with textContent.
+  function setGenLine(text, isError) {
+    const el = $('dsnGenStatus'); if (!el) return null;
+    el.innerHTML = '';
+    const line = document.createElement('div');
+    line.className = 'dsnMini';
+    if (isError) line.style.color = '#e5484d';
+    line.textContent = text;
+    el.appendChild(line);
+    return el;
+  }
+  function addGenLink(el, href, label, block) {
+    if (!el) return null;
+    const a = document.createElement('a');
+    a.href = href; a.target = '_blank'; a.rel = 'noopener';
+    a.textContent = label;
+    a.style.cssText = 'font-size:12px;margin-top:6px;' + (block ? 'display:block;' : 'display:inline-block;margin-right:12px;');
+    el.appendChild(a);
+    return a;
+  }
+  function setGenLineWithPage(text, statusUrl, isError) {
+    const el = setGenLine(text, isError);
+    addGenLink(el, statusUrl, '🔗 Your world page (bookmark this)', true);
+    return el;
+  }
+  function submitError(status, msg) {
+    if (status === 413) return 'That bundle is too large for the service.';
+    if (status === 429) return 'Too many requests — wait a minute and try again.';
+    if (status === 503) return 'The service is busy or full right now — try again later.';
+    if (status === 400) return msg || 'The bundle was rejected.';
+    return msg || ('Upload failed (HTTP ' + status + ').');
+  }
+  async function generateSave() {
+    if (typeof baseCfg === 'undefined' || !baseCfg) { setGenLine('Load a config first.', true); return; }
+    const btn = $('dsnGenSave');
+    // The service rejects (not clamps) world size, so check it here for a friendlier message.
+    const ww = (typeof readForm === 'function') ? (readForm().worldWidth | 0) : 0;
+    if (ww && (ww < 12 || ww > WORLDGEN_MAX_SIZE || ww % 4 !== 0)) {
+      setGenLine('World size must be a multiple of 4 between 12 and ' + WORLDGEN_MAX_SIZE + ' (currently ' + ww + '). Adjust it in World settings.', true);
+      return;
+    }
+    if (btn) btn.disabled = true;
+    clearTimeout(genPollTimer);
+    setGenLine('Building bundle…');
+    try {
+      const b = await buildBundleFiles();
+      const blob = new Blob([makeZip(b.files)], { type: 'application/zip' });
+      const body = new FormData();
+      body.append('file', blob, 'bundle.zip');
+      setGenLine('Uploading to the generation service…');
+      const res = await fetch(WORLDGEN_API + '/api/submit', { method: 'POST', body });
+      let data = {}; try { data = await res.json(); } catch (e) {}
+      if (!res.ok) { setGenLine(submitError(res.status, data && data.error), true); if (btn) btn.disabled = false; return; }
+      setGenLineWithPage('Submitted — your world is queued.', data.statusUrl);
+      pollStatus(data.token, data.statusUrl);
+    } catch (e) {
+      setGenLine('Could not reach the generation service (' + e.message + '). It may be offline, or this origin is not allowed by CORS.', true);
+      if (btn) btn.disabled = false;
+    }
+  }
+  function pollStatus(token, statusUrl) {
+    const btn = $('dsnGenSave');
+    const tick = async () => {
+      let s;
+      try {
+        const res = await fetch(WORLDGEN_API + '/api/status/' + encodeURIComponent(token));
+        if (res.status === 404) { setGenLine('This job is no longer available.', true); if (btn) btn.disabled = false; return; }
+        s = await res.json();
+      } catch (e) { genPollTimer = setTimeout(tick, 5000); return; }   // transient network error — back off, keep trying
+      if (s.state === 'queued') {
+        setGenLineWithPage('Queued' + (s.queuePosition ? ' — #' + s.queuePosition + ' in line' : '') + '…', statusUrl);
+        genPollTimer = setTimeout(tick, 2500);
+      } else if (s.state === 'generating') {
+        setGenLineWithPage('Generating your world… (a few minutes)', statusUrl);
+        genPollTimer = setTimeout(tick, 2500);
+      } else if (s.state === 'finished') {
+        const el = setGenLine('✅ Your world is ready!');
+        addGenLink(el, statusUrl.replace(/\/$/, '') + '/save', '⬇ Download Eco save', true);
+        addGenLink(el, statusUrl, '🔗 World page (re-download any time)', true);
+        if (btn) btn.disabled = false;
+      } else if (s.state === 'failed') {
+        setGenLineWithPage('Generation failed: ' + (s.error || 'unknown error'), statusUrl, true);
+        if (btn) btn.disabled = false;
+      } else {
+        genPollTimer = setTimeout(tick, 2500);
+      }
+    };
+    tick();
   }
   function findWorldWidth(j) { let r = null; (function w(o) { if (!o || typeof o !== 'object' || r) return; if (Object.prototype.hasOwnProperty.call(o, 'WorldWidth')) { r = o.WorldWidth; return; } for (const k in o) w(o[k]); })(j); return r; }
 
