@@ -426,12 +426,28 @@
   // (bypassing the coarse 64² paint grid) so a photo/portrait exports with far sharper features. Uses the
   // current legend + mode; height follows the picture (dark/low = deep water, light/high = land) so the
   // land/water outline stays crisp and matched to the biome tint.
+  // toroidal separable box blur (in place); spreads biome-edge height steps into gentle slopes
+  function boxBlurTor(a, res, r, passes) {
+    const tmp = new Float32Array(res * res), inv = 1 / (2 * r + 1), wrap = (v) => ((v % res) + res) % res;
+    for (let p = 0; p < passes; p++) {
+      for (let y = 0; y < res; y++) { const row = y * res; let sum = 0; for (let k = -r; k <= r; k++) sum += a[row + wrap(k)];
+        for (let x = 0; x < res; x++) { tmp[row + x] = sum * inv; sum += a[row + wrap(x + r + 1)] - a[row + wrap(x - r)]; } }
+      for (let x = 0; x < res; x++) { let sum = 0; for (let k = -r; k <= r; k++) sum += tmp[wrap(k) * res + x];
+        for (let y = 0; y < res; y++) { a[y * res + x] = sum * inv; sum += tmp[wrap(y + r + 1) * res + x] - tmp[wrap(y - r) * res + x]; } }
+    }
+  }
+  // value/fractal noise over the res grid (toroidal), reusing the painter's hash h2 — for within-biome relief
+  function vnR(x, y, P, res) { const fx = x / res * P, fy = y / res * P, x0 = Math.floor(fx), y0 = Math.floor(fy), tx = fx - x0, ty = fy - y0, w = v => ((v % P) + P) % P; const a = h2(w(x0), w(y0)), b = h2(w(x0 + 1), w(y0)), c = h2(w(x0), w(y0 + 1)), e = h2(w(x0 + 1), w(y0 + 1)), sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty); return (a + (b - a) * sx) * (1 - sy) + (c + (e - c) * sx) * sy; }
+  function fbmR(x, y, res) { return 0.5 * vnR(x, y, 10, res) + 0.3 * vnR(x, y, 26, res) + 0.2 * vnR(x, y, 64, res); }
   function imageToMaps(res) {
     const c = document.createElement('canvas'); c.width = res; c.height = res;
     const cx = c.getContext('2d'); cx.imageSmoothingEnabled = true; cx.drawImage(importedImg, 0, 0, res, res);
     const d = cx.getImageData(0, 0, res, res).data, n = res * res;
     const biome = new Uint8Array(n), height = new Uint8Array(n);
-    const put = (x, y, cls, h01) => { const j = (res - 1 - y) * res + x; biome[j] = cls; height[j] = Math.max(0, Math.min(255, Math.round(h01 * 255))); };  // flip Y like the 64² path
+    const hf = new Float32Array(n), land = new Uint8Array(n);   // base height + land mask, in FINAL orientation
+    // compress per-biome heights toward a common mean so biome edges are small steps (blur turns them into slopes)
+    const LAND_MEAN = 0.60, COMPRESS = 0.5, SEA = 0.5;
+    const put = (x, y, cls, h01, isLand) => { const j = (res - 1 - y) * res + x; biome[j] = cls; hf[j] = h01; land[j] = isLand ? 1 : 0; };   // flip Y like the 64² path
     if (importMode === 'brightness') {
       const lum = new Float32Array(n), trans = new Uint8Array(n), op = [];
       for (let i = 0; i < n; i++) { const o = i * 4; if (d[o + 3] < 128) { trans[i] = 1; continue; } const L = 0.299 * d[o] + 0.587 * d[o + 1] + 0.114 * d[o + 2]; lum[i] = L; op.push(L); }
@@ -439,9 +455,10 @@
       const rank = L => { let lo = 0, hi = op.length; while (lo < hi) { const m = (lo + hi) >> 1; if (op[m] < L) lo = m + 1; else hi = m; } return lo; };
       for (let y = 0; y < res; y++) for (let x = 0; x < res; x++) {
         const i = y * res + x;
-        if (trans[i]) { put(x, y, SC.Ocean, 0.30); continue; }
+        if (trans[i]) { put(x, y, SC.Ocean, 0.30, 0); continue; }
         const rf = rank(lum[i]) / N; let b = Math.floor(rf * nB); if (b >= nB) b = nB - 1;
-        put(x, y, legend[b].cls, 0.32 + 0.53 * rf);          // dark→deep water .. light→peaks
+        const h01 = 0.32 + 0.53 * rf;                          // dark→deep water .. light→peaks
+        put(x, y, legend[b].cls, h01, h01 >= SEA ? 1 : 0);
       }
     } else {
       for (let y = 0; y < res; y++) for (let x = 0; x < res; x++) {
@@ -449,9 +466,18 @@
         let cls;
         if (d[o + 3] < 128) cls = SC.Ocean;
         else { let bi = 0, bd = Infinity; for (let k = 0; k < legend.length; k++) { const p = legend[k].rgb, dr = d[o] - p[0], dg = d[o + 1] - p[1], db = d[o + 2] - p[2], dd = dr * dr + dg * dg + db * db; if (dd < bd) { bd = dd; bi = k; } } cls = legend[bi].cls; }
-        const band = ECO_BIOME_ELEV[CN[cls]] || [0.52, 0.62];
-        put(x, y, cls, cls === SC.Ocean ? 0.30 : (band[0] + band[1]) / 2);
+        const isOcean = cls === SC.Ocean;
+        const band = ECO_BIOME_ELEV[CN[cls]] || [0.52, 0.62], mid = (band[0] + band[1]) / 2;
+        put(x, y, cls, isOcean ? 0.30 : LAND_MEAN + (mid - LAND_MEAN) * COMPRESS, isOcean ? 0 : 1);
       }
+    }
+    // smooth biome-edge steps into slopes (no more cliffs) — radius scales with resolution
+    boxBlurTor(hf, res, Math.max(2, Math.round(res / 50)), 2);
+    // finalize: land keeps gentle within-biome relief and stays above sea; water stays below sea
+    for (let j = 0; j < n; j++) {
+      const x = j % res, y = (j / res) | 0;
+      let h = land[j] ? Math.max(0.505, hf[j] + (fbmR(x, y, res) - 0.5) * 0.05) : Math.min(hf[j], 0.44);   // land stays above sea (no puddles); water below
+      height[j] = Math.max(0, Math.min(255, Math.round(h * 255)));
     }
     return { res, biome, height };
   }

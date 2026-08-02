@@ -182,6 +182,11 @@ off to a C# tool in the Eco repo (`~/Documents/GitHub/Eco/Tools/`, not in git):
   typed arrays, + importMode/roughness/etc.) so the design can be re-imported for tuning ("📂 Import
   design" → `importDesignZip`: `unzipStore` the STORE zip, restore the layers + `loadConfigText` the
   bundled config). The `.bin` files are computed output; `design.json` is the source of truth for editing.
+- **Image-import terrain** (`imageToMaps`, hi-res 320² export from a pure image import): per-biome heights
+  are compressed toward a common mean and the height field is toroidally box-blurred (`boxBlurTor`) so
+  biome edges become slopes not cliffs; gentle within-biome relief (`fbmR`, ~1-3 blocks) is added
+  post-blur; land is clamped above sea (no puddles), water stays below. (Hand-painted worlds use the
+  separate `computeHeightField` coast-falloff path.)
 - **Elevation layer**: a paint-mode toggle adds an `elev`/`elevPainted` layer; `heightAt()` uses the painted
   value or a biome-derived default (`ECO_BIOME_ELEV`). `ECO_BIOME_COLOR` holds the exact Eco biome colors.
   Painted cells get natural micro-relief (fbm) so they aren't dead flat; the amount is **per-cell** (`rough`
