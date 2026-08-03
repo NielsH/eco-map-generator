@@ -146,7 +146,7 @@
     const host = $('designWrap');
     host.innerHTML =
       '<div class="row" style="margin:2px 0 10px"><strong style="font-size:15px" id="dsnTitle">🎨 Design a map</strong>' +
-      '<span class="dsnMini" id="dsnSubtitle" style="margin-left:6px">paint a world → preview it in 3D → export it exactly</span>' +
+      '<span class="dsnMini" id="dsnSubtitle" style="margin-left:6px">paint a world → preview it in 3D → generate it exactly</span>' +
       '<button id="dsnClose" style="margin-left:auto">← Back to map</button></div>' +
       '<div class="dsnCols">' +
         '<div class="dsnLeft">' +
@@ -159,7 +159,7 @@
             '<button id="dsnSeedFromMap">Seed from current map</button>' +
             '<button id="dsnImport" title="Map an image\'s colors to biomes — auto-nearest, then remap any color you like">📁 Import image</button>' +
             '<input type="file" id="dsnImgFile" accept="image/*" style="display:none">' +
-            '<button id="dsnImportDesign" title="Load a previously exported design .zip to keep tuning it">📂 Import design</button>' +
+            '<button id="dsnImportDesign" title="Load a design .zip (e.g. the input re-downloaded from the generation service) to keep tuning it">📂 Import design</button>' +
             '<input type="file" id="dsnDesignFile" accept=".zip,application/zip" style="display:none">' +
             '<button id="dsnClear">Clear</button>' +
           '</div>' +
@@ -190,18 +190,14 @@
           '<div id="dsnRightDesign">' +
           '<div class="dsnCard" id="dsnWorldCard"><h4 style="margin:0 0 8px">World settings</h4>' +
             '<label class="dsnField"><span>World size</span><input type="number" id="dsnWorldW" min="8" max="600" step="4"><span class="dsnMini" id="dsnWorldMeta"></span></label>' +
-            '<label class="dsnField" title="Sea-level height. Terrain below it is underwater in the preview and export."><span>Water level</span><input type="number" id="dsnWaterLvl" min="0" max="255" step="1"><span class="dsnMini">block height of the sea</span></label>' +
+            '<label class="dsnField" title="Sea-level height. Terrain below it is underwater in the preview and the generated world."><span>Water level</span><input type="number" id="dsnWaterLvl" min="0" max="255" step="1"><span class="dsnMini">block height of the sea</span></label>' +
             '<label class="dsnField" title="Vertical scale — how tall the highest terrain can be. Bigger = more dramatic mountains."><span>Max height</span><input type="number" id="dsnMaxGen" min="10" max="255" step="1"><span class="dsnMini">peak terrain height</span></label>' +
           '</div>' +
-          '<div class="dsnCard"><h4 style="margin:0 0 4px">Generate Eco save <span class="dsnMini">— hosted</span></h4>' +
-            '<div class="dsnMini" style="margin:0 0 8px">Send your design to the generation service and get a link to download the finished <code>.eco</code> world (biomes + terrain match your drawing <b>exactly</b>). Generation takes a few minutes — bookmark the link and come back any time.</div>' +
-            '<button id="dsnGenSave" class="primary">☁ Generate Eco save</button>' +
+          '<div class="dsnCard"><h4 style="margin:0 0 4px">Generate Eco save <span class="dsnMini">— compatible with Eco v14</span></h4>' +
+            '<div class="dsnMini" style="margin:0 0 8px">Sends your design to the generation service and gives you a link to download the finished <code>.eco</code> world (biomes + terrain match your drawing <b>exactly</b>). Generation takes a few minutes — bookmark the link and come back any time.</div>' +
+            '<div class="row" style="gap:6px"><button id="dsnGenSave" class="primary">☁ Generate Eco save</button>' +
+            '<button id="dsnPreview3D" title="Fly through your design in the 3D voxel world">🧊 3D preview</button></div>' +
             '<div id="dsnGenStatus" style="margin-top:8px"></div></div>' +
-          '<div class="dsnCard"><h4 style="margin:0 0 4px">Preview &amp; advanced <span class="dsnMini">— local</span></h4>' +
-            '<div class="dsnMini" style="margin:0 0 8px"><b>🧊 3D preview</b> flies through your design here. <b>Export</b> downloads the raw bundle to run the <code>EcoWorldGenCLI</code> tool yourself.</div>' +
-            '<div class="row" style="gap:6px"><button id="dsnPreview3D" class="primary" title="Fly through your design in the 3D voxel world">🧊 3D preview</button>' +
-            '<button id="dsnExport">⬇ Export (.zip)</button></div>' +
-            '<div class="dsnMini" id="dsnExportStatus" style="margin-top:8px"></div></div>' +
           '</div>' +
           // "Find a map" mode: closest naturally-generated world (seed search)
           '<div id="dsnRightFind" style="display:none">' +
@@ -265,7 +261,6 @@
     // infinite scroll: auto-load more tiles as the Show-more sentinel nears the viewport bottom
     window.addEventListener('scroll', maybeAutoLoad, { passive: true });
     window.addEventListener('resize', maybeAutoLoad, { passive: true });
-    $('dsnExport').onclick = exportBundle;
     $('dsnPreview3D').onclick = preview3D;
     $('dsnGenSave').onclick = generateSave;
     wireWorldFields();
@@ -397,7 +392,7 @@
   }
   function flashMix(count) {
     const top = Object.keys(count).map(k => [LABEL[CN[+k]], count[k]]).sort((a, b) => b[1] - a[1]).slice(0, 5).map(e => e[0]).join(', ');
-    flashAnalysis('Imported image → biomes (' + top + '). Remap any band below, edit, or Analyze — then export.');
+    flashAnalysis('Imported image → biomes (' + top + '). Remap any band below, edit, or Analyze — then generate.');
   }
   // Re-run the mapping in a different mode on the already-loaded image (no re-decode), then refresh.
   function setImportMode(m) {
@@ -999,7 +994,7 @@
     designMode = mode === 'find' ? 'find' : 'design';
     const t = $('dsnTitle'), st = $('dsnSubtitle'), find = designMode === 'find';
     if (t) t.textContent = find ? '🔍 Find a map' : '🎨 Design a map';
-    if (st) st.textContent = find ? 'paint the layout you want, then search seeds for the closest real world' : 'paint a world → preview it in 3D → export it exactly';
+    if (st) st.textContent = find ? 'paint the layout you want, then search seeds for the closest real world' : 'paint a world → preview it in 3D → generate it exactly';
     $('dsnRightDesign').style.display = find ? 'none' : '';
     $('dsnRightFind').style.display = find ? '' : 'none';
     if (!find) syncWorldFields();   // reflect the current config's size/water/height on the Design page
@@ -1080,11 +1075,6 @@
     out.set(end, p);
     return out;
   }
-  function downloadBlob(bytes, name, type) {
-    const blob = new Blob([bytes], { type: type || 'application/octet-stream' });
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-  }
   async function buildBundleFiles() {
     const cfg = buildExportJson();              // the WorldGenerator.eco (main-thread), current form values
     // Raw maps (what the mod actually reads — unambiguous, no PNG decode). Generation orientation, row-major.
@@ -1120,16 +1110,6 @@
       target: abToB64(target.buffer), elev: abToB64(elev.buffer), elevPainted: abToB64(elevPainted.buffer), rough: abToB64(rough.buffer), water: abToB64(water.buffer) };
     files.push({ name: 'design.json', data: strBytes(JSON.stringify(design)) });
     return { size: (cfg && findWorldWidth(cfg)) || 72, files: files, hiRes: hi ? hi.res : 0 };
-  }
-  async function exportBundle() {
-    if (typeof baseCfg === 'undefined' || !baseCfg) { $('dsnExportStatus').textContent = 'Load a config first.'; return; }
-    $('dsnExportStatus').textContent = 'building bundle…';
-    try {
-      const b = await buildBundleFiles();
-      downloadBlob(makeZip(b.files), 'authored-world-' + b.size + 'x' + b.size + '.zip', 'application/zip');
-      const hi = b.hiRes ? ' · biome/height at <b>' + b.hiRes + '²</b> (hi-res from the imported image)' : '';
-      $('dsnExportStatus').innerHTML = '<b>Exported authored-world-' + b.size + 'x' + b.size + '.zip</b>' + hi + ' — unzip, then run: EcoWorldGenCLI --server &lt;server&gt; --bundle &lt;dir&gt; --out Game.eco';
-    } catch (e) { $('dsnExportStatus').textContent = 'Export error: ' + e.message; }
   }
 
   // ---- hosted generation: POST the bundle to eco-worldgen-service, then poll status inline ----
@@ -1227,7 +1207,7 @@
   // Re-import a previously exported design .zip: restore the editable layers (design.json) + the world
   // config (WorldGenerator.eco), so you can keep tuning and re-export/regenerate.
   function importDesignZip(file) {
-    const setStatus = m => { const a = $('dsnExportStatus'); if (a) a.innerHTML = m; const b = $('dsnAnalysis'); if (b) b.innerHTML = '<b>' + m + '</b>'; };
+    const setStatus = m => { const a = $('dsnGenStatus'); if (a) a.innerHTML = m; const b = $('dsnAnalysis'); if (b) b.innerHTML = '<b>' + m + '</b>'; };
     const reader = new FileReader();
     reader.onload = () => {
       try {
@@ -1257,7 +1237,7 @@
         }
         paintMode = 'biome'; markPaintMode(); renderPaint();
         const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target, true);
-        setStatus('Imported design — tune it, then re-export or preview.');
+        setStatus('Imported design — tune it, then re-generate or preview.');
       } catch (e) { setStatus('Could not read that design .zip: ' + e.message); }
     };
     reader.readAsArrayBuffer(file);
@@ -1286,8 +1266,8 @@
     worker.postMessage(p, [p.biome.buffer, p.height.buffer]);
   }
   function preview3D() {
-    if (typeof baseCfg === 'undefined' || !baseCfg) { $('dsnExportStatus').textContent = 'Load a config first.'; return; }
-    if (typeof terrain === 'undefined' || !terrain) { $('dsnExportStatus').textContent = 'No terrain loaded — load/generate a config first.'; return; }
+    if (typeof baseCfg === 'undefined' || !baseCfg) { $('dsnGenStatus').textContent = 'Load a config first.'; return; }
+    if (typeof terrain === 'undefined' || !terrain) { $('dsnGenStatus').textContent = 'No terrain loaded — load/generate a config first.'; return; }
     $('designWrap').style.display = 'none';
     const cp = $('chartsPanel'); if (cp) cp.style.display = 'none';   // 3D view is a full-screen preview; Underground returns on Back
     $('view3dWrap').style.display = 'block';
