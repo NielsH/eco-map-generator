@@ -54,7 +54,7 @@ after a load. Opening the 3D view or the designer hides `#cfgPanel`/`#surfaceBar
 `#chartsPanel`) so the left column takes the full width via flex — no `.solo` class.
 
 **Designer modes** (`designer.open(mode)`): `'design'` shows `#dsnRightDesign` (a **World settings** card +
-exact authored export + 🧊 3D preview); `'find'` shows `#dsnRightFind` (Target + Search controls) plus a full-width `#dsnFindGallery` below the
+hosted "☁ Generate Eco save" + 🧊 3D preview); `'find'` shows `#dsnRightFind` (Target + Search controls) plus a full-width `#dsnFindGallery` below the
 painter — an ecoatlas-style results grid with big tiles, a sort dropdown (`gallerySort`: overall/mix/
 shape/fit), a min-score filter (`galleryMin`), and Show-more paging (`galShow`/`SHOW_STEP`). The
 `🎨 Design a map` and `🔍 Find a map` buttons open the two modes; both share the painter. Generate model: **Load pasted
@@ -168,16 +168,22 @@ scoring similarity. It matches the biome *mix* and *macro land-shape* well; exac
   candidate's exact cfg (`cfgBySeed`) so it reproduces the previewed map even with jitter, and does **not**
   overwrite `baseCfg` (so "Reset to loaded" still returns to the file).
 
-## Authored-world export (exact match, via a companion C# tool)
+## Authored-world generation (exact match, hosted service)
 
-Alongside the seed search, the Design-a-map tab can export the drawing as a **real world** that matches
-*exactly* (the search's ceiling is layout-approximate; this isn't). It does NOT run in-browser — it hands
-off to a C# tool in the Eco repo (`~/Documents/GitHub/Eco/Tools/`, not in git):
+Alongside the seed search, the Design-a-map tab turns the drawing into a **real world** that matches
+*exactly* (the search's ceiling is layout-approximate; this isn't). It does NOT run in-browser — the
+"☁ Generate Eco save" button uploads the bundle to the **hosted generation service**
+([eco-worldgen-service](https://github.com/NielsH/eco-worldgen-service), private), which runs the real
+Eco headless generator in a sandbox (compatible with **Eco v14**). The local "Export (.zip)" download was
+removed (the CLI isn't public). The same bundle-building code below still runs — it's just POSTed now:
 
 - **`src/designer.js` (`buildBundleFiles`)** builds a bundle: `WorldGenerator.eco` (from `buildExportJson`),
   `biome.bin` (one score-class index per cell, row-major, generation orientation), `height.bin` (one 0–255
   byte per cell), plus `biome.png`/`height.png` for humans, zipped (minimal STORE zip + PNG via canvas).
-  The **Export** button downloads it; `Designer.bundleBase64()` / `zipBase64()` are test hooks. The bundle
+  `generateSave()` POSTs it as multipart `file` to `${WORLDGEN_API}/api/submit` (default
+  `https://tools.factoreco.org/map`, override via `window.ECO_WORLDGEN_API`) and polls `/api/status/<token>`
+  inline (queued → generating → finished, then a save-download + permanent world-page link);
+  `Designer.bundleBase64()` / `zipBase64()` are test hooks. The bundle
   also includes **`design.json`** — the raw editable layers (target/elev/elevPainted/rough/water, base64
   typed arrays, + importMode/roughness/etc.) so the design can be re-imported for tuning ("📂 Import
   design" → `importDesignZip`: `unzipStore` the STORE zip, restore the layers + `loadConfigText` the
@@ -205,10 +211,12 @@ off to a C# tool in the Eco repo (`~/Documents/GitHub/Eco/Tools/`, not in git):
   size (nearest biome, bilinear+toroidal height — matching the mod), maps painter classes → `RASTER_BIOMES`,
   builds `vGrid`/`vCtx`, and reuses the exact same chunk mesher as the map's 3D view. Panel swap +
   `threeDFrom` route "← Back to design"/close back to the designer; a "⟳ Refresh" button rebuilds.
-- **The C# side** (`Eco/Tools/EcoAuthoredWorldGen` mod + `Eco/Tools/EcoWorldGenCLI`): the mod sets
-  `Biome.BiomeData` from `biome.bin` + swaps the SharpNoise height/water/rainfall/temperature modules for
-  authored ones (bypassing Voronoi); the CLI stages the bundle + mod into a headless server and runs
-  `EcoServer -generateDefault -nonetwork` → a stock-loadable `Game.eco`. See that folder's README.
+- **The C# side** (`EcoAuthoredWorldGen` mod + `EcoWorldGenCLI`, sources in `Eco/Tools/` locally and in the
+  private [eco-worldgen-service](https://github.com/NielsH/eco-worldgen-service) repo the host builds from):
+  the mod sets `Biome.BiomeData` from `biome.bin` + swaps the SharpNoise height/water/rainfall/temperature
+  modules for authored ones (bypassing Voronoi); the CLI stages the bundle + mod into a headless server and
+  runs `EcoServer -generateDefault -nonetwork` → a stock-loadable `Game.eco`. On the service this runs inside
+  a rootless-Podman sandbox; the CLI is cross-platform and `--skip-pathfinding` (Eco source patch) halves gen time.
 - **Why `.bin` not PNG**: `System.Drawing` misreads some canvas PNGs (indexed/tRNS) as transparent → the
   mod's nearest-color fallback mapped everything to Wetland. Raw `.bin` is unambiguous; keep the biome index
   order in sync between `search.js` SCLASS and the mod's `BIOME_BY_INDEX`.
