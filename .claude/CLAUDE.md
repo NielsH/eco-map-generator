@@ -188,10 +188,12 @@ removed (the CLI isn't public). The same bundle-building code below still runs �
   typed arrays, + importMode/roughness/etc.) so the design can be re-imported for tuning ("📂 Import
   design" → `importDesignZip`: `unzipStore` the STORE zip, restore the layers + `loadConfigText` the
   bundled config). The `.bin` files are computed output; `design.json` is the source of truth for editing.
-- **Image-import terrain** (`imageToMaps`, hi-res 320² export from a pure image import): per-biome heights
-  are compressed toward a common mean and the height field is toroidally box-blurred (`boxBlurTor`) so
-  biome edges become slopes not cliffs; gentle within-biome relief (`fbmR`, ~1-3 blocks) is added
-  post-blur; land is clamped above sea (no puddles), water stays below. Colour maps upscale
+- **Image-import terrain** (`imageToMaps`, hi-res 320² export from a pure image import): each biome gets a
+  base height from its elevation band (`COMPRESS` toward a common mean, so edges aren't cliffs), then real
+  multi-octave **rolling hills** (`vnR` at P6/P15/P38, `HILL_AMP`) are added on top so the world isn't a
+  flat plateau — coastal lows clamp just above sea. Hills are applied BEFORE the lake analysis and the
+  toroidal box-blur (`boxBlurTor`), so lake shores reflect the actual hilly height. Land clamps above sea,
+  water stays below. Colour maps upscale
   **nearest-neighbour** (`imageSmoothingEnabled` only in Brightness mode) so discrete biome colours stay
   pure — bilinear would blend e.g. blue+white into a false Coast/Grassland ring around lakes. (Hand-painted
   worlds use the separate `computeHeightField` coast-falloff path.)
