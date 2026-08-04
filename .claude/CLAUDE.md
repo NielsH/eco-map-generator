@@ -191,8 +191,20 @@ removed (the CLI isn't public). The same bundle-building code below still runs �
 - **Image-import terrain** (`imageToMaps`, hi-res 320² export from a pure image import): per-biome heights
   are compressed toward a common mean and the height field is toroidally box-blurred (`boxBlurTor`) so
   biome edges become slopes not cliffs; gentle within-biome relief (`fbmR`, ~1-3 blocks) is added
-  post-blur; land is clamped above sea (no puddles), water stays below. (Hand-painted worlds use the
-  separate `computeHeightField` coast-falloff path.)
+  post-blur; land is clamped above sea (no puddles), water stays below. Colour maps upscale
+  **nearest-neighbour** (`imageSmoothingEnabled` only in Brightness mode) so discrete biome colours stay
+  pure — bilinear would blend e.g. blue+white into a false Coast/Grassland ring around lakes. (Hand-painted
+  worlds use the separate `computeHeightField` coast-falloff path.)
+- **Imported lakes/rivers** (`imageToMaps`): before the blur, water cells are split into connected
+  components. The largest salt component is the sea (stays `DeepOcean`, deep); every other enclosed
+  component — plus any region drawn in the fresh-water colour `FRESH_COLOR` = `#1E90FF` (`isFreshRGB`,
+  which survives coast contact so rivers to the sea stay fresh) — becomes a **lake**: it takes the majority
+  shore biome and one **flat** surface just below its *lowest surrounding biome's* land height (`bandRefH`,
+  un-blurred, so a highland lake sits high and a lake spanning a biome border never overflows). Lake cells
+  get `hf = surface` pre-blur (keeps shores up), a fixed `bed` for `height.bin`, and `water.bin` =
+  `2·surface−1`. `buildBundleFiles` emits `water.bin` for imports whenever any lake exists (previously
+  image imports set `anyWater = false` and water became Deep Ocean). The mod (`AuthoredWorldGen.cs`
+  `WaterModule`) reads any above-sea water surface as a river/lake.
 - **Elevation layer**: a paint-mode toggle adds an `elev`/`elevPainted` layer; `heightAt()` uses the painted
   value or a biome-derived default (`ECO_BIOME_ELEV`). `ECO_BIOME_COLOR` holds the exact Eco biome colors.
   Painted cells get natural micro-relief (fbm) so they aren't dead flat; the amount is **per-cell** (`rough`

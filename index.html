@@ -8930,6 +8930,10 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     ColdForest: [34, 139, 34], RainForest: [32, 178, 170], Desert: [244, 164, 96], Taiga: [107, 142, 35],
     Tundra: [189, 183, 107], Ice: [255, 255, 255], Wetland: [0, 100, 0],
   };
+  // A distinct "fresh water" colour for import: cells this colour become lakes/rivers (freshwater above
+  // sea level) even when they touch the sea, so a river drawn to the coast stays fresh, not ocean.
+  const FRESH_COLOR = [30, 144, 255];
+  const isFreshRGB = (r, g, b) => Math.abs(r - FRESH_COLOR[0]) < 45 && Math.abs(g - FRESH_COLOR[1]) < 45 && Math.abs(b - FRESH_COLOR[2]) < 45;
   // Default elevation BAND per biome as [low, high] (0.5 = sea level), derived from Eco's own biome
   // elevation ranges. Unpainted land is placed within its band by distance-to-ocean (coast=low,
   // interior=high) + noise, mirroring a regular server: coastal lowlands rising to interior hills, with
@@ -9038,7 +9042,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
             '<label class="dsnMini" style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="dsnFill"> flood fill</label>' +
             '<button id="dsnUndo" title="Undo (Ctrl+Z)">↶ Undo</button>' +
             '<button id="dsnSeedFromMap">Seed from current map</button>' +
-            '<button id="dsnImport" title="Map an image\'s colors to biomes — auto-nearest, then remap any color you like">📁 Import image</button>' +
+            '<button id="dsnImport" title="Map an image\'s colors to biomes — auto-nearest, then remap any color you like. Water enclosed by land imports as a lake; paint water #1E90FF for fresh rivers/lakes (even to the coast).">📁 Import image</button>' +
             '<input type="file" id="dsnImgFile" accept="image/*" style="display:none">' +
             '<button id="dsnImportDesign" title="Load a design .zip (e.g. the input re-downloaded from the generation service) to keep tuning it">📂 Import design</button>' +
             '<input type="file" id="dsnDesignFile" accept=".zip,application/zip" style="display:none">' +
@@ -9214,7 +9218,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
       for (let k = 0; k < kept.length; k++) { const p = kept[k].rgb, dr = e.rgb[0] - p[0], dg = e.rgb[1] - p[1], db = e.rgb[2] - p[2], dd = dr * dr + dg * dg + db * db; if (dd < bd) { bd = dd; bi = k; } }
       kept[bi].count += e.count;
     }
-    for (const e of kept) { e.cls = nearestClass(e.rgb[0], e.rgb[1], e.rgb[2]); e.def = e.cls; }   // default = nearest biome
+    for (const e of kept) { e.fresh = isFreshRGB(e.rgb[0], e.rgb[1], e.rgb[2]); e.cls = e.fresh ? SC.Ocean : nearestClass(e.rgb[0], e.rgb[1], e.rgb[2]); e.def = e.cls; }   // fresh-water colour -> lake; else nearest biome
     return kept;
   }
   // Brightness mode: map each pixel's luminance onto the dark->light biome ramp, histogram-equalized so
@@ -9327,10 +9331,13 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
   function fbmR(x, y, res) { return 0.5 * vnR(x, y, 10, res) + 0.3 * vnR(x, y, 26, res) + 0.2 * vnR(x, y, 64, res); }
   function imageToMaps(res) {
     const c = document.createElement('canvas'); c.width = res; c.height = res;
-    const cx = c.getContext('2d'); cx.imageSmoothingEnabled = true; cx.drawImage(importedImg, 0, 0, res, res);
+    // Nearest-neighbour upscale for colour (biome) maps so discrete biome colours stay pure — interpolation
+    // would blend e.g. blue+white into a false "Grassland/Coast" ring around lakes. Photos use smoothing.
+    const cx = c.getContext('2d'); cx.imageSmoothingEnabled = (importMode === 'brightness'); cx.drawImage(importedImg, 0, 0, res, res);
     const d = cx.getImageData(0, 0, res, res).data, n = res * res;
     const biome = new Uint8Array(n), height = new Uint8Array(n);
     const hf = new Float32Array(n), land = new Uint8Array(n);   // base height + land mask, in FINAL orientation
+    const fresh = new Uint8Array(n);                            // 1 where the source used the fresh-water colour
     // compress per-biome heights toward a common mean so biome edges are small steps (blur turns them into slopes)
     const LAND_MEAN = 0.60, COMPRESS = 0.5, SEA = 0.5;
     const put = (x, y, cls, h01, isLand) => { const j = (res - 1 - y) * res + x; biome[j] = cls; hf[j] = h01; land[j] = isLand ? 1 : 0; };   // flip Y like the 64² path
@@ -9349,23 +9356,61 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     } else {
       for (let y = 0; y < res; y++) for (let x = 0; x < res; x++) {
         const o = (y * res + x) * 4;
-        let cls;
+        let cls, isFresh = false;
         if (d[o + 3] < 128) cls = SC.Ocean;
-        else { let bi = 0, bd = Infinity; for (let k = 0; k < legend.length; k++) { const p = legend[k].rgb, dr = d[o] - p[0], dg = d[o + 1] - p[1], db = d[o + 2] - p[2], dd = dr * dr + dg * dg + db * db; if (dd < bd) { bd = dd; bi = k; } } cls = legend[bi].cls; }
+        else { let bi = 0, bd = Infinity; for (let k = 0; k < legend.length; k++) { const p = legend[k].rgb, dr = d[o] - p[0], dg = d[o + 1] - p[1], db = d[o + 2] - p[2], dd = dr * dr + dg * dg + db * db; if (dd < bd) { bd = dd; bi = k; } } cls = legend[bi].cls; isFresh = !!legend[bi].fresh; }
         const isOcean = cls === SC.Ocean;
         const band = ECO_BIOME_ELEV[CN[cls]] || [0.52, 0.62], mid = (band[0] + band[1]) / 2;
         put(x, y, cls, isOcean ? 0.30 : LAND_MEAN + (mid - LAND_MEAN) * COMPRESS, isOcean ? 0 : 1);
+        if (isFresh) fresh[(res - 1 - y) * res + x] = 1;
       }
     }
-    // smooth biome-edge steps into slopes (no more cliffs) — radius scales with resolution
+    // ---- inland water -> lakes/rivers, sitting RELATIVE to their surroundings (a lake in the highlands
+    //      sits high, not in a pit). Two kinds become fresh water: (a) any fresh-water-coloured region
+    //      (even if it touches the sea, so coast rivers stay fresh), (b) salt water fully enclosed by land
+    //      (not the main sea). Each body gets ONE flat surface just below its LOWEST surrounding biome's
+    //      land height (so it never overflows and reads correctly across a biome border). This runs BEFORE
+    //      the smoothing blur, and sets lake cells near their surface height, so shores are not pulled down.
+    const water = new Uint8Array(n), bed = new Float32Array(n);
+    const nbr4 = j => { const x = j % res, y = (j / res) | 0; return [((x + 1) % res) + y * res, ((x + res - 1) % res) + y * res, x + ((y + 1) % res) * res, x + ((y + res - 1) % res) * res]; };
+    const bandRefH = cls => { const b = ECO_BIOME_ELEV[CN[cls]] || [0.52, 0.62]; return LAND_MEAN + ((b[0] + b[1]) / 2 - LAND_MEAN) * COMPRESS; };   // un-blurred land height for a biome
+    const groups = [];
+    {
+      const sc = new Int32Array(n).fill(-1); const sSize = []; let sid = 0;   // salt-water components; largest = sea
+      for (let s = 0; s < n; s++) {
+        if (land[s] !== 0 || fresh[s] || sc[s] >= 0) continue;
+        const st = [s]; sc[s] = sid; let sz = 0;
+        while (st.length) { const c = st.pop(); sz++; for (const q of nbr4(c)) if (land[q] === 0 && !fresh[q] && sc[q] < 0) { sc[q] = sid; st.push(q); } }
+        sSize.push(sz); sid++;
+      }
+      let seaId = -1, seaSz = -1; for (let i = 0; i < sSize.length; i++) if (sSize[i] > seaSz) { seaSz = sSize[i]; seaId = i; }
+      const salt = new Map();
+      for (let j = 0; j < n; j++) if (land[j] === 0 && !fresh[j] && sc[j] !== seaId) (salt.get(sc[j]) || salt.set(sc[j], []).get(sc[j])).push(j);
+      for (const g of salt.values()) groups.push(g);
+      const fc = new Int32Array(n).fill(-1); let fid = 0; const fmap = new Map();   // fresh-water components (always lakes)
+      for (let s = 0; s < n; s++) { if (!fresh[s] || fc[s] >= 0) continue; const st = [s]; fc[s] = fid; while (st.length) { const c = st.pop(); for (const q of nbr4(c)) if (fresh[q] && fc[q] < 0) { fc[q] = fid; st.push(q); } } fid++; }
+      for (let j = 0; j < n; j++) if (fresh[j]) (fmap.get(fc[j]) || fmap.set(fc[j], []).get(fc[j])).push(j);
+      for (const g of fmap.values()) groups.push(g);
+    }
+    for (const cells of groups) {
+      let refMin = Infinity; const tally = {};
+      for (const j of cells) for (const q of nbr4(j)) if (land[q] === 1) { const rh = bandRefH(biome[q]); if (rh < refMin) refMin = rh; tally[biome[q]] = (tally[biome[q]] || 0) + 1; }
+      if (!isFinite(refMin)) refMin = 0.60;                                      // lake with no land shore -> mid elevation
+      const surface = Math.max(SEA + 0.01, Math.min(0.985, refMin - 0.02));       // flat, below the lowest surrounding bank, above sea
+      const bottom = Math.max(0.03, surface - 0.05);                             // bed below the surface
+      let lb = SC.Grassland, bc = -1; for (const k in tally) if (tally[k] > bc) { bc = tally[k]; lb = +k; }   // majority shore biome
+      const wval = Math.max(1, Math.min(255, Math.round((2 * surface - 1) * 255)));
+      for (const j of cells) { biome[j] = lb; land[j] = 2; water[j] = wval; bed[j] = bottom; hf[j] = surface; }   // hf=surface so the blur keeps shores up
+    }
+    // smooth biome-edge steps into slopes (lakes now sit near their surface, so no deep pit pulls shores down)
     boxBlurTor(hf, res, Math.max(2, Math.round(res / 50)), 2);
-    // finalize: land keeps gentle within-biome relief and stays above sea; water stays below sea
+    // finalize: lakes hold water above their (fixed) bed; other land keeps relief above sea; sea stays deep
     for (let j = 0; j < n; j++) {
       const x = j % res, y = (j / res) | 0;
-      let h = land[j] ? Math.max(0.505, hf[j] + (fbmR(x, y, res) - 0.5) * 0.05) : Math.min(hf[j], 0.44);   // land stays above sea (no puddles); water below
+      let h = land[j] === 2 ? bed[j] : (land[j] ? Math.max(0.505, hf[j] + (fbmR(x, y, res) - 0.5) * 0.05) : Math.min(hf[j], 0.44));
       height[j] = Math.max(0, Math.min(255, Math.round(h * 255)));
     }
-    return { res, biome, height };
+    return { res, biome, height, water };
   }
   // Load an image, stretch it to the world grid, cluster its colors, and map each color to a biome
   // (nearest by default — the user can then remap any color via the legend below the canvas).
@@ -9972,8 +10017,11 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     }
     // A pure image import exports hi-res biome + height straight from the source image (the coarse 64²
     // paint grid would waste an ~11-block chunk per pixel). Hand-painting over the import opts back out.
-    let biomeOut = biomeBin, heightOut = heightBin, hi = null;
-    if (importedImg && !paintedSinceImport) { hi = imageToMaps(IMPORT_RES); biomeOut = hi.biome; heightOut = hi.height; anyWater = false; }
+    let biomeOut = biomeBin, heightOut = heightBin, waterOut = waterBin, hi = null;
+    if (importedImg && !paintedSinceImport) {
+      hi = imageToMaps(IMPORT_RES); biomeOut = hi.biome; heightOut = hi.height;
+      waterOut = hi.water; anyWater = hi.water.some(v => v > 0);   // enclosed water in the image -> lakes
+    }
     // PNGs kept for human inspection only (not read by the mod).
     const biomePng = await gridToPng((x, y) => water[y * G + x] ? [40, 90, 200] : (ECO_BIOME_COLOR[CN[target[y * G + x]]] || ECO_BIOME_COLOR.Ocean));
     const heightPng = await gridToPng((x, y) => { const b = heightBin[y * G + x]; return [b, b, b]; });
@@ -9985,7 +10033,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
       { name: 'height.png', data: heightPng },
       { name: 'authored.json', data: strBytes('{ "enabled": true, "source": "eco-map-generator" }') },
     ];
-    if (anyWater) files.push({ name: 'water.bin', data: waterBin });   // only when rivers/lakes were painted
+    if (anyWater) files.push({ name: 'water.bin', data: waterOut });   // rivers/lakes (painted) or enclosed lakes (imported)
     // raw editable layers, so the design can be re-imported for tuning (the .bin files are computed output)
     const design = { v: 1, G: G, importMode: importMode, paintRoughness: paintRoughness, elevValue: elevValue, layoutWeight: layoutWeight,
       target: abToB64(target.buffer), elev: abToB64(elev.buffer), elevPainted: abToB64(elevPainted.buffer), rough: abToB64(rough.buffer), water: abToB64(water.buffer) };
