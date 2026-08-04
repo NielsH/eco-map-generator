@@ -9338,8 +9338,9 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     const biome = new Uint8Array(n), height = new Uint8Array(n);
     const hf = new Float32Array(n), land = new Uint8Array(n);   // base height + land mask, in FINAL orientation
     const fresh = new Uint8Array(n);                            // 1 where the source used the fresh-water colour
-    // compress per-biome heights toward a common mean so biome edges are small steps (blur turns them into slopes)
-    const LAND_MEAN = 0.60, COMPRESS = 0.5, SEA = 0.5;
+    // per-biome base height (mild compression toward a common mean keeps biome edges from being cliffs;
+    // real rolling-hill relief is added on top below). SEA = 0.5.
+    const LAND_MEAN = 0.60, COMPRESS = 0.65, SEA = 0.5;
     const put = (x, y, cls, h01, isLand) => { const j = (res - 1 - y) * res + x; biome[j] = cls; hf[j] = h01; land[j] = isLand ? 1 : 0; };   // flip Y like the 64² path
     if (importMode === 'brightness') {
       const lum = new Float32Array(n), trans = new Uint8Array(n), op = [];
@@ -9365,6 +9366,16 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
         if (isFresh) fresh[(res - 1 - y) * res + x] = 1;
       }
     }
+    // ---- real terrain relief: add multi-octave rolling hills on top of the per-biome base so the world
+    //      isn't a flat plateau (broad P6 swells + medium + fine). Applied to land BEFORE lake analysis and
+    //      the blur, so lake shores reflect the actual hilly height. Coastal lows clamp just above sea.
+    const HILL_AMP = 0.26;
+    for (let j = 0; j < n; j++) {
+      if (land[j] !== 1) continue;
+      const x = j % res, y = (j / res) | 0;
+      const hill = 0.5 * vnR(x, y, 6, res) + 0.32 * vnR(x, y, 15, res) + 0.18 * vnR(x, y, 38, res);   // ~[0,1]
+      hf[j] = Math.max(SEA + 0.006, hf[j] + (hill - 0.5) * HILL_AMP);
+    }
     // ---- inland water -> lakes/rivers, sitting RELATIVE to their surroundings (a lake in the highlands
     //      sits high, not in a pit). Two kinds become fresh water: (a) any fresh-water-coloured region
     //      (even if it touches the sea, so coast rivers stay fresh), (b) salt water fully enclosed by land
@@ -9373,7 +9384,6 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     //      the smoothing blur, and sets lake cells near their surface height, so shores are not pulled down.
     const water = new Uint8Array(n), bed = new Float32Array(n);
     const nbr4 = j => { const x = j % res, y = (j / res) | 0; return [((x + 1) % res) + y * res, ((x + res - 1) % res) + y * res, x + ((y + 1) % res) * res, x + ((y + res - 1) % res) * res]; };
-    const bandRefH = cls => { const b = ECO_BIOME_ELEV[CN[cls]] || [0.52, 0.62]; return LAND_MEAN + ((b[0] + b[1]) / 2 - LAND_MEAN) * COMPRESS; };   // un-blurred land height for a biome
     const groups = [];
     {
       const sc = new Int32Array(n).fill(-1); const sSize = []; let sid = 0;   // salt-water components; largest = sea
@@ -9394,7 +9404,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     }
     for (const cells of groups) {
       let refMin = Infinity; const tally = {};
-      for (const j of cells) for (const q of nbr4(j)) if (land[q] === 1) { const rh = bandRefH(biome[q]); if (rh < refMin) refMin = rh; tally[biome[q]] = (tally[biome[q]] || 0) + 1; }
+      for (const j of cells) for (const q of nbr4(j)) if (land[q] === 1) { const rh = hf[q]; if (rh < refMin) refMin = rh; tally[biome[q]] = (tally[biome[q]] || 0) + 1; }   // hf now = biome base + hills
       if (!isFinite(refMin)) refMin = 0.60;                                      // lake with no land shore -> mid elevation
       const surface = Math.max(SEA + 0.01, Math.min(0.985, refMin - 0.02));       // flat, below the lowest surrounding bank, above sea
       const bottom = Math.max(0.03, surface - 0.05);                             // bed below the surface
@@ -9406,8 +9416,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     boxBlurTor(hf, res, Math.max(2, Math.round(res / 50)), 2);
     // finalize: lakes hold water above their (fixed) bed; other land keeps relief above sea; sea stays deep
     for (let j = 0; j < n; j++) {
-      const x = j % res, y = (j / res) | 0;
-      let h = land[j] === 2 ? bed[j] : (land[j] ? Math.max(0.505, hf[j] + (fbmR(x, y, res) - 0.5) * 0.05) : Math.min(hf[j], 0.44));
+      let h = land[j] === 2 ? bed[j] : (land[j] ? Math.max(0.505, hf[j]) : Math.min(hf[j], 0.44));   // hills already baked into hf
       height[j] = Math.max(0, Math.min(255, Math.round(h * 255)));
     }
     return { res, biome, height, water };
