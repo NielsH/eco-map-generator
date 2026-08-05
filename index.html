@@ -8961,7 +8961,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
   let lastImgData = null;        // last decoded G*G RGBA, so switching import mode re-maps without re-loading
   let importedImg = null;        // the decoded source Image, kept so export can resample it at high resolution
   let paintedSinceImport = false; // once the user hand-edits an import, export falls back to the 64² grid
-  const IMPORT_RES = 320;        // biome/height resolution exported for a pure image import (vs the 64² paint grid)
+  const IMPORT_RES = 448;        // biome/height resolution exported for a pure image import (finer = steeper, less-terraced terrain)
   // dark -> light biome ramp for brightness mode (low/dark = deep water, high/light = snow), reads as terrain
   const BRIGHT_RAMP = ['Ocean', 'Wetland', 'ColdForest', 'Taiga', 'RainForest', 'Grassland', 'WarmForest', 'Desert', 'Tundra', 'Coast', 'Ice'];
 
@@ -9394,20 +9394,20 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     //      by each biome's (spatially-smoothed) elevation band. Continuous field => natural transitions.
     const distO = new Int16Array(n).fill(-1);
     { const q = []; for (let i = 0; i < n; i++) if (isSea[i]) { distO[i] = 0; q.push(i); } for (let h = 0; h < q.length; h++) { const c = q[h]; for (const nb of nbr4(c)) if (distO[nb] < 0) { distO[nb] = distO[c] + 1; q.push(nb); } } }
-    const OCEAN_DIST = 0.18 * res, EPOW = 2.0;                                    // reach full height ~18% inland; ^2 like Eco
+    const OCEAN_DIST = 0.13 * res, EPOW = 1.8;                                    // reach full height ~13% inland -> steeper coasts
     const aboveMid = cls => { const b = ECO_BIOME_ELEV[CN[cls]] || [0.52, 0.62]; return Math.max(0, ((b[0] + b[1]) / 2 - 0.5) * 2); };   // biome target elevation above sea, [0,1]
     const tgt = new Float32Array(n); for (let j = 0; j < n; j++) tgt[j] = land[j] === 1 ? aboveMid(biome[j]) : 0;
     boxBlurTor(tgt, res, Math.max(3, Math.round(res / 42)), 2);                   // smooth the biome nudge so borders ramp, not step
-    const ridged = (x, y) => { let s = 0, amp = 1, fr = 6, norm = 0; for (let o = 0; o < 4; o++) { const nz = vnR(x, y, fr, res); s += amp * (1 - Math.abs(2 * nz - 1)); norm += amp; amp *= 0.5; fr *= 2; } return s / norm; };   // ridged multifractal [0,1]
-    const MAXH = 0.62;                                                           // interior peaks ~0.62 above sea
+    const ridged = (x, y) => { let s = 0, amp = 1, fr = 9, norm = 0; for (let o = 0; o < 5; o++) { const nz = vnR(x, y, fr, res); s += amp * (1 - Math.abs(2 * nz - 1)); norm += amp; amp *= 0.55; fr *= 2; } return s / norm; };   // ridged multifractal [0,1], more/steeper ranges
+    const MAXH = 0.92;                                                           // interior peaks reach near the world's max height
     for (let j = 0; j < n; j++) {
       if (land[j] !== 1) continue;
       const x = j % res, y = (j / res) | 0;
       const nd = distO[j] < 0 ? 1 : Math.min(1, distO[j] / OCEAN_DIST);
       const maxE = Math.pow(nd, EPOW);                                            // ocean-distance ceiling: coasts stay low (beaches), interiors rise
-      const relief = (0.30 + 0.70 * ridged(x, y)) * MAXH;                         // ridged mountain ranges, biome-independent amplitude
-      const nudge = (tgt[j] - 0.25) * 0.35;                                       // high-elevation biomes trend a little higher
-      const above = Math.max(0.02, Math.min(maxE, relief + nudge + (vnR(x, y, 22, res) - 0.5) * 0.05));
+      const relief = (0.10 + 0.90 * Math.pow(ridged(x, y), 1.3)) * MAXH;          // sharper, taller ridged mountain ranges (deep valleys -> high peaks)
+      const nudge = (tgt[j] - 0.25) * 0.40;                                       // high-elevation biomes trend higher
+      const above = Math.max(0.02, Math.min(maxE, relief + nudge + (vnR(x, y, 24, res) - 0.5) * 0.06));
       hf[j] = 0.5 + above * 0.5;                                                  // designer frac (0.5 = sea)
     }
     // per-cell water surface: nearest local land height (BFS carrying the min adjacent land height inward)
@@ -9427,8 +9427,8 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
         biome[j] = lb; land[j] = 2; water[j] = Math.max(1, Math.min(255, Math.round((2 * surface - 1) * 255))); bed[j] = bottom; hf[j] = surface;
       }
     }
-    // light smoothing only (soften pixel noise + the shoreline step) — keep the ridged relief intact
-    boxBlurTor(hf, res, Math.max(2, Math.round(res / 80)), 1);
+    // minimal smoothing — keep the ridged relief steep (just knock off single-pixel noise + shoreline step)
+    boxBlurTor(hf, res, Math.max(1, Math.round(res / 140)), 1);
     // finalize: lakes hold water above their (fixed) bed; other land keeps its relief above sea; sea stays deep
     for (let j = 0; j < n; j++) {
       let h = land[j] === 2 ? bed[j] : (land[j] ? Math.max(0.505, hf[j]) : Math.min(hf[j], 0.44));

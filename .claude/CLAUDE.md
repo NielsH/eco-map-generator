@@ -188,9 +188,10 @@ removed (the CLI isn't public). The same bundle-building code below still runs �
   typed arrays, + importMode/roughness/etc.) so the design can be re-imported for tuning ("📂 Import
   design" → `importDesignZip`: `unzipStore` the STORE zip, restore the layers + `loadConfigText` the
   bundled config). The `.bin` files are computed output; `design.json` is the source of truth for editing.
-- **Image-import terrain** (`imageToMaps`, hi-res 320² export from a pure image import): elevation MIRRORS
-  `VoronoiWorldGenerator` — a **ridged-noise field capped by distance to the sea** (`maxE = (distToSea/D)^2`
-  so coasts stay low/beaches, interiors rise into mountains), plus a small per-biome `nudge` (from a
+- **Image-import terrain** (`imageToMaps`, hi-res `IMPORT_RES`² (448²) export from a pure image import):
+  elevation MIRRORS `VoronoiWorldGenerator` — a **ridged-noise field capped by distance to the sea**
+  (`maxE = (distToSea/D)^2` so coasts stay low/beaches, interiors rise into sharp, tall mountains near the
+  world's `MaxGenerationHeight`; `MAXH`/`OCEAN_DIST`/`EPOW` tune peak height/steepness), plus a per-biome `nudge` (from a
   spatially-blurred biome-elevation target, so biome borders ramp instead of forming cliffs). The main sea
   is identified first (largest salt water component) so rivers/lakes inside the land don't flatten the
   distance field. Continuous field ⇒ natural biome transitions, no per-biome plateaus. Colour maps upscale
