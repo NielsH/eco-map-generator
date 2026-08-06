@@ -242,8 +242,13 @@ removed (the CLI isn't public). The same bundle-building code below still runs �
 - **Why `.bin` not PNG**: `System.Drawing` misreads some canvas PNGs (indexed/tRNS) as transparent → the
   mod's nearest-color fallback mapped everything to Wetland. Raw `.bin` is unambiguous; keep the biome index
   order in sync between `search.js` SCLASS and the mod's `BIOME_BY_INDEX`.
-- **Orientation**: export is generation-orientation (no flip); it matches the mod (`biome.png` pixel (x,y) →
-  world (x,z)) and the in-game flipped editor lines up with the tool's flipped display.
+- **Orientation**: the `.bin` maps are generation-orientation (row 0 = world z 0, grid row `G-1` = the image's
+  top). That's what the mod reads and it makes the in-game world line up with the tool's flipped-Y display.
+  The **human-facing renders flip Y to read north-up** so they match what the user drew: the bundle's
+  `biome.png`/`height.png` (`gridToPng`) and the hosted service's world-page preview
+  (`eco-worldgen-service/server/src/preview.js` `flipRows`). Flip the *renders*, never the `.bin` — flipping
+  the bin would flip the actual world. (A pure image import stores the source with `(res-1-y)`, so image-top
+  → grid row `G-1` → world north, same convention.)
 
 ## Gotchas (learned the hard way)
 
