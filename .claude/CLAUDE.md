@@ -31,9 +31,15 @@ Unlike the sibling [eco-biome-visualizer](https://github.com/NielsH/eco-biome-vi
 ## Build / verify / run
 
 ```
-node build.js             # regenerate index.html from src/ + WorldGenerator.eco
-node test/verify-core.js  # Random + 66 noise checks vs references captured from the game DLLs
+node build.js              # regenerate index.html from src/ + WorldGenerator.eco
+node test/verify-core.js   # Random + 66 noise checks vs references captured from the game DLLs
+node test/verify-water.js  # imported lakes/rivers: no walls of water, no overflow, flat lake basins
 ```
+
+`verify-water.js` runs the real `imageToMaps` headlessly (it lifts the function out of `designer.js` by
+brace matching and stubs the little of canvas it uses), so the import pipeline can be iterated on without
+a browser. `DESIGNER=<path> node test/verify-water.js` runs it against another copy of designer.js —
+handy for confirming a change actually fixes what it claims.
 
 - `src/core.js`, `src/geo.js`, `src/worldgen.js` are Node-requirable (they have `module.exports` guards that
   `build.js` strips for the browser). So you can unit-test them directly in Node.
