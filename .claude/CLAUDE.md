@@ -205,16 +205,37 @@ removed (the CLI isn't public). The same bundle-building code below still runs �
   `AuthoredHeightModule.GetValue`), AFTER the mod's bilinear upscale. Terracing the exported `height.bin`
   bytes here does nothing — the upscale smooths the steps back into a ramp. (Mod change → rebuild custom
   server + redeploy the hosted service.)
-- **Imported lakes/rivers** (`imageToMaps`): before the blur, water cells are split into connected
-  components. The largest salt component is the sea (stays `DeepOcean`, deep); every other enclosed
-  component — plus any region drawn in the fresh-water colour `FRESH_COLOR` = `#1E90FF` (`isFreshRGB`,
-  which survives coast contact so rivers to the sea stay fresh) — becomes a **lake**: it takes the majority
-  shore biome and one **flat** surface just below its *lowest surrounding biome's* land height (`bandRefH`,
-  un-blurred, so a highland lake sits high and a lake spanning a biome border never overflows). Lake cells
-  get `hf = surface` pre-blur (keeps shores up), a fixed `bed` for `height.bin`, and `water.bin` =
-  `2·surface−1`. `buildBundleFiles` emits `water.bin` for imports whenever any lake exists (previously
-  image imports set `anyWater = false` and water became Deep Ocean). The mod (`AuthoredWorldGen.cs`
-  `WaterModule`) reads any above-sea water surface as a river/lake.
+- **Imported lakes/rivers** (`imageToMaps`): water cells are split into connected components. The largest
+  salt component is the sea (stays `DeepOcean`, deep); every other enclosed component — plus any region
+  drawn in the fresh-water colour `FRESH_COLOR` = `#1E90FF` (`isFreshRGB`, which survives coast contact so
+  rivers to the sea stay fresh) — becomes a lake/river taking the majority shore biome. `buildBundleFiles`
+  emits `water.bin` whenever any lake exists; the mod's `WaterModule` reads any above-sea surface as one.
+- **Getting the water SURFACE right is the subtle part**, and it is four steps — Eco fills every column
+  independently to `60 + 60·waterValue`, so whatever per-cell level is exported *is* what the player sees:
+  1. **Bank height, min-propagated** (`MIN_REACH`). Only shore cells have a real constraint (the land they
+     touch). Mid-lake cells take the LOWEST bank within reach, so a lake levels with the shore it would
+     drain over. Carrying the *first* bank to arrive (a plain BFS) is what used to tilt lakes — which shore
+     won was arbitrary. Reach is a genuine trade-off: too low tilts lakes, too high flattens rivers into
+     canals (at 60 the test design's rivers lost their 24-block drop entirely).
+  2. **Priority flood** from each body's lowest cell, `level = surf <= parent ? parent : min(surf, parent +
+     MAX_WATER_STEP)`. A basin cannot sit below the water that reached it, so it fills DEAD FLAT; a channel
+     keeps its own downhill profile, capped so it descends in small steps.
+  3. **Flat-region clamp to the lowest bank.** The flood can still top a low bank somewhere along a shore.
+     Clamp each flat region (never each cell — that just re-tilts the lake) and re-settle, repeating since
+     lowering one pool can strand the one above. Regions are grown against the SEED's level, not the
+     neighbour's: chaining would let a long river link up and flatten end to end.
+  4. **Shoreline restore, after the blur.** `boxBlurTor` averages across the shoreline and water cells sit
+     low, so it drags banks down — sometimes below the water they hold back. The final pass puts any land
+     touching water a block above it. Skip this and the overflow comes straight back.
+  Then `BANK_SLOPE`/`CARVE_REACH` carve a valley: walk out from the water lowering land to at most
+  `BANK_SLOPE` per cell above it, so banks rise away from the shore instead of walling it. It must keep
+  walking through cells where the cap does not bite (terrain may rise again further out) — and it is
+  deliberately short-reach, since it is a valley, not a global reshape.
+- **Measure water, don't eyeball it.** Screenshots are genuinely misleading here — a flat surface over a
+  varying bed looks like a deep lake. What matters is the step between ADJACENT water cells and whether
+  water sits above the LAND beside it (ocean neighbours excluded — a river mouth is meant to be above sea
+  level). Distinct-levels-per-body is NOT a quality metric: a river descending a hillside legitimately has
+  one level per block.
 - **Elevation layer**: a paint-mode toggle adds an `elev`/`elevPainted` layer; `heightAt()` uses the painted
   value or a biome-derived default (`ECO_BIOME_ELEV`). `ECO_BIOME_COLOR` holds the exact Eco biome colors.
   Painted cells get natural micro-relief (fbm) so they aren't dead flat; the amount is **per-cell** (`rough`
