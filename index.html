@@ -9985,13 +9985,15 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
   }
 
   // ================================================================= authored-world export
-  // Render a G x G grid to a PNG (generation orientation, no flip — the mod reads pixel (x,y) as world
-  // (x,z)). Returns a Uint8Array of PNG bytes. `pix(x,y)` -> [r,g,b].
+  // Render a G x G grid to a PNG for HUMAN inspection. `pix(x,y)` reads generation orientation (row 0 =
+  // south, as the mod reads the .bin), but we write it flipped-Y so the PNG reads north-up like the editor
+  // and the in-game map — matching what the user drew. (The mod never reads these PNGs; it reads the .bin,
+  // which stays generation orientation.) Returns a Uint8Array of PNG bytes.
   function gridToPng(pix) {
     return new Promise(resolve => {
       const cv = document.createElement('canvas'); cv.width = G; cv.height = G;
       const ctx = cv.getContext('2d'), img = ctx.createImageData(G, G), d = img.data;
-      for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) { const c = pix(x, y), o = (y * G + x) * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = 255; }
+      for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) { const c = pix(x, y), o = ((G - 1 - y) * G + x) * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = 255; }
       ctx.putImageData(img, 0, 0);
       cv.toBlob(b => b.arrayBuffer().then(ab => resolve(new Uint8Array(ab))), 'image/png');
     });
