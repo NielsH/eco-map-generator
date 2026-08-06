@@ -539,14 +539,35 @@
       for (const j of lakeSet) { let mn = Infinity; for (const nb of nbr4(j)) if (land[nb] === 1 && hf[nb] < mn) mn = hf[nb]; if (isFinite(mn)) { surf[j] = mn; q.push(j); } }
       for (let h = 0; h < q.length; h++) { const c = q[h]; for (const nb of nbr4(c)) if (lakeSet.has(nb) && surf[nb] < 0) { surf[nb] = surf[c]; q.push(nb); } }
     }
+    // Water sits in FLAT pools. Giving every cell its own surface (straight from surf[]) makes a lake a
+    // staircase of water levels — Eco fills each column separately — and the bed steps with it. So split
+    // each component into pools of cells whose bank height falls in the same POOL_STEP band, and give each
+    // pool ONE level, taken from its lowest bank so it cannot overflow. A compact lake lands in a single
+    // band and comes out flat; a river crossing a slope descends as a chain of flat pools instead of a
+    // per-cell ramp. POOL_STEP ~ 3 blocks, matching Eco's own terrace band.
+    const POOL_STEP = 0.025;
+    const surfOf = j => (surf[j] >= 0 ? surf[j] : 0.55);
     for (const cells of groups) {
       const tally = {}; for (const j of cells) for (const nb of nbr4(j)) if (land[nb] === 1) tally[biome[nb]] = (tally[biome[nb]] || 0) + 1;
       let lb = SC.Grassland, bc = -1; for (const k in tally) if (tally[k] > bc) { bc = tally[k]; lb = +k; }   // majority shore biome
-      for (const j of cells) {
-        const base = surf[j] >= 0 ? surf[j] : 0.55;
-        const surface = Math.max(SEA + 0.01, base - 0.012);                       // just below the local bank
+      // Grow each pool from its lowest remaining cell, taking everything within POOL_STEP of that floor.
+      // (Quantising to absolute bands instead would split one lake in two whenever its banks happened to
+      // straddle a band edge.)
+      const inGroup = new Set(cells), done = new Set();
+      const order = cells.slice().sort((a, b) => surfOf(a) - surfOf(b));
+      for (const seed of order) {
+        if (done.has(seed)) continue;
+        const lowest = surfOf(seed), lim = lowest + POOL_STEP;
+        const stack = [seed], pool = []; done.add(seed);
+        while (stack.length) {
+          const c = stack.pop(); pool.push(c);
+          for (const nb of nbr4(c)) if (inGroup.has(nb) && !done.has(nb) && surfOf(nb) <= lim) { done.add(nb); stack.push(nb); }
+        }
+        const surface = Math.max(SEA + 0.01, lowest - 0.012);                     // below the pool's LOWEST bank
         const bottom = Math.max(0.03, surface - 0.03);
-        biome[j] = lb; land[j] = 2; water[j] = Math.max(1, Math.min(255, Math.round((2 * surface - 1) * 255))); bed[j] = bottom; hf[j] = surface;
+        for (const j of pool) {
+          biome[j] = lb; land[j] = 2; water[j] = Math.max(1, Math.min(255, Math.round((2 * surface - 1) * 255))); bed[j] = bottom; hf[j] = surface;
+        }
       }
     }
     // minimal smoothing — keep the ridged relief steep (just knock off single-pixel noise + shoreline step)
