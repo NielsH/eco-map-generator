@@ -398,10 +398,13 @@
     const top = Object.keys(count).map(k => [LABEL[CN[+k]], count[k]]).sort((a, b) => b[1] - a[1]).slice(0, 5).map(e => e[0]).join(', ');
     flashAnalysis('Imported image → biomes (' + top + '). Remap any band below, edit, or Analyze — then generate.');
   }
-  // Re-run the mapping in a different mode on the already-loaded image (no re-decode), then refresh.
+  // Re-run the mapping in a different mode, then refresh. The decode itself depends on the mode (colours
+  // nearest, tone smoothed), so the image is re-decoded rather than re-read from the cached grid.
   function setImportMode(m) {
-    if (!lastImgData || importMode === m) { importMode = m; return; }
-    pushUndo(); importMode = m; mapImage(lastImgData); renderLegend(); flashMix(applyLegend());
+    if (!importedImg || importMode === m) { importMode = m; return; }
+    pushUndo(); importMode = m;
+    lastImgData = decodeToGrid(importedImg);
+    mapImage(lastImgData); renderLegend(); flashMix(applyLegend());
   }
   // Legend UI: one row per source color (or brightness band) with a live biome dropdown, plus a
   // Colors/Brightness mode toggle — Brightness maps luminance onto a terrain ramp (best for photos).
@@ -555,16 +558,24 @@
     }
     return { res, biome, height, water };
   }
+  // Decode the source image onto the G x G paint grid. Colour maps must NOT be smoothed, for the same
+  // reason imageToMaps doesn't smooth them: an averaging downscale turns every biome boundary into blend
+  // colours, and those blends compete for the MAX_LEGEND slots. A small biome loses — an ice cap at ~1% of
+  // land never survives a 448 -> 128 downscale, and gets silently remapped to whatever colour is nearest.
+  // Brightness mode does want the averaging, since it is reading tone off a photo.
+  function decodeToGrid(img) {
+    const c = document.createElement('canvas'); c.width = G; c.height = G;
+    const cx = c.getContext('2d'); cx.imageSmoothingEnabled = (importMode === 'brightness');
+    cx.drawImage(img, 0, 0, G, G);                          // stretch to the square world grid
+    return cx.getImageData(0, 0, G, G).data;
+  }
   // Load an image, stretch it to the world grid, cluster its colors, and map each color to a biome
   // (nearest by default — the user can then remap any color via the legend below the canvas).
   function importImage(file) {
     const img = new Image();
     img.onload = () => {
       pushUndo();
-      const c = document.createElement('canvas'); c.width = G; c.height = G;
-      const cx = c.getContext('2d'); cx.imageSmoothingEnabled = true;
-      cx.drawImage(img, 0, 0, G, G);                          // stretch to the square world grid
-      const d = cx.getImageData(0, 0, G, G).data;
+      const d = decodeToGrid(img);
       lastImgData = d; importedImg = img; paintedSinceImport = false;
       mapImage(d);
       paintMode = 'biome'; markPaintMode();
