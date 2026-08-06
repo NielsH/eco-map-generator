@@ -188,15 +188,23 @@ removed (the CLI isn't public). The same bundle-building code below still runs �
   typed arrays, + importMode/roughness/etc.) so the design can be re-imported for tuning ("📂 Import
   design" → `importDesignZip`: `unzipStore` the STORE zip, restore the layers + `loadConfigText` the
   bundled config). The `.bin` files are computed output; `design.json` is the source of truth for editing.
-- **Image-import terrain** (`imageToMaps`, hi-res 320² export from a pure image import): elevation MIRRORS
-  `VoronoiWorldGenerator` — a **ridged-noise field capped by distance to the sea** (`maxE = (distToSea/D)^2`
-  so coasts stay low/beaches, interiors rise into mountains), plus a small per-biome `nudge` (from a
+- **Image-import terrain** (`imageToMaps`, hi-res `IMPORT_RES`² (448²) export from a pure image import):
+  elevation MIRRORS `VoronoiWorldGenerator` — a **ridged-noise field capped by distance to the sea**
+  (`maxE = (distToSea/D)^2` so coasts stay low/beaches, interiors rise into sharp, tall mountains near the
+  world's `MaxGenerationHeight`; `MAXH`/`OCEAN_DIST`/`EPOW` tune peak height/steepness), plus a per-biome `nudge` (from a
   spatially-blurred biome-elevation target, so biome borders ramp instead of forming cliffs). The main sea
   is identified first (largest salt water component) so rivers/lakes inside the land don't flatten the
   distance field. Continuous field ⇒ natural biome transitions, no per-biome plateaus. Colour maps upscale
   **nearest-neighbour** (`imageSmoothingEnabled` only in Brightness mode) so discrete biome colours stay
   pure — bilinear would blend e.g. blue+white into a false Coast/Grassland ring around lakes. (Hand-painted
   worlds use the separate `computeHeightField` coast-falloff path.)
+- **Mesas/cliffs are NOT made here.** Real Eco's terraced-plateau + cliff look comes from Eco's
+  `EcoTerraceNode` (the vanilla `HeightmapModule`, TerracePoints 41 / Power 4) feeding `CliffExtruder`
+  (extrudes where adjacent columns differ ≥5 blocks). The authored import replaced that whole module with a
+  smooth one, so it must be re-applied PER COLUMN in the mod (`Eco/Tools/EcoAuthoredWorldGen`
+  `AuthoredHeightModule.GetValue`), AFTER the mod's bilinear upscale. Terracing the exported `height.bin`
+  bytes here does nothing — the upscale smooths the steps back into a ramp. (Mod change → rebuild custom
+  server + redeploy the hosted service.)
 - **Imported lakes/rivers** (`imageToMaps`): before the blur, water cells are split into connected
   components. The largest salt component is the sea (stays `DeepOcean`, deep); every other enclosed
   component — plus any region drawn in the fresh-water colour `FRESH_COLOR` = `#1E90FF` (`isFreshRGB`,
