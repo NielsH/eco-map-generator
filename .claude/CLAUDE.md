@@ -195,7 +195,7 @@ removed (the CLI isn't public). The same bundle-building code below still runs �
   design" → `importDesignZip`: `unzipStore` the STORE zip, restore the layers + `loadConfigText` the
   bundled config). The `.bin` files are computed output; `design.json` is the source of truth for editing.
 - **Image-import terrain** (`imageToMaps`, hi-res `IMPORT_RES`² (448²) export from a pure image import):
-  elevation MIRRORS `VoronoiWorldGenerator` — a **ridged-noise field capped by distance to the sea**
+  elevation MIRRORS `VoronoiWorldGenerator` — a **ridged-noise field SHAPED by distance to the sea**
   (`maxE = (distToSea/D)^2` so coasts stay low/beaches, interiors rise into sharp, tall mountains near the
   world's `MaxGenerationHeight`; `MAXH`/`OCEAN_DIST`/`EPOW` tune peak height/steepness), plus a per-biome `nudge` (from a
   spatially-blurred biome-elevation target, so biome borders ramp instead of forming cliffs). The main sea
@@ -204,6 +204,21 @@ removed (the CLI isn't public). The same bundle-building code below still runs �
   **nearest-neighbour** (`imageSmoothingEnabled` only in Brightness mode) so discrete biome colours stay
   pure — bilinear would blend e.g. blue+white into a false Coast/Grassland ring around lakes. (Hand-painted
   worlds use the separate `computeHeightField` coast-falloff path.)
+- **Terrain that reads as machine-made is a heightfield problem, and it has two classic causes.** First,
+  `maxE` MULTIPLIES the relief — it must never `Math.min` it. Clipping made height a pure function of
+  distance-to-sea wherever the ceiling was lower (78% of land on a real design), and the contours of that
+  are evenly spaced bands marching up the slope. Second, noise finer than a terrace band (~3 blocks) just
+  makes the height cross a band every block or two — dense corduroy instead of broad benches. Vanilla draws
+  elevation ONCE PER VORONOI CELL, so its terraces are wide; `RIDGE_FREQ` is what matches that (base 6, not
+  9 — octave count barely matters, the falloff makes high octaves negligible anyway).
+- **Compare against real vanilla rather than screenshots.** `src/{core,geo,worldgen,raster}.js` are
+  Node-requirable, so a genuine vanilla heightfield is ~3s away: `setVectorTable` (parse it to numbers, it
+  takes an array not the raw string), `wg.bind(core, geo)`, lift `parseConfig`+`findByKey`+`rng` out of
+  `build.js`, `generate(cfg)` → `rasterize(polys, worldWidth*10)`. Apply `EcoTerrace` + the block conversion
+  to BOTH fields and compare terrace-tread widths — measure in WORLD BLOCKS, since the 448 export is
+  upscaled ~2.7x. Reference numbers (worldWidth 120): vanilla treads mean 7.9, p50 4, p90 19. The port
+  covers the surface generator only — no `EcoTerraceNode`, no `CliffExtruder` — which is exactly why the
+  comparison works: both sides are pre-terrace, and the terrace is applied identically to each.
 - **Mesas/cliffs are NOT made here.** Real Eco's terraced-plateau + cliff look comes from Eco's
   `EcoTerraceNode` (the vanilla `HeightmapModule`, TerracePoints 41 / Power 4) feeding `CliffExtruder`
   (extrudes where adjacent columns differ ≥5 blocks). The authored import replaced that whole module with a
