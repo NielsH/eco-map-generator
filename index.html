@@ -9372,7 +9372,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     const nbr4 = j => { const x = j % res, y = (j / res) | 0; return [((x + 1) % res) + y * res, ((x + res - 1) % res) + y * res, x + ((y + 1) % res) * res, x + ((y + res - 1) % res) * res]; };
     // ---- classify water FIRST: the main sea (largest salt component) vs enclosed lakes + fresh water. This
     //      lets elevation be measured from the SEA only, so rivers/lakes inside the land don't flatten it.
-    const water = new Uint8Array(n), bed = new Float32Array(n);
+    const water = new Uint8Array(n), bed = new Float32Array(n), wsurf = new Float32Array(n);
     const isSea = new Uint8Array(n); const groups = [];
     {
       const sc = new Int32Array(n).fill(-1); const sSize = []; let sid = 0;   // salt-water components; largest = sea
@@ -9413,46 +9413,134 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
       const above = Math.max(0.02, Math.min(maxE, relief + nudge + (vnR(x, y, 24, res) - 0.5) * 0.06));
       hf[j] = 0.5 + above * 0.5;                                                  // designer frac (0.5 = sea)
     }
-    // per-cell water surface: nearest local land height (BFS carrying the min adjacent land height inward)
-    const surf = new Float32Array(n).fill(-1); const lakeSet = new Set();
+    // Per-cell water surface, from the land it touches. Only cells ON the shore have a real constraint —
+    // the bank they sit against. Cells out in the middle of a lake have none, so they take the LOWEST bank
+    // within MIN_REACH: a lake is then level with its lowest shore (which is where it would drain), while a
+    // channel, whose every cell is a shore cell, still follows the ground down. Carrying the FIRST bank to
+    // arrive instead (a plain BFS) is what used to tilt lakes, since which shore won was arbitrary.
+    const MIN_REACH = 20;
+    const surf = new Float32Array(n).fill(Infinity); const lakeSet = new Set();
     for (const cells of groups) for (const j of cells) lakeSet.add(j);
-    { const q = [];
-      for (const j of lakeSet) { let mn = Infinity; for (const nb of nbr4(j)) if (land[nb] === 1 && hf[nb] < mn) mn = hf[nb]; if (isFinite(mn)) { surf[j] = mn; q.push(j); } }
-      for (let h = 0; h < q.length; h++) { const c = q[h]; for (const nb of nbr4(c)) if (lakeSet.has(nb) && surf[nb] < 0) { surf[nb] = surf[c]; q.push(nb); } }
+    for (const j of lakeSet) { let mn = Infinity; for (const nb of nbr4(j)) if (land[nb] === 1 && hf[nb] < mn) mn = hf[nb]; surf[j] = mn; }
+    for (let r = 0; r < MIN_REACH; r++) {
+      let moved = 0;
+      for (const j of lakeSet) { let mn = surf[j]; for (const nb of nbr4(j)) if (lakeSet.has(nb) && surf[nb] < mn) mn = surf[nb]; if (mn < surf[j]) { surf[j] = mn; moved++; } }
+      if (!moved) break;
     }
-    // Water sits in FLAT pools. Giving every cell its own surface (straight from surf[]) makes a lake a
-    // staircase of water levels — Eco fills each column separately — and the bed steps with it. So split
-    // each component into pools of cells whose bank height falls in the same POOL_STEP band, and give each
-    // pool ONE level, taken from its lowest bank so it cannot overflow. A compact lake lands in a single
-    // band and comes out flat; a river crossing a slope descends as a chain of flat pools instead of a
-    // per-cell ramp. POOL_STEP ~ 3 blocks, matching Eco's own terrace band.
-    const POOL_STEP = 0.025;
-    const surfOf = j => (surf[j] >= 0 ? surf[j] : 0.55);
+    // Water sits in FLAT pools, in a valley it CARVES for itself.
+    //
+    // Pinning each cell's surface to its nearest bank (surf[] above) makes water follow the mountains it
+    // was drawn across: one body then spans tens of blocks and Eco, which fills every column separately,
+    // renders it as a jagged cascade. Pooling alone cannot fix that — the range is in the terrain, not in
+    // the choice of levels. So relax the surface first, then carve the land to match.
+    const BLK = 1 / 120;                  // one world block, in designer frac (Y = 60 + (2h-1)*60)
+    const MAX_WATER_STEP = 0.5 * BLK;     // biggest rise allowed between neighbouring water cells
+    const BANK_SLOPE = 3 * BLK;           // how fast the carved valley wall climbs away from the water
+    const CARVE_REACH = 6;                // cells the valley carve reaches (beyond this, terrain is left alone)
+    const FLAT_TOL = 1.5 * BLK;           // cells this close in height count as one pool, and level together
+    const surfOf = j => (isFinite(surf[j]) ? surf[j] : 0.55);
+    // Priority flood, spreading out from each body's LOWEST cell and always expanding the lowest water
+    // next. Each cell takes
+    //     level = surf <= parent ? parent : min(surf, parent + MAX_WATER_STEP)
+    // which does both jobs at once and needs no lake-vs-river test. A dip surrounded by higher ground can
+    // never sit below the water that reached it, so a basin fills to its rim and comes out DEAD FLAT; a
+    // channel running downhill keeps its own profile, capped so it descends in small steps rather than
+    // dropping the height of the ridge it was drawn across.
+    const level = new Float32Array(n);
+    for (const cells of groups) {
+      let start = cells[0]; for (const j of cells) if (surfOf(j) < surfOf(start)) start = j;
+      const inGroup = new Set(cells), done = new Set([start]);
+      level[start] = surfOf(start);
+      const heap = [[level[start], start]];                                   // binary min-heap on assigned level
+      const push = (k, v) => { heap.push([k, v]); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
+      const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
+      while (heap.length) {
+        const [, c] = pop();
+        for (const nb of nbr4(c)) {
+          if (!inGroup.has(nb) || done.has(nb)) continue;
+          done.add(nb);
+          const s = surfOf(nb), lv = level[c];
+          level[nb] = s <= lv ? lv : Math.min(s, lv + MAX_WATER_STEP);
+          push(level[nb], nb);
+        }
+      }
+    }
+    // A pool may still be left above the land it touches — the flood fills a dip to the level that reached
+    // it, which can top a low bank somewhere along the shore, and that is water pouring over terrain. Water
+    // cannot be higher than its lowest bank, so clamp each FLAT REGION (not each cell — clamping cells
+    // individually would just tilt the lake again) to the lowest bank anywhere on it, then re-settle the
+    // descent. Lowering one pool can strand the one above it, so repeat until nothing moves.
+    {
+      const isWater = new Uint8Array(n); for (const cells of groups) for (const j of cells) isWater[j] = 1;
+      const cap = new Float32Array(n).fill(Infinity);
+      for (let j = 0; j < n; j++) {
+        if (!isWater[j]) continue;
+        let mn = Infinity; for (const nb of nbr4(j)) if (land[nb] === 1 && hf[nb] < mn) mn = hf[nb];
+        cap[j] = mn - 0.004;                                                   // sit just under the bank
+      }
+      const all = []; for (let j = 0; j < n; j++) if (isWater[j]) all.push(j);
+      for (let iter = 0; iter < 12; iter++) {
+        let changed = false;
+        const seen = new Uint8Array(n);
+        for (const s of all) {
+          if (seen[s]) continue;
+          const lv = level[s], stack = [s], region = []; seen[s] = 1; let lowestBank = Infinity;
+          while (stack.length) {
+            const c = stack.pop(); region.push(c);
+            if (cap[c] < lowestBank) lowestBank = cap[c];
+            // Compared against the SEED's level, never the neighbour's: chaining neighbour-to-neighbour
+            // would let a long river link up through many small differences and flatten end to end.
+            for (const nb of nbr4(c)) if (isWater[nb] && !seen[nb] && Math.abs(level[nb] - lv) <= FLAT_TOL) { seen[nb] = 1; stack.push(nb); }
+          }
+          if (lowestBank < lv) { for (const c of region) level[c] = lowestBank; changed = true; }
+        }
+        if (!changed) break;
+        for (let p = 0; p < 40; p++) {                                         // re-settle: only ever lowering
+          let moved = 0;
+          for (const c of all) for (const nb of nbr4(c)) if (isWater[nb] && level[nb] > level[c] + MAX_WATER_STEP) { level[nb] = level[c] + MAX_WATER_STEP; moved++; }
+          for (let k = all.length - 1; k >= 0; k--) { const c = all[k]; for (const nb of nbr4(c)) if (isWater[nb] && level[nb] > level[c] + MAX_WATER_STEP) { level[nb] = level[c] + MAX_WATER_STEP; moved++; } }
+          if (!moved) break;
+        }
+      }
+    }
     for (const cells of groups) {
       const tally = {}; for (const j of cells) for (const nb of nbr4(j)) if (land[nb] === 1) tally[biome[nb]] = (tally[biome[nb]] || 0) + 1;
       let lb = SC.Grassland, bc = -1; for (const k in tally) if (tally[k] > bc) { bc = tally[k]; lb = +k; }   // majority shore biome
-      // Grow each pool from its lowest remaining cell, taking everything within POOL_STEP of that floor.
-      // (Quantising to absolute bands instead would split one lake in two whenever its banks happened to
-      // straddle a band edge.)
-      const inGroup = new Set(cells), done = new Set();
-      const order = cells.slice().sort((a, b) => surfOf(a) - surfOf(b));
-      for (const seed of order) {
-        if (done.has(seed)) continue;
-        const lowest = surfOf(seed), lim = lowest + POOL_STEP;
-        const stack = [seed], pool = []; done.add(seed);
-        while (stack.length) {
-          const c = stack.pop(); pool.push(c);
-          for (const nb of nbr4(c)) if (inGroup.has(nb) && !done.has(nb) && surfOf(nb) <= lim) { done.add(nb); stack.push(nb); }
-        }
-        const surface = Math.max(SEA + 0.01, lowest - 0.012);                     // below the pool's LOWEST bank
+      for (const j of cells) {
+        const surface = Math.max(SEA + 0.01, level[j] - 0.012);                   // just under the surrounding bank
         const bottom = Math.max(0.03, surface - 0.03);
-        for (const j of pool) {
-          biome[j] = lb; land[j] = 2; water[j] = Math.max(1, Math.min(255, Math.round((2 * surface - 1) * 255))); bed[j] = bottom; hf[j] = surface;
+        biome[j] = lb; land[j] = 2; water[j] = Math.max(1, Math.min(255, Math.round((2 * surface - 1) * 255))); bed[j] = bottom; hf[j] = surface; wsurf[j] = surface;
+      }
+    }
+    // Carve the valley. Relaxing the surface can drop it well below the ridge it was drawn across, which
+    // would leave the water at the bottom of a sheer slot. Walk outward from the water and pull land down
+    // to at most BANK_SLOPE per cell above the water it drains to, so banks rise away from the shoreline
+    // instead of walling it. Only ever lowers, and stops as soon as the limit no longer binds — so terrain
+    // away from water (and every coastal cliff) is untouched.
+    {
+      const lim = new Float32Array(n).fill(Infinity), dist = new Int16Array(n), q = [];
+      for (let j = 0; j < n; j++) if (land[j] === 2) { lim[j] = hf[j]; q.push(j); }
+      for (let h = 0; h < q.length; h++) {
+        const c = q[h], next = lim[c] + BANK_SLOPE, d = dist[c] + 1;
+        if (d > CARVE_REACH) continue;                                         // a valley, not a global reshape
+        for (const nb of nbr4(c)) {
+          if (land[nb] !== 1 || next >= lim[nb]) continue;                     // keep walking even where it
+          lim[nb] = next; dist[nb] = d; q.push(nb);                            // doesn't bite — terrain may
+          if (next < hf[nb]) hf[nb] = next;                                    // rise again further out
         }
       }
     }
     // minimal smoothing — keep the ridged relief steep (just knock off single-pixel noise + shoreline step)
     boxBlurTor(hf, res, Math.max(1, Math.round(res / 140)), 1);
+    // The blur averages across the shoreline, and water cells sit low, so it drags the banks down with them
+    // — far enough, in places, to leave the bank UNDER the water it is holding back, which reads in game as
+    // a lake spilling over the terrain. Put the shore back: any land touching water sits a block above it.
+    for (let j = 0; j < n; j++) {
+      if (land[j] !== 1) continue;
+      let need = -Infinity;
+      for (const nb of nbr4(j)) if (land[nb] === 2 && wsurf[nb] > need) need = wsurf[nb];
+      if (need > -Infinity && hf[j] < need + BLK) hf[j] = need + BLK;
+    }
     // finalize: lakes hold water above their (fixed) bed; other land keeps its relief above sea; sea stays deep
     for (let j = 0; j < n; j++) {
       let h = land[j] === 2 ? bed[j] : (land[j] ? Math.max(0.505, hf[j]) : Math.min(hf[j], 0.44));
