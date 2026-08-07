@@ -9486,6 +9486,28 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
       const above = Math.max(0.02, (relief + nudge + (vnR(x, y, 24, res) - 0.5) * FINE_AMP) * maxE);
       hf[j] = 0.5 + above * 0.5;                                                  // designer frac (0.5 = sea)
     }
+    // Shelve the sea bed near the shore. Left at full depth the sea floor sits ~14 blocks below the land
+    // it touches, and Eco carves a rock face wherever neighbouring columns differ by 5 or more — so EVERY
+    // coastal cell qualified and the whole coastline came out lined with extruded sandstone. Real coasts
+    // shelve: shallow at the beach, dropping away offshore. Ramping the depth over SHELF_CELLS keeps the
+    // step at the waterline under that threshold, so no cliff is cut and the beach stays a beach.
+    {
+      const SHELF_CELLS = 14;       // how far out the shallows reach
+      const SHELF_TOP = 0.492;      // just under sea level (~1 block down) right at the shore
+      const dist = new Int16Array(n).fill(-1), q = [];
+      for (let j = 0; j < n; j++) if (land[j] === 1) { dist[j] = 0; q.push(j); }
+      for (let h = 0; h < q.length; h++) {
+        const c = q[h];
+        if (dist[c] >= SHELF_CELLS) continue;
+        for (const nb of nbr4(c)) if (dist[nb] < 0 && land[nb] === 0) { dist[nb] = dist[c] + 1; q.push(nb); }
+      }
+      for (let j = 0; j < n; j++) {
+        if (land[j] !== 0 || dist[j] < 0) continue;
+        const t = Math.min(1, dist[j] / SHELF_CELLS), sm = t * t * (3 - 2 * t);   // smooth, so there is no rim
+        const shelf = SHELF_TOP + (hf[j] - SHELF_TOP) * sm;
+        if (shelf > hf[j]) hf[j] = shelf;
+      }
+    }
     // Per-cell water surface, from the land it touches. Only cells ON the shore have a real constraint —
     // the bank they sit against. Cells out in the middle of a lake have none, so they take the LOWEST bank
     // within MIN_REACH: a lake is then level with its lowest shore (which is where it would drain), while a
@@ -9660,7 +9682,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     }
     // finalize: lakes hold water above their (fixed) bed; other land keeps its relief above sea; sea stays deep
     for (let j = 0; j < n; j++) {
-      let h = land[j] === 2 ? bed[j] : (land[j] ? Math.max(0.505, hf[j]) : Math.min(hf[j], 0.44));
+      let h = land[j] === 2 ? bed[j] : (land[j] ? Math.max(0.505, hf[j]) : Math.min(hf[j], 0.495));
       height[j] = Math.max(0, Math.min(255, Math.round(h * 255)));
     }
     return { res, biome, height, water };

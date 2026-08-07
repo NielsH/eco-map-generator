@@ -238,6 +238,14 @@ removed (the CLI isn't public). The same bundle-building code below still runs �
   `AuthoredHeightModule.GetValue`), AFTER the mod's bilinear upscale. Terracing the exported `height.bin`
   bytes here does nothing — the upscale smooths the steps back into a ramp. (Mod change → rebuild custom
   server + redeploy the hosted service.)
+- **The sea SHELVES near the shore, and it has to.** At full depth the sea floor sat ~14 blocks below the
+  land it touched, and Eco extrudes a rock face wherever neighbouring columns differ by >=5 — so 100% of
+  coastal cells qualified and every coastline came out lined with the biome's rock (sandstone in desert).
+  `SHELF_CELLS`/`SHELF_TOP` ramp the depth from ~1 block under sea level at the beach out to full depth,
+  which puts the waterline step under the threshold (max drop 4 blocks, 0% carving) while deep ocean stays
+  deep. The finalize cap for sea had to rise from 0.44 to 0.495 or it flattened the shelf straight back
+  out. Land heights are unchanged by this, so inland cliffs and mesas are unaffected — verify that
+  separately (measure cliff steps in a coastal band and an inland band) before touching these numbers.
 - **Imported lakes/rivers** (`imageToMaps`): water cells are split into connected components. The largest
   salt component is the sea (stays `DeepOcean`, deep); every other enclosed component — plus any region
   drawn in the fresh-water colour `FRESH_COLOR` = `#1E90FF` (`isFreshRGB`, which survives coast contact so
