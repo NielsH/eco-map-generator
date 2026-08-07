@@ -226,13 +226,20 @@ removed (the CLI isn't public). The same bundle-building code below still runs �
   2. **Priority flood** from each body's lowest cell, `level = surf <= parent ? parent : min(surf, parent +
      MAX_WATER_STEP)`. A basin cannot sit below the water that reached it, so it fills DEAD FLAT; a channel
      keeps its own downhill profile, capped so it descends in small steps.
-  3. **Flat-region clamp to the lowest bank.** The flood can still top a low bank somewhere along a shore.
-     Clamp each flat region (never each cell — that just re-tilts the lake) and re-settle, repeating since
-     lowering one pool can strand the one above. Regions are grown against the SEED's level, not the
-     neighbour's: chaining would let a long river link up and flatten end to end.
+  3. **Level the OPEN WATER** (`OPEN_WATER` = cells this far from any shore). A lake shares one surface
+     however wide it is; a drawn river is only a few cells across, so it has no open water at all and is
+     left alone — that is what keeps it descending instead of becoming a level canal. Open water also takes
+     its level outright in step 2 rather than being ramped into, since ramping tilts the surface of a lake
+     entered from below.
   4. **Shoreline restore, after the blur.** `boxBlurTor` averages across the shoreline and water cells sit
      low, so it drags banks down — sometimes below the water they hold back. The final pass puts any land
-     touching water a block above it. Skip this and the overflow comes straight back.
+     touching water a block above it. This CONTAINS the water by construction, which is why there is no
+     separate clamp-water-to-its-banks step; one used to exist and did the same job twice, cutting lakes
+     into pieces that each dropped to the nearest bank (measured: one lake went from 6 levels to 13).
+  Do not add a step that lowers water per region to fit its banks — that is the trap. Big steps are not
+  wrong in themselves: a lake falling into a lower channel is a waterfall, and those all sit at outlets.
+  What must never happen is a step out in open water, because a ramp across a lake quantises to whole
+  blocks and reads in game as a ridged bed under flat water.
   Then `BANK_SLOPE`/`CARVE_REACH` carve a valley: walk out from the water lowering land to at most
   `BANK_SLOPE` per cell above it, so banks rise away from the shore instead of walling it. It must keep
   walking through cells where the cap does not bite (terrain may rise again further out) — and it is
