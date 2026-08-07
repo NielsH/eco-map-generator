@@ -520,7 +520,15 @@
     const aboveMid = cls => { const b = ECO_BIOME_ELEV[CN[cls]] || [0.52, 0.62]; return Math.max(0, ((b[0] + b[1]) / 2 - 0.5) * 2); };   // biome target elevation above sea, [0,1]
     const tgt = new Float32Array(n); for (let j = 0; j < n; j++) tgt[j] = land[j] === 1 ? aboveMid(biome[j]) : 0;
     boxBlurTor(tgt, res, Math.max(3, Math.round(res / 42)), 2);                   // smooth the biome nudge so borders ramp, not step
-    const ridged = (x, y) => { let s = 0, amp = 1, fr = 9, norm = 0; for (let o = 0; o < 5; o++) { const nz = vnR(x, y, fr, res); s += amp * (1 - Math.abs(2 * nz - 1)); norm += amp; amp *= 0.55; fr *= 2; } return s / norm; };   // ridged multifractal [0,1], more/steeper ranges
+    // Ridged multifractal in [0,1]. Vanilla's elevation is drawn once per Voronoi cell — chunky patches
+    // tens of blocks across — so its terraces come out wide. Piling on high octaves here gives detail finer
+    // than a terrace band, which just makes the height cross a band every block or two: a dense corduroy
+    // instead of broad benches. RIDGE_FREQ/RIDGE_OCTAVES set how coarse those patches are.
+    const RIDGE_FREQ = 6;   // coarser than it was (9): finer than a terrace band just makes corduroy
+    const RIDGE_OCTAVES = 5;
+    const RIDGE_FALLOFF = 0.55;
+    const FINE_AMP = 0.06;
+    const ridged = (x, y) => { let s = 0, amp = 1, fr = RIDGE_FREQ, norm = 0; for (let o = 0; o < RIDGE_OCTAVES; o++) { const nz = vnR(x, y, fr, res); s += amp * (1 - Math.abs(2 * nz - 1)); norm += amp; amp *= RIDGE_FALLOFF; fr *= 2; } return s / norm; };
     const MAXH = 0.92;                                                           // interior peaks reach near the world's max height
     for (let j = 0; j < n; j++) {
       if (land[j] !== 1) continue;
@@ -529,7 +537,12 @@
       const maxE = Math.pow(nd, EPOW);                                            // ocean-distance ceiling: coasts stay low (beaches), interiors rise
       const relief = (0.10 + 0.90 * Math.pow(ridged(x, y), 1.3)) * MAXH;          // sharper, taller ridged mountain ranges (deep valleys -> high peaks)
       const nudge = (tgt[j] - 0.25) * 0.40;                                       // high-elevation biomes trend higher
-      const above = Math.max(0.02, Math.min(maxE, relief + nudge + (vnR(x, y, 24, res) - 0.5) * 0.06));
+      // SHAPE the relief by the coastal ceiling rather than clipping to it. Clipping (min) threw away the
+      // noise wherever the ceiling was the lower of the two — on this design that was 78% of all land — and
+      // left height as a pure function of distance-to-sea, whose contours are evenly spaced bands marching
+      // up the slope. That is the machine-made staircase. Multiplying keeps the ridged detail everywhere
+      // and still holds the coast down, because the ceiling is 1 inland and only bites near the shore.
+      const above = Math.max(0.02, (relief + nudge + (vnR(x, y, 24, res) - 0.5) * FINE_AMP) * maxE);
       hf[j] = 0.5 + above * 0.5;                                                  // designer frac (0.5 = sea)
     }
     // Per-cell water surface, from the land it touches. Only cells ON the shore have a real constraint —
