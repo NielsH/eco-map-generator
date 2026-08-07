@@ -276,6 +276,16 @@ removed (the CLI isn't public). The same bundle-building code below still runs �
   water sits above the LAND beside it (ocean neighbours excluded — a river mouth is meant to be above sea
   level). Distinct-levels-per-body is NOT a quality metric: a river descending a hillside legitimately has
   one level per block.
+- **The designer PREVIEWS an untouched image import at `IMPORT_RES`, not at `G`.** A pure import exports at
+  448, so showing it on the 128 paint grid misrepresents it: a coastline 2-3 px wide in the source is
+  thinner than one paint cell and breaks into dashes on screen even though the exported world has it
+  intact (measured: 99.6% of shore cells keep their coast in `biome.bin`). Neither a majority nor an area
+  downsample fixes that — the coast still loses the vote — so the preview draws the hi-res decode instead
+  (`importPreview`, rebuilt in `applyLegend` so remapping a colour is instant). The moment the user paints,
+  `paintedSinceImport` flips and the display falls back to the G grid, which is exactly what gets exported
+  from then on — so the picture never disagrees with the output. `drawGrid` takes an optional size and
+  resizes the canvas backing store; pointer→cell mapping reads the CSS rect and scales by G, so it is
+  unaffected by that resize.
 - **Elevation layer**: a paint-mode toggle adds an `elev`/`elevPainted` layer; `heightAt()` uses the painted
   value or a biome-derived default (`ECO_BIOME_ELEV`). `ECO_BIOME_COLOR` holds the exact Eco biome colors.
   Painted cells get natural micro-relief (fbm) so they aren't dead flat; the amount is **per-cell** (`rough`

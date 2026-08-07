@@ -8960,6 +8960,13 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
   let importMode = 'colors';     // 'colors' (nearest hue) | 'brightness' (luminance ramp — better for photos)
   let lastImgData = null;        // last decoded G*G RGBA, so switching import mode re-maps without re-loading
   let importedImg = null;        // the decoded source Image, kept so export can resample it at high resolution
+  // A pure image import EXPORTS at IMPORT_RES, not at the G paint grid, so showing it at G misrepresents
+  // it: a coastline only a pixel or two wide in the source is thinner than one paint cell and breaks into
+  // dashes on screen, even though the generated world has it intact. Keep a preview at export resolution
+  // and show that until the user paints — at which point the coarse grid IS what gets exported, and the
+  // display switches back to it.
+  let importPreview = null;      // Uint8Array(IMPORT_RES^2) class per cell, generation orientation
+  let importLegendIdxHi = null;  // legend index per hi-res cell, so remapping a colour rebuilds instantly
   let paintedSinceImport = false; // once the user hand-edits an import, export falls back to the 64² grid
   const IMPORT_RES = 448;        // biome/height resolution exported for a pure image import (finer = steeper, less-terraced terrain)
   // dark -> light biome ramp for brightness mode (low/dark = deep water, high/light = snow), reads as terrain
@@ -9251,9 +9258,10 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     else { legend = buildLegend(d); imgLegendIdx = assignLegendIdx(d); }
   }
   // Per-cell legend index (which dominant color each pixel belongs to); -1 = transparent.
-  function assignLegendIdx(d) {
-    const idx = new Int16Array(G * G);
-    for (let i = 0; i < G * G; i++) {
+  function assignLegendIdx(d, size) {
+    const N = size || G;
+    const idx = new Int16Array(N * N);
+    for (let i = 0; i < N * N; i++) {
       const o = i * 4;
       if (d[o + 3] < 128) { idx[i] = -1; continue; }
       let bi = 0, bd = Infinity;
@@ -9271,6 +9279,15 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
       target[(G - 1 - y) * G + x] = cls;                     // flip Y so the image reads upright in the display
       count[cls] = (count[cls] || 0) + 1;
     }
+    if (importedImg && importMode === 'colors') {
+      if (!importLegendIdxHi) importLegendIdxHi = assignLegendIdx(decodeAt(importedImg, IMPORT_RES), IMPORT_RES);
+      const N = IMPORT_RES;
+      importPreview = new Uint8Array(N * N);
+      for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+        const li = importLegendIdxHi[y * N + x];
+        importPreview[(N - 1 - y) * N + x] = li < 0 ? SC.Ocean : legend[li].cls;   // flipped like `target`
+      }
+    } else importPreview = null;
     renderPaint();
     const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target, true);
     return count;
@@ -9314,7 +9331,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     });
     $('lgAuto').onclick = () => { pushUndo(); legend.forEach(e => e.cls = e.def); renderLegend(); flashMix(applyLegend()); };
   }
-  function hideLegend() { legend = []; imgLegendIdx = null; lastImgData = null; importedImg = null; paintedSinceImport = false; const w = $('dsnLegendWrap'); if (w) { w.style.display = 'none'; w.innerHTML = ''; } }
+  function hideLegend() { legend = []; imgLegendIdx = null; lastImgData = null; importedImg = null; paintedSinceImport = false; importPreview = null; importLegendIdxHi = null; const w = $('dsnLegendWrap'); if (w) { w.style.display = 'none'; w.innerHTML = ''; } }
   // Resample the ORIGINAL imported image at a higher resolution and produce aligned biome + height maps
   // (bypassing the coarse 64² paint grid) so a photo/portrait exports with far sharper features. Uses the
   // current legend + mode; height follows the picture (dark/low = deep water, light/high = land) so the
@@ -9653,6 +9670,12 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
   // colours, and those blends compete for the MAX_LEGEND slots. A small biome loses — an ice cap at ~1% of
   // land never survives a 448 -> 128 downscale, and gets silently remapped to whatever colour is nearest.
   // Brightness mode does want the averaging, since it is reading tone off a photo.
+  function decodeAt(img, N) {
+    const c = document.createElement('canvas'); c.width = N; c.height = N;
+    const cx = c.getContext('2d'); cx.imageSmoothingEnabled = (importMode === 'brightness');
+    cx.drawImage(img, 0, 0, N, N);
+    return cx.getImageData(0, 0, N, N).data;
+  }
   function decodeToGrid(img) {
     const c = document.createElement('canvas'); c.width = G; c.height = G;
     const cx = c.getContext('2d'); cx.imageSmoothingEnabled = (importMode === 'brightness');
@@ -9667,6 +9690,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
       pushUndo();
       const d = decodeToGrid(img);
       lastImgData = d; importedImg = img; paintedSinceImport = false;
+      importLegendIdxHi = null; importPreview = null;
       mapImage(d);
       paintMode = 'biome'; markPaintMode();
       const count = applyLegend();
@@ -9687,15 +9711,17 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
 
   // ================================================================= painter
   // Everything is stored in generation orientation; we DISPLAY flipped-Y to match the map view.
-  function drawGrid(canvas, grid, flip) {
+  function drawGrid(canvas, grid, flip, size) {
+    const G2 = size || G;
     const ctx = canvas.getContext('2d');
-    const W = canvas.width;                 // canvas is G x G backing store (pixelated upscaled by CSS)
+    if (canvas.width !== G2) { canvas.width = G2; canvas.height = G2; }   // backing store; CSS scales it up
+    const W = canvas.width;
     const img = ctx.createImageData(W, W);
     const d = img.data;
     for (let y = 0; y < W; y++) {
-      const gy = flip ? (G - 1 - y) : y;
+      const gy = flip ? (G2 - 1 - y) : y;
       for (let x = 0; x < W; x++) {
-        const c = grid[gy * G + x], rgb = COL[CN[c]] || [128, 128, 128];
+        const c = grid[gy * G2 + x], rgb = COL[CN[c]] || [128, 128, 128];
         const o = (y * W + x) * 4;
         d[o] = rgb[0]; d[o + 1] = rgb[1]; d[o + 2] = rgb[2]; d[o + 3] = 255;
       }
@@ -9705,6 +9731,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
   function renderPaint() {
     if (paintMode === 'elevation') drawHeight($('dsnCanvas'));
     else if (paintMode === 'water') drawWaterView($('dsnCanvas'));
+    else if (importPreview && !paintedSinceImport) drawGrid($('dsnCanvas'), importPreview, true, IMPORT_RES);
     else drawGrid($('dsnCanvas'), target, true);
     drawWrapPreview();
   }
