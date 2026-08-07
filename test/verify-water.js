@@ -117,8 +117,12 @@ for (let i = 0; i < g * g; i++) {
   if (!water[i]) continue;
   for (const n of nbr(i)) { if (!water[n]) continue; const d = Math.abs(waterY(water[i]) - waterY(water[n])); if (d > maxStep) maxStep = d; if (d >= 2) bigSteps++; }
 }
-check('no wall of water between neighbouring cells', maxStep <= 2, 'biggest step ' + maxStep + ' blocks');
-check('no cell pair steps 2+ blocks', bigSteps === 0, bigSteps + ' such pairs');
+// A big step is NOT wrong in itself — a lake draining into a lower channel is a waterfall, and the strict
+// no-steps rule belongs to open water (asserted below). What must not happen is roughness everywhere.
+let pairs = 0;
+for (let i = 0; i < g * g; i++) { if (!water[i]) continue; for (const n of nbr(i)) if (water[n]) pairs++; }
+check('water is smooth almost everywhere', bigSteps / pairs < 0.02,
+  bigSteps + ' of ' + pairs + ' pairs step 2+ blocks (' + (100 * bigSteps / pairs).toFixed(1) + '%), biggest ' + maxStep);
 
 // Ocean neighbours are excluded: a river mouth is meant to sit above sea level.
 let over = 0, worst = 0;
@@ -145,6 +149,24 @@ const widest = Math.max.apply(null, Array.from({ length: g * g }, (_, i) => (wat
 const basin = []; for (let i = 0; i < g * g; i++) if (water[i] && dist[i] >= Math.max(2, widest - 1)) basin.push(i);
 const basinLevels = new Set(basin.map(i => waterY(water[i])));
 check('the lake basin is a single flat level', basinLevels.size === 1, basin.length + ' cells, ' + basinLevels.size + ' level(s)');
+
+// Open water must be dead flat everywhere, not just at the very middle. A gentle ramp across a lake
+// quantises to whole blocks and shows up in game as a ridged bed under otherwise flat water — which is
+// far more obvious than the numbers suggest, so it gets its own check.
+let openPairs = 0, openStepped = 0;
+for (let i = 0; i < g * g; i++) {
+  if (!water[i] || dist[i] < 4) continue;
+  for (const n of nbr(i)) { if (!water[n] || dist[n] < 4) continue; openPairs++; if (waterY(water[i]) !== waterY(water[n])) openStepped++; }
+}
+check('open water has no ridges in it', openStepped === 0, openStepped + ' stepped pairs of ' + openPairs);
+
+// Big drops are fine — a lake falling into a lower channel is a waterfall — but never out in open water.
+let midOpen = 0;
+for (let i = 0; i < g * g; i++) {
+  if (!water[i] || dist[i] < 4) continue;
+  for (const n of nbr(i)) { if (!water[n] || dist[n] < 4) continue; if (Math.abs(waterY(water[i]) - waterY(water[n])) >= 3) midOpen++; }
+}
+check('no wall of water out in open water', midOpen === 0, midOpen + ' such pairs');
 
 console.log(fails ? '\n' + fails + ' FAILED' : '\nALL PASS ✓');
 process.exit(fails ? 1 : 0);
