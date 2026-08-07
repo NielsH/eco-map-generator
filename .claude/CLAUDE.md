@@ -204,7 +204,19 @@ removed (the CLI isn't public). The same bundle-building code below still runs �
   **nearest-neighbour** (`imageSmoothingEnabled` only in Brightness mode) so discrete biome colours stay
   pure — bilinear would blend e.g. blue+white into a false Coast/Grassland ring around lakes. (Hand-painted
   worlds use the separate `computeHeightField` coast-falloff path.)
-- **Terrain that reads as machine-made is a heightfield problem, and it has two classic causes.** First,
+- **Terrain that "runs in lines" is a PLANARITY problem, and the fix is structural.** Straight terrace
+  edges are the signature of a locally planar heightfield — the contours of a plane are straight parallel
+  lines, and terracing merely draws them. Measure it by least-squares fitting a plane in a window and
+  taking R²: vanilla is planar (R²>0.9) in 4.5% of windows, a smooth synthesised field in 69%. Noise
+  tweaks, domain warping and jittering the coast distance all fail to move it, because the field stays
+  smooth. What works is copying vanilla's STRUCTURE: draw elevation once per cell (jittered grid, nearest
+  site within the 5x5 block — no full Voronoi build) so every cell boundary breaks the plane. `CELL_SHARP`
+  trades planarity against cliffs; 0.25 lands at 5.3% planar with cliffs intact. It MUST run after the
+  smoothing blur — before it, the blur erases the cell steps (61.9% planar, i.e. barely any improvement).
+- **Beware edge-run metrics for this.** Counting runs of terrace-edge pixels conflates "straight" with
+  "dense": adding noise makes edges denser and scores WORSE, which sent an earlier attempt in exactly the
+  wrong direction. Planarity has no such confound.
+- **Terrain character also has two heightfield-level causes.** First,
   `maxE` MULTIPLIES the relief — it must never `Math.min` it. Clipping made height a pure function of
   distance-to-sea wherever the ceiling was lower (78% of land on a real design), and the contours of that
   are evenly spaced bands marching up the slope. Second, noise finer than a terrace band (~3 blocks) just
