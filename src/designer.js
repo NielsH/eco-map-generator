@@ -1026,7 +1026,12 @@
   // reveal the shape (and make small paint changes visible). One backing pixel per grid cell.
   function drawHeight(canvas) {
     const t = computeTerrain(); lastTerrain = t; const h = t.height;
-    const ctx = canvas.getContext('2d'), W = canvas.width, img = ctx.createImageData(W, W), d = img.data;
+    const ctx = canvas.getContext('2d');
+    // The biome view leaves the canvas at IMPORT_RES for an untouched image import, but the terrain here is
+    // always G-resolution. Reading a G grid with a wider loop tiles the map res/G times across the canvas,
+    // so put the canvas back to G first — drawGrid does the same for the views that own their own size.
+    if (canvas.width !== G) { canvas.width = G; canvas.height = G; }
+    const W = canvas.width, img = ctx.createImageData(W, W), d = img.data;
     const hAt = (dx, dy) => h[(((G - 1 - dy) % G + G) % G) * G + ((dx % G + G) % G)];   // display→grid, wrapped (toroidal)
     for (let y = 0; y < W; y++) { const gy = G - 1 - y; for (let x = 0; x < W; x++) {
       const i = gy * G + x, hv = h[i], o = (y * W + x) * 4;
