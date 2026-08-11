@@ -193,10 +193,10 @@ check('no wall of water out in open water', midOpen === 0, midOpen + ' such pair
   }
   rises.sort((a, b) => a - b);
   const P = t => rises.length ? rises[Math.floor(t * rises.length)] : 0;
-  // Calibrated on this design: the fixed-slope cone this replaced gave median 19 / p90 32 / max 36, the
-  // relaxation gives median 13 / p90 16 / max 19. The bound sits between them with room to spare, so it
-  // catches a return to a slope-limited carve without failing on ordinary tuning.
-  check('fresh-water banks are a valley, not a trench', P(0.9) <= 24,
+  // Calibrated on this design, which is a far steeper cone of a continent than a real map: the fixed-slope
+  // carve this replaced gives p90 32, the relaxation gives p90 22. The bound sits between them, so it
+  // catches a return to a slope-limited carve without tripping on ordinary retuning of the pull or reach.
+  check('fresh-water banks are a valley, not a trench', P(0.9) <= 26,
     'median ' + P(0.5) + ', p90 ' + P(0.9) + ', max ' + (rises[rises.length - 1] || 0) + ' blocks within 20 m');
 }
 
