@@ -675,8 +675,6 @@
     // the choice of levels. So relax the surface first, then carve the land to match.
     const BLK = 1 / 120;                  // one world block, in designer frac (Y = 60 + (2h-1)*60)
     const MAX_WATER_STEP = 0.5 * BLK;     // biggest rise allowed between neighbouring water cells
-    const BANK_SLOPE = 3 * BLK;           // how fast the carved valley wall climbs away from the water
-    const CARVE_REACH = 6;                // cells the valley carve reaches (beyond this, terrain is left alone)
     const FLAT_TOL = 1.5 * BLK;           // cells this close in height count as one pool, and level together
     const surfOf = j => (isFinite(surf[j]) ? surf[j] : 0.55);
     // Priority flood, spreading out from each body's LOWEST cell and always expanding the lowest water
@@ -725,24 +723,6 @@
         biome[j] = lb; land[j] = 2; water[j] = Math.max(1, Math.min(255, Math.round((2 * surface - 1) * 255))); bed[j] = bottom; hf[j] = surface; wsurf[j] = surface;
       }
     }
-    // Carve the valley. Relaxing the surface can drop it well below the ridge it was drawn across, which
-    // would leave the water at the bottom of a sheer slot. Walk outward from the water and pull land down
-    // to at most BANK_SLOPE per cell above the water it drains to, so banks rise away from the shoreline
-    // instead of walling it. Only ever lowers, and stops as soon as the limit no longer binds — so terrain
-    // away from water (and every coastal cliff) is untouched.
-    {
-      const lim = new Float32Array(n).fill(Infinity), dist = new Int16Array(n), q = [];
-      for (let j = 0; j < n; j++) if (land[j] === 2) { lim[j] = hf[j]; q.push(j); }
-      for (let h = 0; h < q.length; h++) {
-        const c = q[h], next = lim[c] + BANK_SLOPE, d = dist[c] + 1;
-        if (d > CARVE_REACH) continue;                                         // a valley, not a global reshape
-        for (const nb of nbr4(c)) {
-          if (land[nb] !== 1 || next >= lim[nb]) continue;                     // keep walking even where it
-          lim[nb] = next; dist[nb] = d; q.push(nb);                            // doesn't bite — terrain may
-          if (next < hf[nb]) hf[nb] = next;                                    // rise again further out
-        }
-      }
-    }
     // minimal smoothing — keep the ridged relief steep (just knock off single-pixel noise + shoreline step)
     boxBlurTor(hf, res, Math.max(1, Math.round(res / 140)), 1);
     // Break the land into cells and give each ONE height, the way the real generator does.
@@ -789,6 +769,41 @@
       const soft = new Float32Array(flat);
       boxBlurTor(soft, res, 1, 1);
       for (let j = 0; j < n; j++) if (land[j] === 1) hf[j] = soft[j] * (1 - CELL_SHARP) + flat[j] * CELL_SHARP;
+    }
+    // Valley the banks — the port of VoronoiWorldGenerator's SMOOTH PASS 2, the block commented "form
+    // valleys around rivers and lakes". Vanilla relaxes: several passes, each pulling near-water land a
+    // fraction of the way to the water it can see. It never limits a slope; it drags the ground down and
+    // lets the profile come out concave.
+    //
+    // What this replaced was a fixed-slope cone, and a cone is a ceiling rather than a valley — it PERMITTED
+    // 3 blocks of rise per cell (18 blocks inside 16 m) and did nothing whatever past its reach, so a river
+    // drawn across high ground kept a sheer wall. Measured on an authored 120-wide world, half of all
+    // fresh-water shoreline rose 11.5 blocks within 20 m and a tenth rose 26.6; terraced, that is the
+    // canyon players were standing in.
+    //
+    // Runs AFTER the per-cell flattening for the same reason vanilla runs it after per-polygon elevations
+    // are set: flattening gives every cell one height, and would otherwise snap the carved bank back up.
+    {
+      const VALLEY_REACH = Math.max(3, Math.round(res / 20));   // ~60 world blocks on a 120-wide world
+      const VALLEY_PASSES = 4, VALLEY_PULL = 0.3;               // shore keeps (1-pull)^passes of its height
+      const dw = new Int32Array(n).fill(-1), near = new Float32Array(n), q = [];
+      for (let j = 0; j < n; j++) if (land[j] === 2) { dw[j] = 0; near[j] = wsurf[j]; q.push(j); }
+      for (let k = 0; k < q.length; k++) {
+        const c = q[k];
+        if (dw[c] >= VALLEY_REACH) continue;
+        for (const nb of nbr4(c)) if (dw[nb] < 0 && land[nb] === 1) { dw[nb] = dw[c] + 1; near[nb] = near[c]; q.push(nb); }
+      }
+      // Vanilla widens its window a step per pass; at import resolution those steps land as visible bands,
+      // so the pull falls off smoothly with distance instead — same concave profile, no rings.
+      for (let p = 0; p < VALLEY_PASSES; p++) {
+        for (let j = 0; j < n; j++) {
+          if (land[j] !== 1 || dw[j] < 1) continue;
+          const s = 1 - dw[j] / VALLEY_REACH;
+          if (s <= 0) continue;
+          const t = hf[j] + (near[j] - hf[j]) * VALLEY_PULL * s * s * (3 - 2 * s);
+          if (t < hf[j]) hf[j] = Math.max(t, near[j] + BLK);     // only ever lowers, never under the water
+        }
+      }
     }
     // The blur averages across the shoreline, and water cells sit low, so it drags the banks down with them
     // — far enough, in places, to leave the bank UNDER the water it is holding back, which reads in game as

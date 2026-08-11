@@ -168,5 +168,37 @@ for (let i = 0; i < g * g; i++) {
 }
 check('no wall of water out in open water', midOpen === 0, midOpen + ' such pairs');
 
+// Banks must be a valley, not a trench. The measure is the one that matches what a player sees: for each
+// shoreline cell, how high the ground gets within 20 m of it. A mean over distance rings hides this — it
+// pools flat lake shores with steep river gorges and reads as gentle while a tenth of the shoreline is a
+// cliff — so this checks the upper percentiles.
+{
+  const REACH = Math.max(2, Math.round(20 / (1200 / g)));       // 20 world blocks, in export cells
+  const dw = new Int16Array(g * g).fill(-1), qq = [];
+  for (let i = 0; i < g * g; i++) if (water[i]) { dw[i] = 0; qq.push(i); }
+  for (let k = 0; k < qq.length; k++) {
+    const c = qq[k]; if (dw[c] >= REACH) continue;
+    for (const n of nbr(c)) if (dw[n] < 0 && !water[n]) { dw[n] = dw[c] + 1; qq.push(n); }
+  }
+  const rises = [];
+  for (let i = 0; i < g * g; i++) {
+    if (dw[i] !== 1) continue;
+    let mx = landY(height[i]);
+    const seen = new Set([i]), st = [[i, 0]];
+    while (st.length) {
+      const [c, d] = st.pop(); if (d >= REACH) continue;
+      for (const n of nbr(c)) { if (seen.has(n) || water[n] || dw[n] < 0) continue; seen.add(n); const y = landY(height[n]); if (y > mx) mx = y; st.push([n, d + 1]); }
+    }
+    rises.push(mx - WL);
+  }
+  rises.sort((a, b) => a - b);
+  const P = t => rises.length ? rises[Math.floor(t * rises.length)] : 0;
+  // Calibrated on this design: the fixed-slope cone this replaced gave median 19 / p90 32 / max 36, the
+  // relaxation gives median 13 / p90 16 / max 19. The bound sits between them with room to spare, so it
+  // catches a return to a slope-limited carve without failing on ordinary tuning.
+  check('fresh-water banks are a valley, not a trench', P(0.9) <= 24,
+    'median ' + P(0.5) + ', p90 ' + P(0.9) + ', max ' + (rises[rises.length - 1] || 0) + ' blocks within 20 m');
+}
+
 console.log(fails ? '\n' + fails + ' FAILED' : '\nALL PASS ✓');
 process.exit(fails ? 1 : 0);
