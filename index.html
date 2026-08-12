@@ -9803,7 +9803,12 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     // 5-block threshold and become a wall. Together with the shelf this holds the whole shoreline step to
     // about 3.5 blocks. Runs before the restore below, which still owns the lower bound.
     {
-      const BANK_CAP = 2 * BLK;
+      // One block, not two. At two, the cap BINDS along most of the shoreline and every cell it touches
+      // ends up the same height over the water, so the ring becomes a flat-topped ledge of constant height
+      // following the channel — masonry rather than ground. At one it mostly stops binding and the height
+      // comes from the restore below instead, which is a lip rather than a terrace. Vanilla's first ring
+      // sits 0.3-0.45 blocks over its water; this takes 1.37 to 0.93.
+      const BANK_CAP = 1 * BLK;
       for (let j = 0; j < n; j++) {
         if (land[j] !== 1) continue;
         let s = -Infinity;
