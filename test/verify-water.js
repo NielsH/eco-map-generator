@@ -216,6 +216,25 @@ for (let i = 0; i < g * g; i++) {
 }
 check('no wall of water out in open water', midOpen === 0, midOpen + ' such pairs');
 
+// No cell may sit above EVERY water neighbour. A waterfall is higher than some and lower than others; a
+// cell higher than all of them is a spike, and renders as a lump of bed with a puddle on top standing
+// mid-channel. Note this design does not currently produce one — the spikes came from a bank estimate
+// under open water on a real map — so this is a guard, not a reproduction. The demonstration lives in the
+// PR's measurement of a generated world.
+{
+  let spikes = 0, worstSpike = 0;
+  for (let i = 0; i < g * g; i++) {
+    if (!water[i]) continue;
+    let mx = -Infinity;
+    for (const n of nbr(i)) if (water[n] && waterY(water[n]) > mx) mx = waterY(water[n]);
+    if (mx === -Infinity) continue;
+    const up = waterY(water[i]) - mx;
+    if (up >= 2) { spikes++; if (up > worstSpike) worstSpike = up; }
+  }
+  check('no water cell perches above all of its neighbours', spikes === 0,
+    spikes + ' spikes, worst ' + worstSpike + ' blocks over every neighbour');
+}
+
 // Banks must be a valley, not a trench. The measure is the one that matches what a player sees: for each
 // shoreline cell, how high the ground gets within 20 m of it. A mean over distance rings hides this — it
 // pools flat lake shores with steep river gorges and reads as gentle while a tenth of the shoreline is a
