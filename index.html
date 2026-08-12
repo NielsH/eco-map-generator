@@ -9648,6 +9648,28 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
         }
         wsurf.set(next);
       }
+      // Neighbouring water columns that disagree by a FRACTION of a block still render as a step, because
+      // Eco fills each column separately and rounds. Taking each cell's level from its own four neighbours
+      // leaves exactly that disagreement across a channel, and a channel is only a few cells wide, so the
+      // step runs ALONG the bank instead of down the river — a waterfall the length of the shoreline, which
+      // is what the level-from-the-ring change introduced. Average the surface along the water to take it
+      // out. Measured on a real map, the bank ring went from 6.4% of its pairs stepping a block, to 41.5%
+      // with the ring average, to 6.1% here; over the whole surface it is 11.9%, against vanilla's 11-13.5%.
+      {
+        for (let pass = 0; pass < 3; pass++) {
+          const next = Float32Array.from(wsurf);
+          for (let j = 0; j < n; j++) {
+            // Open water is already one level per patch and must stay exactly that — averaging across its
+            // edge tilts the whole surface, which is the ridged bed under flat water all over again. It
+            // still feeds the average of the shore cells beside it, as a fixed value.
+            if (land[j] !== 2 || fromShore[j] >= OPEN_WATER) continue;
+            let sum = wsurf[j], cnt = 1;
+            for (const nb of nbr4(j)) if (land[nb] === 2) { sum += wsurf[nb]; cnt++; }
+            next[j] = sum / cnt;
+          }
+          wsurf.set(next);
+        }
+      }
       for (let j = 0; j < n; j++) {
         if (land[j] !== 2) continue;
         const surface = Math.max(SEA + 0.01, wsurf[j]);
@@ -9781,7 +9803,12 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     // 5-block threshold and become a wall. Together with the shelf this holds the whole shoreline step to
     // about 3.5 blocks. Runs before the restore below, which still owns the lower bound.
     {
-      const BANK_CAP = 2 * BLK;
+      // One block, not two. At two, the cap BINDS along most of the shoreline and every cell it touches
+      // ends up the same height over the water, so the ring becomes a flat-topped ledge of constant height
+      // following the channel — masonry rather than ground. At one it mostly stops binding and the height
+      // comes from the restore below instead, which is a lip rather than a terrace. Vanilla's first ring
+      // sits 0.3-0.45 blocks over its water; this takes 1.37 to 0.93.
+      const BANK_CAP = 1 * BLK;
       for (let j = 0; j < n; j++) {
         if (land[j] !== 1) continue;
         let s = -Infinity;
