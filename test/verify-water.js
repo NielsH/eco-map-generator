@@ -56,8 +56,13 @@ function drawDesign(S) {
     const dx = x - S * 0.44, dy = y - S * 0.44;
     if (dx * dx + dy * dy < (S * 0.075) * (S * 0.075)) put(x, y, FRESH);
   }
-  for (let y = Math.round(S * 0.50); y < Math.round(S * 0.86); y++)   // river from the lake to the coast
-    for (let x = Math.round(S * 0.43); x < Math.round(S * 0.46); x++) put(x, y, FRESH);
+  // River from the lake to the coast. It MEANDERS: a dead straight channel has the same bank on both
+  // sides, so a per-cell level taken from the banks agrees across it by symmetry and the along-the-bank
+  // stepping this design is meant to catch never appears.
+  for (let y = Math.round(S * 0.50); y < Math.round(S * 0.86); y++) {
+    const off = Math.round(S * 0.045 * Math.sin(y * 0.16));
+    for (let x = Math.round(S * 0.43) + off; x < Math.round(S * 0.46) + off; x++) put(x, y, FRESH);
+  }
   return { width: S, height: S, data: px };
 }
 
@@ -252,6 +257,36 @@ for (let i = 0; i < g * g; i++) {
   for (const n of nbr(i)) { if (!water[n] || dist[n] < 4) continue; if (Math.abs(waterY(water[i]) - waterY(water[n])) >= 3) midOpen++; }
 }
 check('no wall of water out in open water', midOpen === 0, midOpen + ' such pairs');
+
+// The ring of water touching the bank must not step. Eco fills every column separately, so two touching
+// water cells that disagree render as a step — and a channel is only a few cells wide, so a step in that
+// ring runs ALONG the shoreline rather than down the river: a waterfall the length of the bank. Taking
+// each cell's level from its own four neighbours produces exactly that, since neighbouring cells see
+// different banks.
+//
+// This measures the RAW disagreement, not the rounded block step. The rounded count is unusable here: the
+// design's surface sits near a block boundary, so it swings between 7% and 40% of bank pairs on changes
+// that move the surface by a hundredth of a block. The raw level is finer than a block (255 steps over 60)
+// and orders the three versions cleanly — 0.077 before the ring-average level, 0.132 with it, 0.053 once
+// the surface is averaged along the water. On a real map the same change takes the bank ring from 41.5%
+// of its pairs stepping a whole block to 6.2%.
+{
+  const dIn = new Int16Array(g * g).fill(-1), qq = [];
+  for (let i = 0; i < g * g; i++) if (!water[i]) { dIn[i] = 0; qq.push(i); }
+  for (let k = 0; k < qq.length; k++) { const c = qq[k]; for (const nb of nbr(c)) if (dIn[nb] < 0 && water[nb]) { dIn[nb] = dIn[c] + 1; qq.push(nb); } }
+  let ring = 0, ringStep = 0, worstRing = 0;
+  for (let i = 0; i < g * g; i++) {
+    if (dIn[i] !== 1) continue;
+    for (const nb of nbr(i)) {
+      if (dIn[nb] !== 1 || nb < i) continue;
+      const d = Math.abs(water[i] - water[nb]) * (RELIEF / 255);      // the raw level, not the rounded block
+      ring++; ringStep += d; if (d > worstRing) worstRing = d;
+    }
+  }
+  const avg = ring ? ringStep / ring : 0;
+  check('the water touching the bank does not step along it', ring > 0 && avg < 0.10,
+    'neighbouring bank cells differ by ' + avg.toFixed(3) + ' blocks on average, worst ' + worstRing.toFixed(2) + ' (' + ring + ' pairs)');
+}
 
 // No cell may sit above EVERY water neighbour. A waterfall is higher than some and lower than others; a
 // cell higher than all of them is a spike, and renders as a lump of bed with a puddle on top standing

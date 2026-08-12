@@ -9648,6 +9648,28 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
         }
         wsurf.set(next);
       }
+      // Neighbouring water columns that disagree by a FRACTION of a block still render as a step, because
+      // Eco fills each column separately and rounds. Taking each cell's level from its own four neighbours
+      // leaves exactly that disagreement across a channel, and a channel is only a few cells wide, so the
+      // step runs ALONG the bank instead of down the river — a waterfall the length of the shoreline, which
+      // is what the level-from-the-ring change introduced. Average the surface along the water to take it
+      // out. Measured on a real map, the bank ring went from 6.4% of its pairs stepping a block, to 41.5%
+      // with the ring average, to 6.1% here; over the whole surface it is 11.9%, against vanilla's 11-13.5%.
+      {
+        for (let pass = 0; pass < 3; pass++) {
+          const next = Float32Array.from(wsurf);
+          for (let j = 0; j < n; j++) {
+            // Open water is already one level per patch and must stay exactly that — averaging across its
+            // edge tilts the whole surface, which is the ridged bed under flat water all over again. It
+            // still feeds the average of the shore cells beside it, as a fixed value.
+            if (land[j] !== 2 || fromShore[j] >= OPEN_WATER) continue;
+            let sum = wsurf[j], cnt = 1;
+            for (const nb of nbr4(j)) if (land[nb] === 2) { sum += wsurf[nb]; cnt++; }
+            next[j] = sum / cnt;
+          }
+          wsurf.set(next);
+        }
+      }
       for (let j = 0; j < n; j++) {
         if (land[j] !== 2) continue;
         const surface = Math.max(SEA + 0.01, wsurf[j]);
