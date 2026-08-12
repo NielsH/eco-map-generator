@@ -161,7 +161,10 @@ check('water is a sane depth, not a pit', dmin >= 1 && dmax <= 8, dmin + '..' + 
     const drop = means[k - 1][1] - means[k][1];
     if (drop > worstDrop) { worstDrop = drop; at = means[k][0]; }
   }
-  check('a lake deepens away from its bank, not the reverse', worstDrop <= 0.5,
+  // Tolerance is a whole block: depth here is quantised to blocks, so the shelf's first ring wobbles by
+  // one either way as its ramp crosses a boundary. The bug this guards against is an inverted shelf, which
+  // drops ~2 blocks and holds it across the whole interior — well clear of rounding.
+  check('a lake deepens away from its bank, not the reverse', worstDrop <= 1.0,
     means.map(m => 'd' + m[0] + '=' + m[1].toFixed(1)).join(' ') + (worstDrop > 0.5 ? '  <- drops ' + worstDrop.toFixed(1) + ' at d' + at : ''));
 }
 
@@ -197,6 +200,40 @@ const widest = Math.max.apply(null, Array.from({ length: g * g }, (_, i) => (wat
 const basin = []; for (let i = 0; i < g * g; i++) if (water[i] && dist[i] >= Math.max(2, widest - 1)) basin.push(i);
 const basinLevels = new Set(basin.map(i => waterY(water[i])));
 check('the lake basin is a single flat level', basinLevels.size === 1, basin.length + ' cells, ' + basinLevels.size + ' level(s)');
+
+// Ground beyond the rim must be ALLOWED to sit below the water. This is the bowl test, and it is the whole
+// point of taking the level from the immediate ring: when the surface was instead the minimum over a ~54 m
+// radius, nothing within that radius could be lower by construction, so the ground could only rise away
+// from the water. Vanilla has no such rule — 30-45% of the ground 20 m from its fresh water is below the
+// water line, because it contains a lake with its own rim and lets the terrain beyond do as it likes.
+{
+  let beyond = 0, below = 0;
+  // distance from water, outward over land
+  const dw = new Int16Array(g * g).fill(-1), qq = [];
+  for (let i = 0; i < g * g; i++) if (water[i]) { dw[i] = 0; qq.push(i); }
+  for (let k = 0; k < qq.length; k++) {
+    const c = qq[k]; if (dw[c] >= 15) continue;
+    for (const n of nbr(c)) if (dw[n] < 0 && !water[n]) { dw[n] = dw[c] + 1; qq.push(n); }
+  }
+  // nearest water surface, carried outward with the same walk
+  const ws = new Float32Array(g * g), q2 = [], seen = new Uint8Array(g * g);
+  for (let i = 0; i < g * g; i++) if (water[i]) { ws[i] = waterY(water[i]); seen[i] = 1; q2.push(i); }
+  for (let k = 0; k < q2.length; k++) {
+    const c = q2[k]; if (dw[c] >= 15) continue;
+    for (const n of nbr(c)) if (!seen[n] && dw[n] > 0) { seen[n] = 1; ws[n] = ws[c]; q2.push(n); }
+  }
+  for (let i = 0; i < g * g; i++) {
+    if (water[i] || biome[i] === SC.Ocean || dw[i] < 5 || dw[i] > 15) continue;
+    beyond++; if (landY(height[i]) < ws[i]) below++;
+  }
+  // Calibrated on this design: min-propagating the level gives 3.2%, taking it from the ring gives 7.1%,
+  // vanilla runs 30-45%. The bound sits between the first two, so reinstating a reach-based minimum fails
+  // here. It is deliberately well under vanilla — this design is a smooth cone, which has far fewer
+  // hollows to find than vanilla's per-cell elevation does.
+  const pct = beyond ? below / beyond * 100 : 0;
+  check('ground beyond the rim may sit below the water', beyond > 0 && pct >= 5,
+    below + ' of ' + beyond + ' cells 5-15 away are below the water line (' + pct.toFixed(1) + '%) — vanilla runs 30-45%');
+}
 
 // Open water must be dead flat everywhere, not just at the very middle. A gentle ramp across a lake
 // quantises to whole blocks and shows up in game as a ridged bed under otherwise flat water — which is

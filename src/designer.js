@@ -627,25 +627,48 @@
         if (shelf > hf[j]) hf[j] = shelf;
       }
     }
-    // Per-cell water surface, from the land it touches. Only cells ON the shore have a real constraint —
-    // the bank they sit against. Cells out in the middle of a lake have none, so they take the LOWEST bank
-    // within MIN_REACH: a lake is then level with its lowest shore (which is where it would drain), while a
-    // channel, whose every cell is a shore cell, still follows the ground down. Carrying the FIRST bank to
-    // arrive instead (a plain BFS) is what used to tilt lakes, since which shore won was arbitrary.
-    const MIN_REACH = 20;
+    // Per-cell water surface, from the land it touches — the AVERAGE of it, which is what vanilla's lake
+    // pass uses ("use average height as the lake elevation", VoronoiWorldGenerator).
+    //
+    // This used to take the MINIMUM bank and then min-propagate it 20 cells, so a body sat level with the
+    // lowest shore within ~54 m. That one rule is what put authored water in a bowl: if the level IS the
+    // lowest thing within 54 m then by construction nothing within 54 m can be lower, and the ground can
+    // only rise away from it. Measured across four vanilla worlds, 30-45% of the ground 20 m from vanilla's
+    // fresh water is BELOW the water line — its water threads through terrain that is as often lower as
+    // higher — against 11.6% here. Containment is not what the level is for: vanilla holds a lake with its
+    // immediate ring alone (raising just that ring), and lets the ground beyond do as it likes.
     const surf = new Float32Array(n).fill(Infinity); const lakeSet = new Set();
     for (const cells of groups) for (const j of cells) lakeSet.add(j);
-    for (const j of lakeSet) { let mn = Infinity; for (const nb of nbr4(j)) if (land[nb] === 1 && hf[nb] < mn) mn = hf[nb]; surf[j] = mn; }
-    for (let r = 0; r < MIN_REACH; r++) {
-      let moved = 0;
-      for (const j of lakeSet) { let mn = surf[j]; for (const nb of nbr4(j)) if (lakeSet.has(nb) && surf[nb] < mn) mn = surf[nb]; if (mn < surf[j]) { surf[j] = mn; moved++; } }
-      if (!moved) break;
+    // The average is bounded by how much containment it may build. Vanilla can use the average outright
+    // because its rims are near flat — cell noise with no local gradient — so `lakeElevation + 0.01` raises
+    // a cell or two. On a sloped authored rim the average can sit many blocks over the low side, and holding
+    // it there means walling the whole downhill arc. 4 blocks is the knee measured on a real 120-wide map:
+    // it roughly doubles how much ground beyond the rim may sit below the water (11.6% -> 21.2% at 20 m,
+    // against vanilla's 30-45%) and drops the banks ~0.9 blocks at every distance, while leaving water
+    // spilling over its bank where it already was. Past ~6 it starts spilling; past ~8 the lake drowns its
+    // own outlet and the banks become a trench.
+    const BERM = 4 * (1 / 120);
+    for (const j of lakeSet) {
+      let sum = 0, cnt = 0, mn = Infinity;
+      for (const nb of nbr4(j)) if (land[nb] === 1) { sum += hf[nb]; cnt++; if (hf[nb] < mn) mn = hf[nb]; }
+      surf[j] = cnt ? Math.min(sum / cnt, mn + BERM) : Infinity;
     }
-    // MIN_REACH is a fixed number of steps, so the middle of a lake wider than that is never reached and
-    // the flood ramps across it — in game, a corrugated bed under otherwise flat water. Level the OPEN
-    // WATER separately: cells this far from any shore share one surface, however wide the lake. A drawn
-    // river is only a few cells across, so it has no open water at all and is left completely alone —
-    // which is what keeps it descending instead of turning into a level canal.
+    // A cell with no shore of its own (mid-lake) has no constraint; give it the body's ring average, bounded
+    // the same way. This is what keeps a lake uniform now that nothing is min-propagated — and dropping that
+    // propagation is the actual point: the level is now the local ring, not the lowest thing within ~54 m,
+    // so ground beyond the rim is free to sit below the water the way vanilla's does.
+    for (const cells of groups) {
+      let sum = 0, cnt = 0, mn = Infinity;
+      for (const j of cells) for (const nb of nbr4(j)) if (land[nb] === 1) { sum += hf[nb]; cnt++; if (hf[nb] < mn) mn = hf[nb]; }
+      if (!cnt) continue;
+      const ring = Math.min(sum / cnt, mn + BERM);
+      for (const j of cells) if (!isFinite(surf[j])) surf[j] = ring;
+    }
+    // Open water gets ONE surface per patch, however wide the lake, so the flood cannot ramp across a middle
+    // it never reaches — in game that reads as a corrugated bed under otherwise flat water. This is what
+    // keeps a lake level now that nothing is min-propagated. A drawn river is only a few cells across, so it
+    // has no open water at all and is left alone, which is what keeps it descending rather than turning
+    // into a level canal.
     const OPEN_WATER = 4;
     const fromShore = new Int16Array(n).fill(-1);
     { const q = [];
@@ -654,17 +677,18 @@
     {
       const open = []; for (const j of lakeSet) if (fromShore[j] >= OPEN_WATER) open.push(j);
       const seen = new Set();
-      for (const s0 of open) {                                                 // one level per open-water body
+      for (const s0 of open) {
         if (seen.has(s0)) continue;
-        const stack = [s0], patch = []; seen.add(s0); let mn = surf[s0];
+        const stack = [s0], patch = []; seen.add(s0); let sum = 0;
         while (stack.length) {
-          const c = stack.pop(); patch.push(c);
-          if (surf[c] < mn) mn = surf[c];
+          const c = stack.pop(); patch.push(c); sum += surf[c];
           for (const nb of nbr4(c)) if (fromShore[nb] >= OPEN_WATER && lakeSet.has(nb) && !seen.has(nb)) { seen.add(nb); stack.push(nb); }
         }
-        for (const j of patch) surf[j] = mn;
-        // pull the surrounding shallows down to it too, so the rim does not stand above the middle
-        for (const j of patch) for (const nb of nbr4(j)) if (lakeSet.has(nb) && fromShore[nb] < OPEN_WATER && surf[nb] > mn) surf[nb] = mn;
+        let pmn = Infinity; for (const j of patch) if (surf[j] < pmn) pmn = surf[j];
+        const lv = Math.min(sum / patch.length, pmn + BERM);                   // the patch's average, bounded like the rest
+        for (const j of patch) surf[j] = lv;
+        // pull the surrounding shallows to it too, so the rim does not stand above the middle
+        for (const j of patch) for (const nb of nbr4(j)) if (lakeSet.has(nb) && fromShore[nb] < OPEN_WATER && surf[nb] > lv) surf[nb] = lv;
       }
     }
     // Water sits in FLAT pools, in a valley it CARVES for itself.
@@ -759,7 +783,7 @@
     // threshold, and reads as a shallows rather than a tank.
     {
       const SHELF_CELLS = 3;                    // how far in the shallows reach
-      const SHORE_DEPTH = 1.5 * BLK;            // depth right at the bank
+      const SHORE_DEPTH = 1.8 * BLK;            // depth right at the bank; below ~1.8 a shore cell can round to no water at all
       const dIn = new Int32Array(n).fill(-1), qs = [];
       for (let j = 0; j < n; j++) if (land[j] !== 2) { dIn[j] = 0; qs.push(j); }
       for (let k = 0; k < qs.length; k++) {
