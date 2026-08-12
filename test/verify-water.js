@@ -143,7 +143,40 @@ check('water never sits above the land beside it', over === 0, over + ' cells (w
 
 let dmin = Infinity, dmax = -Infinity;
 for (let i = 0; i < g * g; i++) if (water[i]) { const d = waterY(water[i]) - landY(height[i]); if (d < dmin) dmin = d; if (d > dmax) dmax = d; }
-check('water is a sane depth, not a pit', dmin >= 1 && dmax <= 8, dmin + '..' + dmax + ' blocks');
+check('water is a sane depth, not a pit', dmin >= 1, dmin + '..' + dmax + ' blocks');
+
+// Depth must FOLLOW VANILLA, which deepens away from the bank without capping: its flood adds
+// `depthChange = 2` grays per ring inward from 1 (VoronoiWorldGenerator), one gray being
+// 2*(maxGen-waterLevel)/255 = 0.47 blocks on a 60/120 world. Its enclosure test is 8-neighbour, so the
+// distance is CHEBYSHEV. One fixed depth instead makes every body the same however wide it is, and a lake
+// comes out a puddle — on a real map, water 20 blocks from shore was 3.6 blocks deep against vanilla's
+// 18.4. Near the bank the shelf is deliberately DEEPER than vanilla (1.8 blocks against 0.5), because that
+// is what holds the bed-to-bank step under the cliff threshold, so the rule there is the deeper of the two.
+{
+  const dIn = new Int16Array(g * g).fill(-1), qq = [];
+  for (let i = 0; i < g * g; i++) if (!water[i]) { dIn[i] = 0; qq.push(i); }
+  for (let k = 0; k < qq.length; k++) {
+    const c = qq[k], cx = c % g, cy = (c / g) | 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      if (!dx && !dy) continue;
+      const nb = ((cx + dx + g) % g) + ((cy + dy + g) % g) * g;
+      if (dIn[nb] < 0 && water[nb]) { dIn[nb] = dIn[c] + 1; qq.push(nb); }
+    }
+  }
+  const BPC = 1200 / g;                                     // blocks per cell, as imageToMaps defaults
+  let cells = 0, off = 0, worstOff = 0, atFloor = 0;
+  for (let i = 0; i < g * g; i++) {
+    if (!water[i] || dIn[i] < 1) continue;
+    const want = Math.max(1.8, Math.max(1, 2 * ((dIn[i] - 0.5) * BPC) - 1) * 0.4706);
+    if (waterY(water[i]) - want < 4) { atFloor++; continue; }   // vanilla bottoms out here too
+    const d = Math.abs((waterY(water[i]) - landY(height[i])) - want);
+    cells++; off += d; if (d > worstOff) worstOff = d;
+  }
+  const avg = cells ? off / cells : 99;
+  check('depth follows vanilla, deepening away from the bank', cells > 0 && avg < 1.5,
+    'off vanilla by ' + avg.toFixed(2) + ' blocks on average, worst ' + worstOff.toFixed(1)
+    + ' (' + cells + ' cells, ' + atFloor + ' at the world floor)');
+}
 
 // A body gets deeper away from its bank, never shallower. The min/max above cannot see the difference:
 // a lake shelved the wrong way round — a deep ring around a shallow middle — has exactly the same range,
