@@ -140,6 +140,31 @@ let dmin = Infinity, dmax = -Infinity;
 for (let i = 0; i < g * g; i++) if (water[i]) { const d = waterY(water[i]) - landY(height[i]); if (d < dmin) dmin = d; if (d > dmax) dmax = d; }
 check('water is a sane depth, not a pit', dmin >= 1 && dmax <= 8, dmin + '..' + dmax + ' blocks');
 
+// A body gets deeper away from its bank, never shallower. The min/max above cannot see the difference:
+// a lake shelved the wrong way round — a deep ring around a shallow middle — has exactly the same range,
+// and drains in game, because the middle rounds away to nothing. Bucket the depth by distance from the
+// shore and require it not to fall back as you go inward.
+{
+  const dIn = new Int16Array(g * g).fill(-1), qq = [];
+  for (let i = 0; i < g * g; i++) if (!water[i]) { dIn[i] = 0; qq.push(i); }
+  for (let k = 0; k < qq.length; k++) { const c = qq[k]; for (const n of nbr(c)) if (dIn[n] < 0) { dIn[n] = dIn[c] + 1; qq.push(n); } }
+  const sum = [], cnt = [];
+  for (let i = 0; i < g * g; i++) {
+    if (!water[i]) continue;
+    const d = dIn[i];
+    sum[d] = (sum[d] || 0) + (waterY(water[i]) - landY(height[i])); cnt[d] = (cnt[d] || 0) + 1;
+  }
+  const means = [];
+  for (let d = 1; d < sum.length; d++) if (cnt[d] >= 8) means.push([d, sum[d] / cnt[d]]);
+  let worstDrop = 0, at = 0;
+  for (let k = 1; k < means.length; k++) {
+    const drop = means[k - 1][1] - means[k][1];
+    if (drop > worstDrop) { worstDrop = drop; at = means[k][0]; }
+  }
+  check('a lake deepens away from its bank, not the reverse', worstDrop <= 0.5,
+    means.map(m => 'd' + m[0] + '=' + m[1].toFixed(1)).join(' ') + (worstDrop > 0.5 ? '  <- drops ' + worstDrop.toFixed(1) + ' at d' + at : ''));
+}
+
 // CliffExtruder builds a rock face wherever two columns differ by 5 blocks or more, and for a water
 // column the top SOLID block is the bed — not the surface. So the step it measures at a shoreline is
 // (bank above the water) + (depth of the water), and a bed a fixed depth down plus any bank at all

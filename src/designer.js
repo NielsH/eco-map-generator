@@ -741,7 +741,11 @@
       }
       for (let j = 0; j < n; j++) {
         if (land[j] !== 2) continue;
-        const t = Math.min(1, Math.max(0, (dIn[j] - 1) / SHELF_CELLS)), s = t * t * (3 - 2 * t);
+        // The walk above stops at the shelf edge, so open water keeps dIn = -1. That is the DEEP case, not
+        // the shallow one: reading it as distance 0 shelves the middle of a lake up to shore depth and
+        // drains it, leaving a deep ring around a dry centre.
+        const t = dIn[j] < 0 ? 1 : Math.min(1, Math.max(0, (dIn[j] - 1) / SHELF_CELLS));
+        const s = t * t * (3 - 2 * t);
         const shore = wsurf[j] - SHORE_DEPTH;
         bed[j] = Math.max(0.03, shore + (bed[j] - shore) * s);
       }
