@@ -258,6 +258,32 @@ for (let i = 0; i < g * g; i++) {
 }
 check('no wall of water out in open water', midOpen === 0, midOpen + ' such pairs');
 
+// The first ring of land must be a LIP, not a terrace. Capping it at a fixed height over the water makes
+// the cap bind along most of the shoreline, and every cell it binds ends up at exactly that height — a
+// flat-topped ledge of constant height following the channel, which reads as masonry rather than as
+// ground. Vanilla's first ring averages 0.3-0.45 blocks over its water; a 2-block cap put a real map at
+// 1.37 and a 1-block cap at 0.93. On this design the same two caps read 2.61 and 1.75 — higher, because
+// the ring here is quantised to whole blocks and the design is a steep cone — so the bound sits between
+// those two. It is on the average, since the floor under it is the shoreline restore, which must keep the
+// land above the water it holds back.
+{
+  let sum = 0, cnt = 0, atCap = new Map();
+  for (let i = 0; i < g * g; i++) {
+    if (water[i]) continue;
+    let s = -Infinity;
+    for (const n of nbr(i)) if (water[n] && waterY(water[n]) > s) s = waterY(water[n]);
+    if (s === -Infinity) continue;
+    const v = landY(height[i]) - s;
+    sum += v; cnt++;
+    const k = Math.round(v * 2) / 2; atCap.set(k, (atCap.get(k) || 0) + 1);
+  }
+  const avg = cnt ? sum / cnt : 0;
+  let top = 0, topAt = 0; for (const [k, v] of atCap) if (v > top) { top = v; topAt = k; }
+  check('the bank is a lip, not a terrace of constant height', cnt > 0 && avg < 2.2,
+    'first ring averages ' + avg.toFixed(2) + ' blocks over the water; commonest height ' + topAt
+    + ' blocks on ' + (100 * top / cnt).toFixed(0) + '% of it');
+}
+
 // The ring of water touching the bank must not step. Eco fills every column separately, so two touching
 // water cells that disagree render as a step — and a channel is only a few cells wide, so a step in that
 // ring runs ALONG the shoreline rather than down the river: a waterfall the length of the bank. Taking
