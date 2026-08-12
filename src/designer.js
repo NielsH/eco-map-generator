@@ -723,6 +723,29 @@
         biome[j] = lb; land[j] = 2; water[j] = Math.max(1, Math.min(255, Math.round((2 * surface - 1) * 255))); bed[j] = bottom; hf[j] = surface; wsurf[j] = surface;
       }
     }
+    // Shelve the fresh water at its edges, the way the sea already is. A flat bed a fixed depth below the
+    // surface puts a STEP at the shoreline: the bed is ~3.8 blocks down and the bank ~1.4 up, and Eco's
+    // CliffExtruder builds a rock face wherever two columns differ by 5 or more. Measured on a generated
+    // world, 52.9% of shoreline column pairs cleared that — a stone retaining wall around every lake and
+    // river. Ramping the bed up to one block under the surface at the shore takes the step under the
+    // threshold, and reads as a shallows rather than a tank.
+    {
+      const SHELF_CELLS = 3;                    // how far in the shallows reach
+      const SHORE_DEPTH = 1.5 * BLK;            // depth right at the bank
+      const dIn = new Int32Array(n).fill(-1), qs = [];
+      for (let j = 0; j < n; j++) if (land[j] !== 2) { dIn[j] = 0; qs.push(j); }
+      for (let k = 0; k < qs.length; k++) {
+        const c = qs[k];
+        if (dIn[c] > SHELF_CELLS) continue;
+        for (const nb of nbr4(c)) if (dIn[nb] < 0 && land[nb] === 2) { dIn[nb] = dIn[c] + 1; qs.push(nb); }
+      }
+      for (let j = 0; j < n; j++) {
+        if (land[j] !== 2) continue;
+        const t = Math.min(1, Math.max(0, (dIn[j] - 1) / SHELF_CELLS)), s = t * t * (3 - 2 * t);
+        const shore = wsurf[j] - SHORE_DEPTH;
+        bed[j] = Math.max(0.03, shore + (bed[j] - shore) * s);
+      }
+    }
     // minimal smoothing — keep the ridged relief steep (just knock off single-pixel noise + shoreline step)
     boxBlurTor(hf, res, Math.max(1, Math.round(res / 140)), 1);
     // Break the land into cells and give each ONE height, the way the real generator does.
@@ -813,6 +836,20 @@
           const t = hf[j] + (near[j] - hf[j]) * VALLEY_PULL * s * s * (3 - 2 * s);
           if (t < hf[j]) hf[j] = Math.max(t, near[j] + BLK);     // only ever lowers, never under the water
         }
+      }
+    }
+    // Flatten the very first ring of land into a bank rather than a lip. The valley pass above shapes the
+    // slope but leaves this ring wherever the relaxation put it — up to 4.9 blocks over the water at p90 —
+    // and CliffExtruder measures the ring against the BED, not the surface, so those blocks clear its
+    // 5-block threshold and become a wall. Together with the shelf this holds the whole shoreline step to
+    // about 3.5 blocks. Runs before the restore below, which still owns the lower bound.
+    {
+      const BANK_CAP = 2 * BLK;
+      for (let j = 0; j < n; j++) {
+        if (land[j] !== 1) continue;
+        let s = -Infinity;
+        for (const nb of nbr4(j)) if (land[nb] === 2 && wsurf[nb] > s) s = wsurf[nb];
+        if (s > -Infinity && hf[j] > s + BANK_CAP) hf[j] = s + BANK_CAP;
       }
     }
     // The blur averages across the shoreline, and water cells sit low, so it drags the banks down with them

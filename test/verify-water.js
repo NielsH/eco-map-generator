@@ -140,6 +140,29 @@ let dmin = Infinity, dmax = -Infinity;
 for (let i = 0; i < g * g; i++) if (water[i]) { const d = waterY(water[i]) - landY(height[i]); if (d < dmin) dmin = d; if (d > dmax) dmax = d; }
 check('water is a sane depth, not a pit', dmin >= 1 && dmax <= 8, dmin + '..' + dmax + ' blocks');
 
+// CliffExtruder builds a rock face wherever two columns differ by 5 blocks or more, and for a water
+// column the top SOLID block is the bed — not the surface. So the step it measures at a shoreline is
+// (bank above the water) + (depth of the water), and a bed a fixed depth down plus any bank at all
+// cleared it: 52.9% of shoreline pairs on a generated world, which is a stone retaining wall around
+// every lake and river. Nothing else here catches it — the water is level, the banks are low, and no
+// bed is dry; the defect is only in the difference between them.
+{
+  let shorePairs = 0, walls = 0, worstStep = 0;
+  for (let i = 0; i < g * g; i++) {
+    if (!water[i]) continue;
+    const bed = landY(height[i]);
+    for (const nb of nbr(i)) {
+      if (water[nb] || biome[nb] === SC.Ocean) continue;      // the sea has its own shelf and keeps its cliffs
+      shorePairs++;
+      const step = landY(height[nb]) - bed;
+      if (step > worstStep) worstStep = step;
+      if (step >= 5) walls++;
+    }
+  }
+  check('the shoreline step stays under the cliff threshold', walls === 0,
+    walls + ' of ' + shorePairs + ' shoreline pairs step 5+ blocks bed-to-bank, worst ' + worstStep);
+}
+
 // The round lake must be ONE level. Width = distance from the nearest non-water cell, so the lake basin
 // is the wide part; the river is one or two cells across and is allowed to descend.
 const dist = new Int16Array(g * g).fill(-1), q = [];
