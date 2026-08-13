@@ -306,6 +306,33 @@ for (let i = 0; i < g * g; i++) {
 }
 check('no wall of water out in open water', midOpen === 0, midOpen + ' such pairs');
 
+// The ring touching the water must not stand proud of the ground BEHIND it. Its own height is decided by
+// the water in front — floored just over the surface so it holds the water in — while the ground behind is
+// shaped by the valley pass, which stops lifting some way UNDER the surface. Those two heights need not
+// meet, and where they do not the bank comes out as a kerb running along the water with the field behind
+// it lower. Measured on a real map, the ring stood 0.94 blocks over the ground behind it at p90 and 2.4 at
+// worst, against vanilla's 0.00 and 1.4.
+{
+  const d = new Int16Array(g * g).fill(-1), qq = [];
+  for (let i = 0; i < g * g; i++) if (water[i]) { d[i] = 0; qq.push(i); }
+  for (let k = 0; k < qq.length; k++) { const c = qq[k]; if (d[c] >= 3) continue;
+    for (const n of nbr(c)) if (d[n] < 0 && !water[n]) { d[n] = d[c] + 1; qq.push(n); } }
+  const st = [];
+  for (let i = 0; i < g * g; i++) {
+    if (d[i] !== 1 || biome[i] === SC.Ocean) continue;
+    let mx = -Infinity;
+    for (const n of nbr(i)) if (d[n] === 2 && biome[n] !== SC.Ocean) { const s = landY(height[i]) - landY(height[n]); if (s > mx) mx = s; }
+    if (mx > -Infinity) st.push(mx);
+  }
+  st.sort((a, b) => a - b);
+  // The bound is on the WORST cell, not a percentile: most of the ring is already flush either way, and it
+  // is the occasional kerb that shows. Vanilla tops out at 1.4 blocks over the ground behind it.
+  const worst = st.length ? st[st.length - 1] : 0;
+  check('the bank does not stand proud of the ground behind it', st.length > 0 && worst <= 1,
+    'ring sits at worst ' + worst.toFixed(1) + ' blocks over the ground behind it, p90 '
+    + st[Math.floor(0.9 * (st.length - 1))].toFixed(1) + ' (' + st.length + ' cells)');
+}
+
 // Ground LOWER than the water beside it must be lifted toward it, not left at its full depth. The valley
 // pass used to relax in one direction only — it pulled high ground down and did nothing at all to a cell
 // already below the water — so where a course ran past lower terrain the bank stood at the top of the
