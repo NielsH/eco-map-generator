@@ -980,9 +980,26 @@
       if (need > -Infinity && hf[j] < need + BLK) hf[j] = need + BLK;
     }
     // finalize: lakes hold water above their (fixed) bed; other land keeps its relief above sea; sea stays deep
+    //
+    // Both maps leave here as BYTES, and Eco truncates the water one — `waterLevel + trunc(relief * b/255)`
+    // — while the bed byte rounds on its own. A column the shelf gave 1.8 blocks of water can therefore
+    // arrive holding 0.7, and where it lands under a block Eco fills the column to nothing and the channel
+    // is dry there. On a mirrored map it is worse than cosmetic: the terrain noise under the two isles is
+    // not mirrored, so they round differently and the water goes missing on ONE side, which is what a
+    // mirrored world shows up as a river that runs on one isle and not on its twin. Measured before this,
+    // 307 cells held under a block and 241 of them were wet on one isle and dry on the other.
+    //
+    // So set the bed from the QUANTISED surface, in the same arithmetic Eco will use, rather than trusting
+    // the sub-block value to survive the trip.
+    const MIN_DEPTH = 1.1;                                     // blocks left in the shallowest column
+    const WL = 60, RELIEF = 60, MAXGEN = 120;                  // the 60/120 world BLK already assumes
     for (let j = 0; j < n; j++) {
       let h = land[j] === 2 ? bed[j] : (land[j] ? Math.max(0.505, hf[j]) : Math.min(hf[j], 0.495));
       height[j] = Math.max(0, Math.min(255, Math.round(h * 255)));
+      if (land[j] === 2) {
+        const wy = WL + Math.trunc(RELIEF * (water[j] / 255));                // what Eco will fill this column to
+        height[j] = Math.max(0, Math.min(height[j], Math.floor(255 * (wy - MIN_DEPTH) / MAXGEN)));
+      }
     }
     return { res, biome, height, water };
   }
