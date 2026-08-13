@@ -968,7 +968,7 @@
       // following the channel — masonry rather than ground. At one it mostly stops binding and the height
       // comes from the restore below instead, which is a lip rather than a terrace. Vanilla's first ring
       // sits 0.3-0.45 blocks over its water; this takes 1.37 to 0.93.
-      const BANK_CAP = 1 * BLK;
+      const BANK_CAP = 0.5 * BLK;
       for (let j = 0; j < n; j++) {
         if (land[j] !== 1) continue;
         let s = -Infinity;
@@ -979,11 +979,12 @@
     // The blur averages across the shoreline, and water cells sit low, so it drags the banks down with them
     // — far enough, in places, to leave the bank UNDER the water it is holding back, which reads in game as
     // a lake spilling over the terrain. Put the shore back: any land touching water sits a block above it.
+    const SHORE_LIP = 0.35 * BLK;
     for (let j = 0; j < n; j++) {
       if (land[j] !== 1) continue;
       let need = -Infinity;
       for (const nb of nbr4(j)) if (land[nb] === 2 && wsurf[nb] > need) need = wsurf[nb];
-      if (need > -Infinity && hf[j] < need + BLK) hf[j] = need + BLK;
+      if (need > -Infinity && hf[j] < need + SHORE_LIP) hf[j] = need + SHORE_LIP;
     }
     // finalize: lakes hold water above their (fixed) bed; other land keeps its relief above sea; sea stays deep
     //
@@ -997,14 +998,19 @@
     //
     // So set the bed from the QUANTISED surface, in the same arithmetic Eco will use, rather than trusting
     // the sub-block value to survive the trip.
-    const MIN_DEPTH = 1.1;                                     // blocks left in the shallowest column
+    const MIN_DEPTH = 2.1;                                     // blocks left in the shallowest column
     const WL = 60, RELIEF = 60, MAXGEN = 120;                  // the 60/120 world BLK already assumes
     for (let j = 0; j < n; j++) {
       let h = land[j] === 2 ? bed[j] : (land[j] ? Math.max(0.505, hf[j]) : Math.min(hf[j], 0.495));
       height[j] = Math.max(0, Math.min(255, Math.round(h * 255)));
       if (land[j] === 2) {
         const wy = WL + Math.trunc(RELIEF * (water[j] / 255));                // what Eco will fill this column to
-        height[j] = Math.max(0, Math.min(height[j], Math.floor(255 * (wy - MIN_DEPTH) / MAXGEN)));
+        // Never deeper than the shelf meant this column to be. The shelf holds the first cells at ~1.8
+        // blocks on purpose — that is what keeps the bed-to-bank step under CliffExtruder's threshold —
+        // so a flat floor applied everywhere digs exactly the columns that must not be dug. Restoring the
+        // intended depth is enough: quantisation is what took it away, not the shelf.
+        const want = Math.min(MIN_DEPTH, (wsurf[j] - bed[j]) * MAXGEN);
+        height[j] = Math.max(0, Math.min(height[j], Math.floor(255 * (wy - want) / MAXGEN)));
       }
     }
     return { res, biome, height, water };

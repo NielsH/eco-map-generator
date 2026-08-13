@@ -154,7 +154,11 @@ check('water never sits above the land beside it', over === 0, over + ' cells (w
 
 let dmin = Infinity, dmax = -Infinity;
 for (let i = 0; i < g * g; i++) if (water[i]) { const d = waterY(water[i]) - landY(height[i]); if (d < dmin) dmin = d; if (d > dmax) dmax = d; }
-check('water is a sane depth, not a pit', dmin >= 1, dmin + '..' + dmax + ' blocks');
+// 2, not 1. A column holding a single block of water reads as a wet patch rather than a river, and the
+// export loses up to a block of depth to byte quantisation on the way out, so the floor has to be set
+// after that rounding rather than before it. On a real map this took the columns holding under 2 blocks
+// from 2056 of 5350 to 1060 — the rest being shelf, which is shallow on purpose.
+check('water is a sane depth, not a pit', dmin >= 2, dmin + '..' + dmax + ' blocks');
 
 // Depth must FOLLOW VANILLA, which deepens away from the bank without capping: its flood adds
 // `depthChange = 2` grays per ring inward from 1 (VoronoiWorldGenerator), one gray being
@@ -415,7 +419,8 @@ check('no wall of water out in open water', midOpen === 0, midOpen + ' such pair
 // the cap bind along most of the shoreline, and every cell it binds ends up at exactly that height — a
 // flat-topped ledge of constant height following the channel, which reads as masonry rather than as
 // ground. Vanilla's first ring averages 0.3-0.45 blocks over its water; a 2-block cap put a real map at
-// 1.37 and a 1-block cap at 0.93. On this design the same two caps read 2.61 and 1.75 — higher, because
+// 1.37, a 1-block cap 0.93, and a half-block cap 0.45 — vanilla's own figure. On this design the caps
+// read 2.61 / 1.75 / 1.45 respectively — higher throughout, because
 // the ring here is quantised to whole blocks and the design is a steep cone — so the bound sits between
 // those two. It is on the average, since the floor under it is the shoreline restore, which must keep the
 // land above the water it holds back.
@@ -432,7 +437,7 @@ check('no wall of water out in open water', midOpen === 0, midOpen + ' such pair
   }
   const avg = cnt ? sum / cnt : 0;
   let top = 0, topAt = 0; for (const [k, v] of atCap) if (v > top) { top = v; topAt = k; }
-  check('the bank is a lip, not a terrace of constant height', cnt > 0 && avg < 2.2,
+  check('the bank is a lip, not a terrace of constant height', cnt > 0 && avg < 1.5,
     'first ring averages ' + avg.toFixed(2) + ' blocks over the water; commonest height ' + topAt
     + ' blocks on ' + (100 * top / cnt).toFixed(0) + '% of it');
 }
