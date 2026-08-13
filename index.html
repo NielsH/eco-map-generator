@@ -9828,7 +9828,13 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
           const s = 1 - dw[j] / VALLEY_REACH;
           if (s <= 0) continue;
           const t = hf[j] + (near[j] - hf[j]) * VALLEY_PULL * s * s * (3 - 2 * s);
-          if (t < hf[j]) hf[j] = Math.max(t, near[j] + BLK);     // only ever lowers, never under the water
+          if (t < hf[j]) hf[j] = Math.max(t, near[j] + BLK);     // pull high ground DOWN, never under the water
+          // and pull LOW ground up. The pass used to relax in one direction only, so where a course ran
+          // past ground below it the fall was left at its full depth, and the bank read as the top of an
+          // embankment from the low side. Raising it is capped a block UNDER the water, so the ground
+          // beyond a bank may still lie below the water line — which is the thing that makes authored
+          // water sit in the landscape rather than in a bowl, and is worth keeping.
+          else if (t > hf[j]) hf[j] = Math.min(t, near[j] - BLK);
         }
       }
     }
