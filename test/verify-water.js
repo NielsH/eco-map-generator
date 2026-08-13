@@ -302,6 +302,33 @@ for (let i = 0; i < g * g; i++) {
 }
 check('no wall of water out in open water', midOpen === 0, midOpen + ' such pairs');
 
+// A MIRRORED map must hold water in mirrored places. Both maps leave here as bytes and Eco truncates the
+// water one, so a column can lose most of a block of depth on the way out; where that takes it under a
+// block, Eco fills the column to nothing. The terrain noise under the two halves of a mirrored world is
+// NOT mirrored, so the two halves round differently and the water goes missing on ONE side — a river that
+// runs on one isle and not on its twin. Measured on a real mirrored map before this was fixed: 307 columns
+// held under a block and 241 of them were wet on one isle and dry on the other.
+{
+  // Drawn at the grid resolution so the decode is 1:1 — at 192 into a 256 grid, mirrored source pixels do
+  // not land on mirrored cells and the water mask comes out lopsided for that reason alone.
+  const src = drawDesign(RES);
+  const S = src.width, px = Uint8ClampedArray.from(src.data);
+  for (let y = 0; y < S; y++) for (let x = 0; x < S / 2; x++) {          // make the SOURCE exactly mirrored
+    const a = (y * S + x) * 4, b = (y * S + ((S - x) % S)) * 4;
+    px[b] = px[a]; px[b + 1] = px[a + 1]; px[b + 2] = px[a + 2]; px[b + 3] = px[a + 3];
+  }
+  const m = runImageToMaps({ width: S, height: S, data: px }, RES);
+  let wet = 0, lopsided = 0;
+  for (let y = 0; y < RES; y++) for (let x = 0; x < RES; x++) {
+    const i = y * RES + x, j = y * RES + ((RES - x) % RES);
+    const a = m.water[i] ? waterY(m.water[i]) - landY(m.height[i]) : 0;
+    const b = m.water[j] ? waterY(m.water[j]) - landY(m.height[j]) : 0;
+    if (a >= 1) { wet++; if (b < 1) lopsided++; }
+  }
+  check('a mirrored map holds water in mirrored places', wet > 0 && lopsided === 0,
+    lopsided + ' of ' + wet + ' water columns are wet on one side and dry on its mirror');
+}
+
 // The ground NEAR the water must be near its level, which is what stops a channel reading as a trench cut
 // through a plateau. This is different from the trench check further down: that one bounds the worst rise
 // anywhere within 20 m, so it still passes when the ground climbs steadily the whole way, and a steady
