@@ -302,6 +302,32 @@ for (let i = 0; i < g * g; i++) {
 }
 check('no wall of water out in open water', midOpen === 0, midOpen + ' such pairs');
 
+// The ground NEAR the water must be near its level, which is what stops a channel reading as a trench cut
+// through a plateau. This is different from the trench check further down: that one bounds the worst rise
+// anywhere within 20 m, so it still passes when the ground climbs steadily the whole way, and a steady
+// climb away from the water on both sides is exactly what makes a river look like an aqueduct in game.
+// Vanilla's ground averages 0.7-1.1 blocks over its water from 3 m out to 40 m — flat, with the drama
+// somewhere else. A real map measured 2.3 blocks at 6 m and 4.2 at 20 m before the valley pull was raised,
+// and 0.9 / 2.5 after.
+{
+  const mpc = 1200 / g;
+  const d = new Int16Array(g * g).fill(-1), ws = new Float32Array(g * g), qq = [];
+  for (let i = 0; i < g * g; i++) if (water[i]) { d[i] = 0; ws[i] = waterY(water[i]); qq.push(i); }
+  for (let k = 0; k < qq.length; k++) {
+    const c = qq[k]; if (d[c] * mpc >= 24) continue;
+    for (const n of nbr(c)) if (d[n] < 0 && !water[n]) { d[n] = d[c] + 1; ws[n] = ws[c]; qq.push(n); }
+  }
+  let sum = 0, cnt = 0;
+  for (let i = 0; i < g * g; i++) {
+    if (water[i] || d[i] < 1 || biome[i] === SC.Ocean) continue;
+    const m = d[i] * mpc; if (m < 6 || m > 20) continue;
+    sum += landY(height[i]) - ws[i]; cnt++;
+  }
+  const avg = cnt ? sum / cnt : 99;
+  check('the ground beside the water is near its level', cnt > 0 && avg < 5,
+    'land 6-20 m out averages ' + avg.toFixed(1) + ' blocks over the water (' + cnt + ' cells)');
+}
+
 // Water must not stand on an EMBANKMENT. Taking the level from the immediate ring alone lets a course
 // running along a slope take the level its uphill bank justifies; the restore then raises the downhill
 // bank to hold it, and the ground beyond falls away — in game, an aqueduct. Measured on a real map, 7.1%
