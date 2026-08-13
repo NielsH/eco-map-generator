@@ -302,6 +302,31 @@ for (let i = 0; i < g * g; i++) {
 }
 check('no wall of water out in open water', midOpen === 0, midOpen + ' such pairs');
 
+// Ground LOWER than the water beside it must be lifted toward it, not left at its full depth. The valley
+// pass used to relax in one direction only — it pulled high ground down and did nothing at all to a cell
+// already below the water — so where a course ran past lower terrain the bank stood at the top of the
+// whole fall. Measured at world resolution with the mod's terrace applied, the ground 20 m out from a bank
+// fell 4.1 blocks below it against vanilla's 2.9, and 5.6 at 30 m against 4.1. On the test design the
+// same measure reads p90 4.0 blocks before and 3.0 after, over 179 cells and 97.
+{
+  const d = new Int16Array(g * g).fill(-1), ws = new Float32Array(g * g), qq = [];
+  for (let i = 0; i < g * g; i++) if (water[i]) { d[i] = 0; ws[i] = waterY(water[i]); qq.push(i); }
+  for (let k = 0; k < qq.length; k++) {
+    const c = qq[k]; if (d[c] >= 10) continue;
+    for (const n of nbr(c)) if (d[n] < 0 && !water[n]) { d[n] = d[c] + 1; ws[n] = ws[c]; qq.push(n); }
+  }
+  const falls = [];
+  for (let i = 0; i < g * g; i++) {
+    if (water[i] || d[i] < 1 || d[i] > 6 || biome[i] === SC.Ocean) continue;
+    const drop = ws[i] - landY(height[i]);
+    if (drop > 0) falls.push(drop);
+  }
+  falls.sort((a, b) => a - b);
+  const p90 = falls.length ? falls[Math.floor(0.9 * (falls.length - 1))] : 0;
+  check('ground below a bank is lifted toward the water, not left at its full depth', falls.length === 0 || p90 <= 3.5,
+    falls.length + ' cells within 6 of a bank sit below its water, p90 ' + p90.toFixed(1) + ' blocks down');
+}
+
 // A MIRRORED map must hold water in mirrored places. Both maps leave here as bytes and Eco truncates the
 // water one, so a column can lose most of a block of depth on the way out; where that takes it under a
 // block, Eco fills the column to nothing. The terrain noise under the two halves of a mirrored world is
