@@ -559,7 +559,7 @@
     const OCEAN_DIST = 0.13 * res, EPOW = 1.8;                                    // reach full height ~13% inland -> steeper coasts
     const aboveMid = cls => { const b = ECO_BIOME_ELEV[CN[cls]] || [0.52, 0.62]; return Math.max(0, ((b[0] + b[1]) / 2 - 0.5) * 2); };   // biome target elevation above sea, [0,1]
     const tgt = new Float32Array(n); for (let j = 0; j < n; j++) tgt[j] = land[j] === 1 ? aboveMid(biome[j]) : 0;
-    boxBlurTor(tgt, res, Math.max(3, Math.round(res / 42)), 2);                   // smooth the biome nudge so borders ramp, not step
+    boxBlurTor(tgt, res, Math.max(3, Math.round(res / 27)), 2);                   // smooth the biome nudge so borders ramp, not step
     // Ridged multifractal in [0,1]. Vanilla's elevation is drawn once per Voronoi cell — chunky patches
     // tens of blocks across — so its terraces come out wide. Piling on high octaves here gives detail finer
     // than a terrace band, which just makes the height cross a band every block or two: a dense corduroy
@@ -922,7 +922,16 @@
       //   these constants      6.8   13.4   18.6   (at or below vanilla at every percentile)
       //   vanilla's constants  9.2   17.2   22.8
       const VALLEY_REACH = Math.max(3, Math.round(res / 27));   // ~45 world blocks on a 120-wide world
-      const VALLEY_PASSES = 4, VALLEY_PULL = 0.25;              // shore keeps (1-pull)^passes of its height
+      // 0.45, not 0.25. At 0.25 the ground climbs steadily away from the water — 2.3 blocks up at 6 m and
+      // 4.2 at 20 m on a real map — where vanilla's sits at 0.7-1.1 the whole way out to 40 m. A steady
+      // climb on both sides is what makes a channel read as a trench cut through a plateau, or an aqueduct
+      // where the far side then falls away. At 0.45 the same map reads 0.9 at 6 m and 2.5 at 20 m.
+      //
+      // It does not cost the drama, which was the worry: the worst rise within 20 m keeps a median of 6.4
+      // and a p90 of 13.9, against vanilla's 6.8-7.8 and 11.5-19.5. Pulling harder than this needs a
+      // shorter reach to compensate, and the two together overshoot — at 0.65 with reach res/60 the p90
+      // goes to 27.
+      const VALLEY_PASSES = 4, VALLEY_PULL = 0.45;              // shore keeps (1-pull)^passes of its height
       const dw = new Int32Array(n).fill(-1), near = new Float32Array(n), q = [];
       for (let j = 0; j < n; j++) if (land[j] === 2) { dw[j] = 0; near[j] = wsurf[j]; q.push(j); }
       for (let k = 0; k < q.length; k++) {
