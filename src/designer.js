@@ -468,7 +468,8 @@
   // value/fractal noise over the res grid (toroidal), reusing the painter's hash h2 — for within-biome relief
   function vnR(x, y, P, res) { const fx = x / res * P, fy = y / res * P, x0 = Math.floor(fx), y0 = Math.floor(fy), tx = fx - x0, ty = fy - y0, w = v => ((v % P) + P) % P; const a = h2(w(x0), w(y0)), b = h2(w(x0 + 1), w(y0)), c = h2(w(x0), w(y0 + 1)), e = h2(w(x0 + 1), w(y0 + 1)), sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty); return (a + (b - a) * sx) * (1 - sy) + (c + (e - c) * sx) * sy; }
   function fbmR(x, y, res) { return 0.5 * vnR(x, y, 10, res) + 0.3 * vnR(x, y, 26, res) + 0.2 * vnR(x, y, 64, res); }
-  function imageToMaps(res) {
+  function imageToMaps(res, blocksPerCell) {
+    const BPC = blocksPerCell || 1200 / res;      // a 120-wide world unless told otherwise
     const c = document.createElement('canvas'); c.width = res; c.height = res;
     // Nearest-neighbour upscale for colour (biome) maps so discrete biome colours stay pure — interpolation
     // would blend e.g. blue+white into a false "Grassland/Coast" ring around lakes. Photos use smoothing.
@@ -803,25 +804,41 @@
     // world, 52.9% of shoreline column pairs cleared that — a stone retaining wall around every lake and
     // river. Ramping the bed up to one block under the surface at the shore takes the step under the
     // threshold, and reads as a shallows rather than a tank.
+    //
+    // Away from the edges it DEEPENS, the way vanilla's does. One fixed depth makes every body the same 3.6
+    // blocks however wide it is, so a lake reads as a puddle: measured on a real map, water 20 blocks from
+    // the nearest shore was 3.6 blocks deep where vanilla's rule gives 18.4.
+    //
+    // Vanilla floods inward from the bank, adding `depthChange = 2` to the depth each ring
+    // (VoronoiWorldGenerator, "floodfill to determine depth of water features"), starting at 1 and never
+    // capping. Depth is in heightmap grays and Y = waterLevel + (gray/255*2-1)*(maxGen-waterLevel), so one
+    // gray is 2*(maxGen-waterLevel)/255 — 0.47 blocks on a 60/120 world, which is what BLK already assumes.
+    // Its rings are one block wide and ours are BPC, and its enclosure test is 8-neighbour, so the distance
+    // it deepens by is CHEBYSHEV. Walking 4-neighbour here would run deeper than vanilla, not equal to it.
     {
       const SHELF_CELLS = 3;                    // how far in the shallows reach
       const SHORE_DEPTH = 1.8 * BLK;            // depth right at the bank; below ~1.8 a shore cell can round to no water at all
+      const GRAY = 0.4706 * BLK;                // one unit of vanilla's depth
       const dIn = new Int32Array(n).fill(-1), qs = [];
       for (let j = 0; j < n; j++) if (land[j] !== 2) { dIn[j] = 0; qs.push(j); }
       for (let k = 0; k < qs.length; k++) {
-        const c = qs[k];
-        if (dIn[c] > SHELF_CELLS) continue;
-        for (const nb of nbr4(c)) if (dIn[nb] < 0 && land[nb] === 2) { dIn[nb] = dIn[c] + 1; qs.push(nb); }
+        const c = qs[k], cx = c % res, cy = (c / res) | 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          if (!dx && !dy) continue;
+          const nb = ((cx + dx + res) % res) + ((cy + dy + res) % res) * res;
+          if (dIn[nb] < 0 && land[nb] === 2) { dIn[nb] = dIn[c] + 1; qs.push(nb); }
+        }
       }
       for (let j = 0; j < n; j++) {
         if (land[j] !== 2) continue;
-        // The walk above stops at the shelf edge, so open water keeps dIn = -1. That is the DEEP case, not
-        // the shallow one: reading it as distance 0 shelves the middle of a lake up to shore depth and
-        // drains it, leaving a deep ring around a dry centre.
-        const t = dIn[j] < 0 ? 1 : Math.min(1, Math.max(0, (dIn[j] - 1) / SHELF_CELLS));
+        // The shelf still owns the first few cells — it is what holds the bed-to-bank step under
+        // CliffExtruder's threshold, and vanilla is SHALLOWER than it at the bank (0.5 blocks against 1.8).
+        // Past the point where vanilla's ramp overtakes the shelf, it takes over.
+        const t = Math.min(1, Math.max(0, (dIn[j] - 1) / SHELF_CELLS));
         const s = t * t * (3 - 2 * t);
-        const shore = wsurf[j] - SHORE_DEPTH;
-        bed[j] = Math.max(0.03, shore + (bed[j] - shore) * s);
+        const shelf = SHORE_DEPTH + (3.6 * BLK - SHORE_DEPTH) * s;
+        const vanilla = Math.max(1, 2 * (dIn[j] - 0.5) * BPC - 1) * GRAY;
+        bed[j] = Math.max(0.03, wsurf[j] - Math.max(shelf, vanilla));
       }
     }
     // minimal smoothing — keep the ridged relief steep (just knock off single-pixel noise + shoreline step)
@@ -1583,7 +1600,10 @@
     // paint grid would waste an ~11-block chunk per pixel). Hand-painting over the import opts back out.
     let biomeOut = biomeBin, heightOut = heightBin, waterOut = waterBin, hi = null;
     if (importedImg && !paintedSinceImport) {
-      hi = imageToMaps(IMPORT_RES); biomeOut = hi.biome; heightOut = hi.height;
+      // Water depth follows vanilla's rule, which is defined per world BLOCK, so the import needs to know
+      // how many blocks a cell of its grid covers.
+      const wwCells = ((typeof readForm === 'function' ? (readForm().worldWidth | 0) : 0) || 120) * 10;
+      hi = imageToMaps(IMPORT_RES, wwCells / IMPORT_RES); biomeOut = hi.biome; heightOut = hi.height;
       waterOut = hi.water; anyWater = hi.water.some(v => v > 0);   // enclosed water in the image -> lakes
     }
     // PNGs kept for human inspection only (not read by the mod).
