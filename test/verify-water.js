@@ -63,6 +63,17 @@ function drawDesign(S) {
     const off = Math.round(S * 0.045 * Math.sin(y * 0.16));
     for (let x = Math.round(S * 0.43) + off; x < Math.round(S * 0.46) + off; x++) put(x, y, FRESH);
   }
+  // A channel running ACROSS the slope, at a constant distance from the middle rather than down it. This is
+  // the shape that perches water: the level its uphill bank justifies stands above the ground falling away
+  // on the downhill side. A design where every course runs downhill cannot produce the case at all.
+  for (let a = -0.75; a < 0.75; a += 0.004) {
+    const r = S * 0.30;
+    const x = Math.round(S / 2 + Math.cos(a + 2.4) * r), y = Math.round(S / 2 + Math.sin(a + 2.4) * r);
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const px2 = x + dx, py2 = y + dy;
+      if (px2 >= 0 && px2 < S && py2 >= 0 && py2 < S) put(px2, py2, FRESH);
+    }
+  }
   return { width: S, height: S, data: px };
 }
 
@@ -290,6 +301,37 @@ for (let i = 0; i < g * g; i++) {
   for (const n of nbr(i)) { if (!water[n] || dist[n] < 4) continue; if (Math.abs(waterY(water[i]) - waterY(water[n])) >= 3) midOpen++; }
 }
 check('no wall of water out in open water', midOpen === 0, midOpen + ' such pairs');
+
+// Water must not stand on an EMBANKMENT. Taking the level from the immediate ring alone lets a course
+// running along a slope take the level its uphill bank justifies; the restore then raises the downhill
+// bank to hold it, and the ground beyond falls away — in game, an aqueduct. Measured on a real map, 7.1%
+// of water cells stood more than 2 blocks over the lowest ground within 20 m, and a version that routed
+// courses along contours to lengthen them reached 17.8%, with drops of 10.8 blocks. Vanilla runs 2.4-6.0%.
+// Bounding the level by the average height of the surrounding ground takes this design's figure to 0.
+{
+  const R = Math.max(2, Math.round(20 / (1200 / g)));
+  let cells = 0, perched = 0, worstDrop = 0;
+  for (let i = 0; i < g * g; i++) {
+    if (!water[i]) continue;
+    let lowest = Infinity;
+    const seen = new Uint8Array(g * g), st = [[i, 0]]; seen[i] = 1;
+    while (st.length) {
+      const [c, d] = st.pop(); if (d >= R) continue;
+      for (const n of nbr(c)) {
+        if (seen[n]) continue; seen[n] = 1;
+        if (!water[n] && biome[n] !== SC.Ocean) { const y = landY(height[n]); if (y < lowest) lowest = y; }
+        st.push([n, d + 1]);
+      }
+    }
+    if (!isFinite(lowest)) continue;
+    const drop = waterY(water[i]) - lowest;
+    cells++; if (drop > 2) perched++; if (drop > worstDrop) worstDrop = drop;
+  }
+  const pct = cells ? 100 * perched / cells : 0;
+  check('the water is not standing on an embankment', cells > 0 && pct < 6,
+    perched + ' of ' + cells + ' water cells sit 2+ blocks over the lowest ground within 20 m ('
+    + pct.toFixed(1) + '%), worst ' + worstDrop);
+}
 
 // The first ring of land must be a LIP, not a terrace. Capping it at a fixed height over the water makes
 // the cap bind along most of the shoreline, and every cell it binds ends up at exactly that height — a

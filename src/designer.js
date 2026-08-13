@@ -649,10 +649,19 @@
     // spilling over its bank where it already was. Past ~6 it starts spilling; past ~8 the lake drowns its
     // own outlet and the banks become a trench.
     const BERM = 4 * (1 / 120);
+    // The ring is the immediate bank and nothing else, so a course running along a slope takes a level its
+    // uphill side justifies, the restore raises the downhill bank to hold it, and the ground beyond falls
+    // away — water standing on an embankment, which reads in game as an aqueduct. Bound the level by the
+    // AVERAGE HEIGHT OF THE SURROUNDING GROUND as well, so the water sits down in the landscape it crosses
+    // rather than on top of it. The radius is ~19 m, the distance at which the perch is visible.
+    const around = Float32Array.from(hf);
+    boxBlurTor(around, res, Math.max(1, Math.round(res / 23)), 2);
+    const SETTLE_MARGIN = 4 * (1 / 120);
+    const settle = (lvl, j) => Math.min(lvl, around[j] + SETTLE_MARGIN);
     for (const j of lakeSet) {
       let sum = 0, cnt = 0, mn = Infinity;
       for (const nb of nbr4(j)) if (land[nb] === 1) { sum += hf[nb]; cnt++; if (hf[nb] < mn) mn = hf[nb]; }
-      surf[j] = cnt ? Math.min(sum / cnt, mn + BERM) : Infinity;
+      surf[j] = cnt ? settle(Math.min(sum / cnt, mn + BERM), j) : Infinity;
     }
     // A cell with no shore of its own (mid-lake) has no constraint; give it the body's ring average, bounded
     // the same way. This is what keeps a lake uniform now that nothing is min-propagated — and dropping that
@@ -663,7 +672,7 @@
       for (const j of cells) for (const nb of nbr4(j)) if (land[nb] === 1) { sum += hf[nb]; cnt++; if (hf[nb] < mn) mn = hf[nb]; }
       if (!cnt) continue;
       const ring = Math.min(sum / cnt, mn + BERM);
-      for (const j of cells) if (!isFinite(surf[j])) surf[j] = ring;
+      for (const j of cells) if (!isFinite(surf[j])) surf[j] = settle(ring, j);
     }
     // Open water gets ONE surface per patch, however wide the lake, so the flood cannot ramp across a middle
     // it never reaches — in game that reads as a corrugated bed under otherwise flat water. This is what
