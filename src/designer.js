@@ -656,6 +656,14 @@
     // rather than on top of it. The radius is ~19 m, the distance at which the perch is visible.
     const around = Float32Array.from(hf);
     boxBlurTor(around, res, Math.max(1, Math.round(res / 23)), 2);
+    // The same average over LAND ONLY.  blurs the height field whole, and a water column's
+    // height is its bed, so within a radius of any river the average reads several blocks below the ground
+    // actually there. Anything that bounds a BANK has to compare it against land, not against the channel.
+    const aroundLand = Float32Array.from(hf, (v, j) => land[j] === 1 ? v : 0);
+    const landWeight = Float32Array.from(hf, (_, j) => land[j] === 1 ? 1 : 0);
+    boxBlurTor(aroundLand, res, Math.max(1, Math.round(res / 23)), 2);
+    boxBlurTor(landWeight, res, Math.max(1, Math.round(res / 23)), 2);
+    for (let j = 0; j < n; j++) aroundLand[j] = landWeight[j] > 0.05 ? aroundLand[j] / landWeight[j] : around[j];
     const SETTLE_MARGIN = 4 * (1 / 120);
     const settle = (lvl, j) => Math.min(lvl, around[j] + SETTLE_MARGIN);
     for (const j of lakeSet) {
@@ -904,6 +912,18 @@
       boxBlurTor(soft, res, 1, 1);
       for (let j = 0; j < n; j++) if (land[j] === 1) hf[j] = soft[j] * (1 - CELL_SHARP) + flat[j] * CELL_SHARP;
     }
+    // A real river is not the same on both banks or along its length: the inside of a bend silts up into
+    // a flat point bar, the outside is cut back into a bluff. Everything below relaxes and caps the shore
+    // by the same rule everywhere, so every bank column ends the same height over the water and the
+    // result reads as masonry. This field decides, at low frequency, which stretches keep their bank —
+    // 0 on a beach, 1 on a bluff — and the relax and both caps read it.
+    const BLUFF_KEEP = 8 * BLK;                                  // how much bank a bluff stretch may keep
+    const bluff = new Float32Array(n);
+    for (let j = 0; j < n; j++) {
+      const v = 0.62 * vnR(j % res, (j / res) | 0, 22, res) + 0.38 * vnR(j % res, (j / res) | 0, 57, res);
+      const t = Math.max(0, Math.min(1, (v - 0.26) / 0.30));
+      bluff[j] = t * t * (3 - 2 * t);
+    }
     // Valley the banks — the port of VoronoiWorldGenerator's SMOOTH PASS 2, the block commented "form
     // valleys around rivers and lakes". Vanilla relaxes: several passes, each pulling near-water land a
     // fraction of the way to the water it can see. It never limits a slope; it drags the ground down and
@@ -959,7 +979,12 @@
           if (land[j] !== 1 || dw[j] < 1) continue;
           const s = 1 - dw[j] / VALLEY_REACH;
           if (s <= 0) continue;
-          const t = hf[j] + (near[j] - hf[j]) * VALLEY_PULL * s * s * (3 - 2 * s);
+          // The bluff only spares ground from being pulled DOWN. Sparing it from the lift as well would
+          // leave the low side of a course at its full depth, which is the embankment the lift removes.
+          const ease = s * s * (3 - 2 * s);
+          const down = hf[j] + (near[j] - hf[j]) * VALLEY_PULL * (1 - 0.9 * bluff[j]) * ease;
+          const up   = hf[j] + (near[j] - hf[j]) * VALLEY_PULL * ease;
+          const t = near[j] < hf[j] ? down : up;
           if (t < hf[j]) hf[j] = Math.max(t, near[j] + BLK);     // pull high ground DOWN, never under the water
           // and pull LOW ground up. The pass used to relax in one direction only, so where a course ran
           // past ground below it the fall was left at its full depth, and the bank read as the top of an
@@ -1004,8 +1029,26 @@
     // the highest ground within 3 m of our shores is 2 blocks over the water at p50 where vanilla's is 1.
     // A rim 2 blocks high for the length of a river is what reads as a wall from the water.
     {
-      const SHORE_REACH = Math.max(3, Math.round(res / 75));    // ~16 m of shore
-      const SHORE_RISE = 0.6 * BLK;                             // how far it may climb over that
+      const SHORE_REACH = Math.max(3, Math.round(res / 40));
+      const SHORE_RISE = 0.2 * BLK;
+      // A bluff climbs in about a cell and a half, and it starts a cell BACK from the water rather than at
+      // it. Rising straight off the waterline puts the whole riser in the first 4 m, where vanilla has
+      // almost none (1.5% of columns step 3+ blocks); starting it back moves the riser to 3-7 m, which is
+      // where vanilla's is (3.2% and 2.4%). SETBACK is its own low-frequency field so the risers do not all
+      // land at one distance from the bank — that would be the uniform kerb again, one step out.
+      const BLUFF_REACH = Math.max(2, res / 140), BLUFF_SETBACK = 0.9, SETBACK_VARY = 1.5;
+      // The plain bank needs a metre or two of its own: the bluff field is nearly binary, so without this
+      // every stretch that is not a cliff comes out the same height and the shoreline reads flat.
+      const BANK_VARY = 2 * BLK, BANK_REACH = 2;
+      // The cap used to stop dead at SHORE_REACH and leave the natural ground to resume, which put a ring
+      // of risers ~30 m out around every course — the causeway. This lets it climb to meet that ground.
+      const OUTER_RISE = 8 * BLK, OUTER_POW = 6;
+      const setback = new Float32Array(n), bankv = new Float32Array(n);
+      for (let j = 0; j < n; j++) {
+        const x = j % res, y = (j / res) | 0;
+        setback[j] = vnR(x, y + 5501, 34, res);
+        bankv[j]   = 0.6 * vnR(x + 911, y + 377, 70, res) + 0.4 * vnR(x + 177, y + 733, 161, res);
+      }
       const dl = new Int32Array(n).fill(-1), sw = new Float32Array(n), q = [];
       for (let j = 0; j < n; j++) if (land[j] === 2) { dl[j] = 0; sw[j] = wsurf[j]; q.push(j); }
       for (let k = 0; k < q.length; k++) {
@@ -1015,7 +1058,15 @@
       for (let j = 0; j < n; j++) {
         if (land[j] !== 1 || dl[j] < 1) continue;
         const t = dl[j] / SHORE_REACH;                          // the cap opens out with distance
-        const cap = sw[j] + SHORE_RISE * (0.5 + 1.5 * t * t);
+        const off = BLUFF_SETBACK + SETBACK_VARY * (setback[j] - 0.5);
+        const b = Math.max(0, Math.min(1, (dl[j] - off) / BLUFF_REACH));
+        // A bluff is ground the water cut into, so it can only stand where the land around it already
+        // stands. Bounding by the neighbourhood average keeps it from becoming a levee — a bank higher
+        // than everything behind it, which is the aqueduct the berm and the settle exist to prevent.
+        const cap = Math.max(sw[j] + SHORE_LIP,
+                             Math.min(sw[j] + SHORE_RISE * (0.5 + 1.5 * t * t) + OUTER_RISE * Math.pow(t, OUTER_POW)
+                                      + BANK_VARY * bankv[j] * Math.min(1, dl[j] / BANK_REACH)
+                                      + BLUFF_KEEP * bluff[j] * b * b * (3 - 2 * b), aroundLand[j] + SETTLE_MARGIN));
         if (hf[j] > cap) hf[j] = cap;
       }
     }

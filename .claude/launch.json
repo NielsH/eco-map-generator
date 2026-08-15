@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "map-generator",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8177", "--directory", "C:/Users/micro/Documents/GitHub/eco-map-generator"],
+      "port": 8177
+    },
+    {
+      "name": "map-generator-3d",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8099", "--directory", "C:/Users/micro/Documents/GitHub/eco-map-generator"],
+      "port": 8099
+    }
+  ]
+}
