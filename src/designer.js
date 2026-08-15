@@ -827,7 +827,8 @@
     {
       const SHELF_CELLS = 3;                    // how far in the shallows reach
       const SHORE_DEPTH = 1.2 * BLK;            // depth right at the bank; below ~1.8 a shore cell can round to no water at all
-      const GRAY = 0.4706 * BLK;                // one unit of vanilla's depth
+      const GRAY = 0.4706 * BLK;
+      const BEACH_MIN = 4;                      // rings the water must reach nearby before its edge is beached                // one unit of vanilla's depth
       const dIn = new Int32Array(n).fill(-1), qs = [];
       for (let j = 0; j < n; j++) if (land[j] !== 2) { dIn[j] = 0; qs.push(j); }
       for (let k = 0; k < qs.length; k++) {
@@ -853,7 +854,19 @@
         // the ring dries out on its own, but on sub-block differences, so the two isles of a mirrored world
         // dry different cells: 1107 columns went dry that way and 227 of them had a wet twin. Assigned by
         // distance it is the same on both.
-        if (dIn[j] === 1) { bed[j] = wsurf[j]; continue; }
+        // ...but only where the water can spare the ring. It is 38.5% of all the water on a real map, and a
+        // drawn channel only reaches ring 3 or 4, so beaching it everywhere halves a river — which is what
+        // "the water is missing again" turned out to be. Beach where the body runs at least BEACH_MIN rings
+        // deep nearby; narrower water keeps its shelf and its full width.
+        if (dIn[j] === 1) {
+          let deep = 0;
+          const jx = j % res, jy = (j / res) | 0;
+          for (let dy = -3; dy <= 3 && deep < BEACH_MIN; dy++) for (let dx = -3; dx <= 3; dx++) {
+            const k = ((jx + dx + res) % res) + ((jy + dy + res) % res) * res;
+            if (dIn[k] > deep) deep = dIn[k];
+          }
+          if (deep >= BEACH_MIN) { bed[j] = wsurf[j]; continue; }
+        }
         const t = Math.min(1, Math.max(0, (dIn[j] - 2) / SHELF_CELLS));
         const s = t * t * (3 - 2 * t);
         const shelf = SHORE_DEPTH + (3.6 * BLK - SHORE_DEPTH) * s;

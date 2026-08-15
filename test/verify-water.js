@@ -323,9 +323,26 @@ check('no wall of water out in open water', midOpen === 0, midOpen + ' such pair
 // vanilla's is 0.0. The outermost ring is now a beach, its bed up at the surface, which takes the face to
 // 0.9 / 1.4 against vanilla's 0.5 / 1.4.
 {
+  // Only beside water WIDE enough to be beached. The outer ring is over a third of all the water on a real
+  // map and a drawn channel is only three or four rings across, so beaching every edge halves the rivers —
+  // it has to be spent where the body can spare it, and this check has to ask the same question.
+  const dIn = new Int16Array(g * g).fill(-1), qq = [];
+  for (let i = 0; i < g * g; i++) if (!water[i]) { dIn[i] = 0; qq.push(i); }
+  for (let k = 0; k < qq.length; k++) {
+    const c = qq[k], cx = c % g, cy = (c / g) | 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      if (!dx && !dy) continue;
+      const nb = ((cx + dx + g) % g) + ((cy + dy + g) % g) * g;
+      if (dIn[nb] < 0 && water[nb]) { dIn[nb] = dIn[c] + 1; qq.push(nb); }
+    }
+  }
+  const wideHere = i => { const x = i % g, y = (i / g) | 0;
+    for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++)
+      if (dIn[((x + dx + g) % g) + ((y + dy + g) % g) * g] >= 4) return true;
+    return false; };
   const faces = [];
   for (let i = 0; i < g * g; i++) {
-    if (water[i] || biome[i] === SC.Ocean) continue;
+    if (water[i] || biome[i] === SC.Ocean || !wideHere(i)) continue;
     let bed = Infinity, touches = false;
     for (const n of nbr(i)) if (water[n]) { touches = true; const b = landY(height[n]); if (b < bed) bed = b; }
     if (touches) faces.push(landY(height[i]) - bed);
