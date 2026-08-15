@@ -826,7 +826,7 @@
     // it deepens by is CHEBYSHEV. Walking 4-neighbour here would run deeper than vanilla, not equal to it.
     {
       const SHELF_CELLS = 3;                    // how far in the shallows reach
-      const SHORE_DEPTH = 1.8 * BLK;            // depth right at the bank; below ~1.8 a shore cell can round to no water at all
+      const SHORE_DEPTH = 1.2 * BLK;            // depth right at the bank; below ~1.8 a shore cell can round to no water at all
       const GRAY = 0.4706 * BLK;                // one unit of vanilla's depth
       const dIn = new Int32Array(n).fill(-1), qs = [];
       for (let j = 0; j < n; j++) if (land[j] !== 2) { dIn[j] = 0; qs.push(j); }
@@ -843,7 +843,18 @@
         // The shelf still owns the first few cells — it is what holds the bed-to-bank step under
         // CliffExtruder's threshold, and vanilla is SHALLOWER than it at the bank (0.5 blocks against 1.8).
         // Past the point where vanilla's ramp overtakes the shelf, it takes over.
-        const t = Math.min(1, Math.max(0, (dIn[j] - 1) / SHELF_CELLS));
+        // The outermost ring is a BEACH: its bed comes up to the surface, so it holds no water at all and
+        // the waterline is where the bed meets it. Vanilla's is the same — the depth its flood assigns the
+        // first ring rounds to nothing — and it is the difference between a shore you walk into and a step
+        // down into deep water. Measured, the bank showed 2.8 blocks of face against vanilla's 0.5, because
+        // the water was already 2.4 blocks deep against vanilla's 0.0 the moment it left the land.
+        //
+        // Doing it HERE rather than letting the rounding do it is the point. Below about a block of shelf
+        // the ring dries out on its own, but on sub-block differences, so the two isles of a mirrored world
+        // dry different cells: 1107 columns went dry that way and 227 of them had a wet twin. Assigned by
+        // distance it is the same on both.
+        if (dIn[j] === 1) { bed[j] = wsurf[j]; continue; }
+        const t = Math.min(1, Math.max(0, (dIn[j] - 2) / SHELF_CELLS));
         const s = t * t * (3 - 2 * t);
         const shelf = SHORE_DEPTH + (3.6 * BLK - SHORE_DEPTH) * s;
         const vanilla = Math.max(1, 2 * (dIn[j] - 0.5) * BPC - 1) * GRAY;
