@@ -848,7 +848,13 @@
         const s = t * t * (3 - 2 * t);
         const shelf = SHORE_DEPTH + (3.6 * BLK - SHORE_DEPTH) * s;
         const vanilla = Math.max(1, 2 * (dIn[j] - 0.5) * BPC - 1) * GRAY;
-        bed[j] = Math.max(0.03, wsurf[j] - Math.max(shelf, vanilla));
+        // Vanilla's rule deepens without limit, which is right for vanilla's channels — 6-12 m wide, so it
+        // yields 3-6 blocks. Ours are 16-32 m wide by design, and the same rule yields 8-15: measured
+        // against a real vanilla world, depth p50 3 / p90 9 / max 15 against its 2 / 4 / 11. Cap it, so a
+        // wide river is a wide river rather than a canyon. The cap only ever binds in the middle; the shelf
+        // still owns the shore, which is what the bank is measured against.
+        const MAX_DEPTH = 8 * BLK;
+        bed[j] = Math.max(0.03, wsurf[j] - Math.min(MAX_DEPTH, Math.max(shelf, vanilla)));
       }
     }
     // minimal smoothing — keep the ridged relief steep (just knock off single-pixel noise + shoreline step)
@@ -992,6 +998,26 @@
       let need = -Infinity;
       for (const nb of nbr4(j)) if (land[nb] === 2 && wsurf[nb] > need) need = wsurf[nb];
       if (need > -Infinity && hf[j] < need + SHORE_LIP) hf[j] = need + SHORE_LIP;
+    }
+    // The first few metres of LAND have to stay near the water too. Capping only the ring that touches it
+    // leaves the ground behind free to climb, and read out of a real save that is what the bank actually is:
+    // the highest ground within 3 m of our shores is 2 blocks over the water at p50 where vanilla's is 1.
+    // A rim 2 blocks high for the length of a river is what reads as a wall from the water.
+    {
+      const SHORE_REACH = Math.max(3, Math.round(res / 75));    // ~16 m of shore
+      const SHORE_RISE = 0.6 * BLK;                             // how far it may climb over that
+      const dl = new Int32Array(n).fill(-1), sw = new Float32Array(n), q = [];
+      for (let j = 0; j < n; j++) if (land[j] === 2) { dl[j] = 0; sw[j] = wsurf[j]; q.push(j); }
+      for (let k = 0; k < q.length; k++) {
+        const c = q[k]; if (dl[c] >= SHORE_REACH) continue;
+        for (const nb of nbr4(c)) if (dl[nb] < 0 && land[nb] === 1) { dl[nb] = dl[c] + 1; sw[nb] = sw[c]; q.push(nb); }
+      }
+      for (let j = 0; j < n; j++) {
+        if (land[j] !== 1 || dl[j] < 1) continue;
+        const t = dl[j] / SHORE_REACH;                          // the cap opens out with distance
+        const cap = sw[j] + SHORE_RISE * (0.5 + 1.5 * t * t);
+        if (hf[j] > cap) hf[j] = cap;
+      }
     }
     // finalize: lakes hold water above their (fixed) bed; other land keeps its relief above sea; sea stays deep
     //

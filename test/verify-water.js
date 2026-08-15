@@ -182,13 +182,15 @@ check('water is a sane depth, not a pit', dmin >= 1, dmin + '..' + dmax + ' bloc
   let cells = 0, off = 0, worstOff = 0, atFloor = 0;
   for (let i = 0; i < g * g; i++) {
     if (!water[i] || dIn[i] < 1) continue;
-    const want = Math.max(1.8, Math.max(1, 2 * ((dIn[i] - 0.5) * BPC) - 1) * 0.4706);
+    // Capped at 8 blocks. Vanilla's rule deepens without limit, which suits channels 6-12 m wide; ours are
+    // 16-32 m by design and the same rule takes them to 15, against vanilla's own measured max of 11.
+    const want = Math.min(8, Math.max(1.8, Math.max(1, 2 * ((dIn[i] - 0.5) * BPC) - 1) * 0.4706));
     if (waterY(water[i]) - want < 4) { atFloor++; continue; }   // vanilla bottoms out here too
     const d = Math.abs((waterY(water[i]) - landY(height[i])) - want);
     cells++; off += d; if (d > worstOff) worstOff = d;
   }
   const avg = cells ? off / cells : 99;
-  check('depth follows vanilla, deepening away from the bank', cells > 0 && avg < 1.5,
+  check('depth follows vanilla up to the cap, deepening away from the bank', cells > 0 && avg < 1.5,
     'off vanilla by ' + avg.toFixed(2) + ' blocks on average, worst ' + worstOff.toFixed(1)
     + ' (' + cells + ' cells, ' + atFloor + ' at the world floor)');
 }
