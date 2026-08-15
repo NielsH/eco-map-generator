@@ -9725,30 +9725,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
         // The shelf still owns the first few cells — it is what holds the bed-to-bank step under
         // CliffExtruder's threshold, and vanilla is SHALLOWER than it at the bank (0.5 blocks against 1.8).
         // Past the point where vanilla's ramp overtakes the shelf, it takes over.
-        // The outermost ring is a BEACH: its bed comes up to the surface, so it holds no water at all and
-        // the waterline is where the bed meets it. Vanilla's is the same — the depth its flood assigns the
-        // first ring rounds to nothing — and it is the difference between a shore you walk into and a step
-        // down into deep water. Measured, the bank showed 2.8 blocks of face against vanilla's 0.5, because
-        // the water was already 2.4 blocks deep against vanilla's 0.0 the moment it left the land.
-        //
-        // Doing it HERE rather than letting the rounding do it is the point. Below about a block of shelf
-        // the ring dries out on its own, but on sub-block differences, so the two isles of a mirrored world
-        // dry different cells: 1107 columns went dry that way and 227 of them had a wet twin. Assigned by
-        // distance it is the same on both.
-        // ...but only where the water can spare the ring. It is 38.5% of all the water on a real map, and a
-        // drawn channel only reaches ring 3 or 4, so beaching it everywhere halves a river — which is what
-        // "the water is missing again" turned out to be. Beach where the body runs at least BEACH_MIN rings
-        // deep nearby; narrower water keeps its shelf and its full width.
-        if (dIn[j] === 1) {
-          let deep = 0;
-          const jx = j % res, jy = (j / res) | 0;
-          for (let dy = -3; dy <= 3 && deep < BEACH_MIN; dy++) for (let dx = -3; dx <= 3; dx++) {
-            const k = ((jx + dx + res) % res) + ((jy + dy + res) % res) * res;
-            if (dIn[k] > deep) deep = dIn[k];
-          }
-          if (deep >= BEACH_MIN) { bed[j] = wsurf[j]; continue; }
-        }
-        const t = Math.min(1, Math.max(0, (dIn[j] - 2) / SHELF_CELLS));
+        const t = Math.min(1, Math.max(0, (dIn[j] - 1) / SHELF_CELLS));
         const s = t * t * (3 - 2 * t);
         const shelf = SHORE_DEPTH + (3.6 * BLK - SHORE_DEPTH) * s;
         const vanilla = Math.max(1, 2 * (dIn[j] - 0.5) * BPC - 1) * GRAY;
