@@ -152,8 +152,18 @@ for (let i = 0; i < g * g; i++) {
 }
 check('water never sits above the land beside it', over === 0, over + ' cells (worst ' + worst + ' blocks)');
 
+// The outermost ring is a beach and holds nothing on purpose — its bed comes up to meet the surface, the
+// way vanilla's waterline does — so the depth is measured from the first ring IN of it.
 let dmin = Infinity, dmax = -Infinity;
-for (let i = 0; i < g * g; i++) if (water[i]) { const d = waterY(water[i]) - landY(height[i]); if (d < dmin) dmin = d; if (d > dmax) dmax = d; }
+const onShore = i => {                                    // 8-neighbour, as the shelf assigns it
+  const x = i % g, y = (i / g) | 0;
+  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+    if (!dx && !dy) continue;
+    if (!water[((x + dx + g) % g) + ((y + dy + g) % g) * g]) return true;
+  }
+  return false;
+};
+for (let i = 0; i < g * g; i++) if (water[i] && !onShore(i)) { const d = waterY(water[i]) - landY(height[i]); if (d < dmin) dmin = d; if (d > dmax) dmax = d; }
 // 2, not 1. A column holding a single block of water reads as a wet patch rather than a river, and the
 // export loses up to a block of depth to byte quantisation on the way out, so the floor has to be set
 // after that rounding rather than before it. On a real map this took the columns holding under 2 blocks
@@ -305,6 +315,27 @@ for (let i = 0; i < g * g; i++) {
   for (const n of nbr(i)) { if (!water[n] || dist[n] < 4) continue; if (Math.abs(waterY(water[i]) - waterY(water[n])) >= 3) midOpen++; }
 }
 check('no wall of water out in open water', midOpen === 0, midOpen + ' such pairs');
+
+// The bank must not show a WALL of itself above the water's bed. What a player sees at the edge is not the
+// ring's height over the surface — that is under half a block — but its height over the BED beside it, and
+// the bed used to drop straight to full depth: measured on a real map the bank showed 2.8 blocks of face at
+// p50 against vanilla's 0.5, because the water was 2.4 blocks deep the moment it left the land where
+// vanilla's is 0.0. The outermost ring is now a beach, its bed up at the surface, which takes the face to
+// 0.9 / 1.4 against vanilla's 0.5 / 1.4.
+{
+  const faces = [];
+  for (let i = 0; i < g * g; i++) {
+    if (water[i] || biome[i] === SC.Ocean) continue;
+    let bed = Infinity, touches = false;
+    for (const n of nbr(i)) if (water[n]) { touches = true; const b = landY(height[n]); if (b < bed) bed = b; }
+    if (touches) faces.push(landY(height[i]) - bed);
+  }
+  faces.sort((a, b) => a - b);
+  const p90 = faces.length ? faces[Math.floor(0.9 * (faces.length - 1))] : 0;
+  check('the bank shows no wall of itself above the bed', faces.length > 0 && p90 <= 2,
+    'bank face p50 ' + faces[Math.floor(0.5 * (faces.length - 1))].toFixed(1) + ', p90 ' + p90.toFixed(1)
+    + ' blocks over the bed beside it (' + faces.length + ' cells)');
+}
 
 // The ring touching the water must not stand proud of the ground BEHIND it. Its own height is decided by
 // the water in front — floored just over the surface so it holds the water in — while the ground behind is
