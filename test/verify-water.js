@@ -388,13 +388,37 @@ check('no wall of water out in open water', midOpen === 0, midOpen + ' such pair
     lopsided + ' of ' + wet + ' water columns are wet on one side and dry on its mirror');
 }
 
-// The ground NEAR the water must be near its level, which is what stops a channel reading as a trench cut
-// through a plateau. This is different from the trench check further down: that one bounds the worst rise
-// anywhere within 20 m, so it still passes when the ground climbs steadily the whole way, and a steady
-// climb away from the water on both sides is exactly what makes a river look like an aqueduct in game.
-// Vanilla's ground averages 0.7-1.1 blocks over its water from 3 m out to 40 m — flat, with the drama
-// somewhere else. A real map measured 2.3 blocks at 6 m and 4.2 at 20 m before the valley pull was raised,
-// and 0.9 / 2.5 after.
+// The ground NEAR the water must sit close to its level on BOTH sides of that level. Climbing away from
+// the water without stopping is a trench cut through a plateau; being left UNDER the water line is an
+// aqueduct, with the field falling away beside the course. This is different from the trench check
+// further down, which bounds the worst rise anywhere within 20 m and so still passes when the ground
+// climbs steadily the whole way.
+//
+// Height over FRESH water by distance, measured on eight stock worlds (seven 1200² seeds plus a 720²
+// real save) — min-max across them:
+//        1 m      3 m      6 m     10 m     15 m     20 m     30 m     40 m
+//     0.2-0.4  0.5-0.8  1.1-1.8  1.8-2.7  1.9-2.8  1.8-2.7  1.6-2.7  1.5-2.8
+// A valley that climbs for about 10 m and then plateaus. Over the 6-20 m band that is a mean of 1.8-2.7
+// blocks, a p90 of 3-7, and 1.7-6.1% of the land sitting below the water line.
+//
+// Those absolute numbers do NOT transfer to this suite. Its map is a cone with a course drawn down it,
+// far steeper than anything the generator makes, and the design reads about twice vanilla's height at
+// every percentile here (p90 10 against vanilla's 3-7). So the two bounds are calibrated on this map's own
+// behaviour and assert a shape rather than vanilla's figures:
+//   * p90 <= 14 blocks — the band does not climb away into a wall;
+//   * under 1.5% of it below the water — the ground beside the course is not left under the water it is
+//     holding. Deliberately TIGHTER than vanilla's 1.7-6.1%, and it would fail vanilla's own worlds:
+//     vanilla's rivers run through terrain that was already low, this map's are drawn down a cone, so
+//     any sunken ground here is ground nothing lifted. Further out it may sink, and the rim check above
+//     requires exactly that at 23-70 m; this band is where the relaxation is supposed to have run.
+//
+// What was here before was a mean under 5, justified by a vanilla figure of "0.7-1.1 blocks flat from
+// 3 m out to 40 m" that no world measures — the profile above is what eight of them measure. It also had
+// no teeth: the mean reads 4.5 on this design and 4.5 again with the valley relaxation deleted outright,
+// because that pass barely moves ground already above the water and only the sunken side changes, so the
+// two cancel. Scores now — this design 10 / 0.2%, a valley-profiled candidate 12 / 0.0%, no valley pass
+// at all 10 / 4.8%, pull-down-only 10 / 4.8%, and two variants that let the bank climb straight to the
+// hillside 16 / 0.2% and 23 / 0.2%.
 {
   const mpc = 1200 / g;
   const d = new Int16Array(g * g).fill(-1), ws = new Float32Array(g * g), qq = [];
@@ -403,15 +427,19 @@ check('no wall of water out in open water', midOpen === 0, midOpen + ' such pair
     const c = qq[k]; if (d[c] * mpc >= 24) continue;
     for (const n of nbr(c)) if (d[n] < 0 && !water[n]) { d[n] = d[c] + 1; ws[n] = ws[c]; qq.push(n); }
   }
-  let sum = 0, cnt = 0;
+  const rise = [];
   for (let i = 0; i < g * g; i++) {
     if (water[i] || d[i] < 1 || biome[i] === SC.Ocean) continue;
     const m = d[i] * mpc; if (m < 6 || m > 20) continue;
-    sum += landY(height[i]) - ws[i]; cnt++;
+    rise.push(landY(height[i]) - ws[i]);
   }
-  const avg = cnt ? sum / cnt : 99;
-  check('the ground beside the water is near its level', cnt > 0 && avg < 5,
-    'land 6-20 m out averages ' + avg.toFixed(1) + ' blocks over the water (' + cnt + ' cells)');
+  rise.sort((a, b) => a - b);
+  const p90 = rise.length ? rise[Math.floor(0.9 * (rise.length - 1))] : 99;
+  const sunk = rise.filter(v => v < 0).length;
+  const pct = rise.length ? 100 * sunk / rise.length : 99;
+  check('the ground beside the water is near its level', rise.length > 0 && p90 <= 14 && pct < 1.5,
+    'land 6-20 m out: p90 ' + p90 + ' blocks over the water, ' + sunk + ' of ' + rise.length
+    + ' cells (' + pct.toFixed(1) + '%) below it');
 }
 
 // Water must not stand on an EMBANKMENT. Taking the level from the immediate ring alone lets a course
