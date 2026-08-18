@@ -640,6 +640,21 @@
     // immediate ring alone (raising just that ring), and lets the ground beyond do as it likes.
     const surf = new Float32Array(n).fill(Infinity); const lakeSet = new Set();
     for (const cells of groups) for (const j of cells) lakeSet.add(j);
+    // Fresh water near the sea has to arrive AT it. Vanilla routes every river downhill until it hits an
+    // ocean cell and then walks the segment back from that mouth with `endElevation = Math.Max(0f, ...)`
+    // (VoronoiWorldGenerator, "ensure the elevation changes are valid"), so a mouth is pinned to sea level
+    // by construction. A painted channel has no router: it takes its level from whatever banks it happens
+    // to have, so a course drawn along a coast carries its inland level right past the sea and ends up
+    // perched, with its own bank walling the sea out. Measured on a real authored world, one stretch sat
+    // 6 blocks over a sea 20 m away — and 230 m away from its own outlet, so nothing that follows the
+    // CHANNEL can see the problem. The bound therefore reads distance to the SEA, which distO already has.
+    //
+    // Its shape is vanilla's own envelope, measured over four seeds as the highest fresh water at a given
+    // distance from the sea: at most +1 to +3 out to 30 m, +5 to +7 by 40, +7 to +11 by 50 and flat after.
+    const COAST_FLAT = 22, COAST_GRADE = 0.4;          // blocks of sea-level shelf, then blocks gained per block inland
+    const LEVEL_DROP = 0.012;                          // the step taken off `level` when it becomes a surface, below
+    const seaCap = j => 0.5 + LEVEL_DROP + (1 + Math.max(0, distO[j] * BPC - COAST_FLAT) * COAST_GRADE) * (1 / 120);
+    const mouth = new Uint8Array(n);                   // cells the bound actually bit on — the body's outlets
     // The average is bounded by how much containment it may build. Vanilla can use the average outright
     // because its rims are near flat — cell noise with no local gradient — so `lakeElevation + 0.01` raises
     // a cell or two. On a sloped authored rim the average can sit many blocks over the low side, and holding
@@ -665,7 +680,7 @@
     boxBlurTor(landWeight, res, Math.max(1, Math.round(res / 23)), 2);
     for (let j = 0; j < n; j++) aroundLand[j] = landWeight[j] > 0.05 ? aroundLand[j] / landWeight[j] : around[j];
     const SETTLE_MARGIN = 4 * (1 / 120);
-    const settle = (lvl, j) => Math.min(lvl, around[j] + SETTLE_MARGIN);
+    const settle = (lvl, j) => { const v = Math.min(lvl, around[j] + SETTLE_MARGIN), c = seaCap(j); if (c >= v) return v; mouth[j] = 1; return c; };
     for (const j of lakeSet) {
       let sum = 0, cnt = 0, mn = Infinity;
       for (const nb of nbr4(j)) if (land[nb] === 1) { sum += hf[nb]; cnt++; if (hf[nb] < mn) mn = hf[nb]; }
@@ -702,8 +717,12 @@
           const c = stack.pop(); patch.push(c); sum += surf[c];
           for (const nb of nbr4(c)) if (fromShore[nb] >= OPEN_WATER && lakeSet.has(nb) && !seen.has(nb)) { seen.add(nb); stack.push(nb); }
         }
-        let pmn = Infinity; for (const j of patch) if (surf[j] < pmn) pmn = surf[j];
-        const lv = Math.min(sum / patch.length, pmn + BERM);                   // the patch's average, bounded like the rest
+        let pmn = Infinity, pcap = Infinity;
+        for (const j of patch) { if (surf[j] < pmn) pmn = surf[j]; const c = seaCap(j); if (c < pcap) pcap = c; }
+        // Bounded by the coast the same way a shore cell is, but by the TIGHTEST bound over the patch, so
+        // open water keeps the single flat level the rest of the pass exists to give it.
+        const lv = Math.min(sum / patch.length, pmn + BERM, pcap);             // the patch's average, bounded like the rest
+        if (pcap <= lv) for (const j of patch) mouth[j] = 1;
         for (const j of patch) surf[j] = lv;
         // pull the surrounding shallows to it too, so the rim does not stand above the middle
         for (const j of patch) for (const nb of nbr4(j)) if (lakeSet.has(nb) && fromShore[nb] < OPEN_WATER && surf[nb] > lv) surf[nb] = lv;
@@ -729,11 +748,19 @@
     const level = new Float32Array(n);
     for (const cells of groups) {
       let start = cells[0]; for (const j of cells) if (surfOf(j) < surfOf(start)) start = j;
-      const inGroup = new Set(cells), done = new Set([start]);
-      level[start] = surfOf(start);
-      const heap = [[level[start], start]];                                   // binary min-heap on assigned level
+      const inGroup = new Set(cells), done = new Set();
+      const heap = [];                                                        // binary min-heap on assigned level
       const push = (k, v) => { heap.push([k, v]); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
       const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
+      // A body has as many mouths as it has places where the coast bound bites, not one. Flooding from the
+      // single lowest cell makes the level non-decreasing along the CHANNEL from that one point, which is
+      // why a course that runs back out to the coast 230 m downstream carries its inland level with it —
+      // the bound on `surf` there is simply overwritten by the parent's. Seeding every such cell and always
+      // expanding the lowest gives each cell the lowest level any mouth can justify, so the stretch beside
+      // the sea descends into it and only the water between two mouths keeps the higher of them.
+      const seed = j => { if (done.has(j)) return; done.add(j); level[j] = surfOf(j); push(level[j], j); };
+      seed(start);
+      for (const j of cells) if (mouth[j]) seed(j);
       while (heap.length) {
         const [, c] = pop();
         for (const nb of nbr4(c)) {
@@ -880,7 +907,7 @@
     // alone, which keeps coastlines smooth instead of stepping them.
     {
       const CELL_SPACING = 6.5;     // cells across, in import cells (~17 world blocks, close to vanilla's)
-      const CELL_SHARP = 0.25;      // how much of the hard cell edge survives the smoothing
+      const CELL_SHARP = 0.90;      // how much of the hard cell edge survives the smoothing
       const cells = Math.max(1, Math.round(res / CELL_SPACING)), cw = res / cells;
       const wrapC = v => ((v % cells) + cells) % cells;
       const siteX = new Float32Array(cells * cells), siteY = new Float32Array(cells * cells);
@@ -917,7 +944,47 @@
     // by the same rule everywhere, so every bank column ends the same height over the water and the
     // result reads as masonry. This field decides, at low frequency, which stretches keep their bank —
     // 0 on a beach, 1 on a bluff — and the relax and both caps read it.
-    const BLUFF_KEEP = 8 * BLK;                                  // how much bank a bluff stretch may keep
+    // A river corridor is a VALLEY: the ground climbs away from the water and levels off a few blocks up.
+    // Measured over five vanilla worlds it reaches 2.2-2.8 blocks and gets its third block within 7-8 m,
+    // and on none of them does a bank stand over the ground behind it (0.2-0.5% of shore rays). Ours had
+    // no such profile of its own — the relax below aimed at the WATER and the cap held the first 30 m
+    // within half a block of it, so the corridor was only a valley where the bluff field happened to spare
+    // it, and flat everywhere else. On the flat stretches the ring beside the water is held at the surface
+    // while the ground behind sits at 0.34 blocks over it, and that step is the ledge: 18% of shore rays.
+    // So give the corridor the profile explicitly, and let the relax, the lift and the cap all read it.
+    // One profile applied everywhere is still uniformity, and it renders as concentric shelving — every
+    // bank climbing at the same steady rate for the same distance draws a contour line at each block.
+    // Vanilla's AVERAGE profile is a smooth ramp, but ray by ray it is not: a fifth of its banks gain
+    // nothing at all over 14 m, a seventh gain five blocks or more, and the climbing is over by ~8 m
+    // (the chance of a riser falls 28% -> 8% between 1 m and 9 m out). Averaging many such banks smears
+    // them into the ramp; imposing the ramp back onto every bank is what built the terraces.
+    //
+    // So the shoulder height and the distance it takes are low-frequency FIELDS, read at the water and
+    // carried inland with the distance transform, which is what keeps a stretch coherent: a flat reach is
+    // flat for its whole depth and a steep one is steep for its whole depth, rather than every bank being
+    // the average of the two. The floor is not zero — a bank still has to clear the ring beside the water,
+    // or the ledge comes back.
+    const VALLEY_SHOULDER_MIN = 0.6 * BLK, VALLEY_SHOULDER_MAX = 6 * BLK;
+    const VALLEY_RISE_MIN = 3, VALLEY_RISE_MAX = 6;   // cells, ~2.7 world blocks each
+    const vshF = new Float32Array(n), vrsF = new Float32Array(n);
+    for (let j = 0; j < n; j++) {
+      const x = j % res, y = (j / res) | 0;
+      // How far up a bank climbs is set by WHAT IS BEHIND IT, not by a constant. Split vanilla's shores by
+      // how high the land 25-45 m back stands over the water, and its 14 m climb tracks it: where that land
+      // is at or below the water it gains 0.9-1.4 blocks, at +3..4 it gains 2.5-2.7, at +7 and up 3.6-5.9.
+      // A fixed shoulder cannot do that — it terraces the flat stretches to reach a height nothing behind
+      // them justifies, and under-builds the steep ones. aroundLand is already the local land average, so
+      // aim a fraction of the way up to it, with a low-frequency jitter so neighbouring reaches differ.
+      const jit = 0.6 + 0.800 * (0.62 * vnR(x + 1301, y + 907, 17, res) + 0.38 * vnR(x + 613, y + 2207, 41, res));
+      const up = (aroundLand[j] - wsurf[j]) * 0.2 * jit;
+      vshF[j] = Math.max(VALLEY_SHOULDER_MIN, Math.min(VALLEY_SHOULDER_MAX, up));
+      vrsF[j] = VALLEY_RISE_MIN + (VALLEY_RISE_MAX - VALLEY_RISE_MIN) * vnR(x + 4409, y + 1811, 23, res);
+    }
+    const valleyAt = (d, sh, rs) => sh * Math.min(1, d / rs);
+    // Three blocks, not eight. The bluff allowance is now on TOP of a corridor that already rises, and at
+    // eight the near-river ground averaged 5.8 blocks over the water where vanilla runs 2-3, and the extra
+    // relief came out as evenly-spaced single-block risers (72% of them, against vanilla's 68-81%).
+    const BLUFF_KEEP = 3 * BLK;                                  // how much bank a bluff stretch may keep
     const bluff = new Float32Array(n);
     for (let j = 0; j < n; j++) {
       const v = 0.62 * vnR(j % res, (j / res) | 0, 22, res) + 0.38 * vnR(j % res, (j / res) | 0, 57, res);
@@ -958,19 +1025,14 @@
       // and a p90 of 13.9, against vanilla's 6.8-7.8 and 11.5-19.5. Pulling harder than this needs a
       // shorter reach to compensate, and the two together overshoot — at 0.65 with reach res/60 the p90
       // goes to 27.
-      // How far under the water the lifted ground stops. At a full block it leaves a kerb: the ring
-      // touching the water is floored just OVER the surface, so ground behind it that stops a block UNDER
-      // the surface is a block and a half lower, and the bank stands proud of the field behind it — which
-      // is not what a bank does. Measured on a real map, the ring stood 0.94 blocks over the ground behind
-      // it at p90 and 2.4 at worst, against vanilla's 0.00 and 1.4; at 0.2 it is 0.47 and 1.4.
-      const LIFT_CEIL = 0.2 * BLK;
       const VALLEY_PASSES = 4, VALLEY_PULL = 0.45;              // shore keeps (1-pull)^passes of its height
       const dw = new Int32Array(n).fill(-1), near = new Float32Array(n), q = [];
-      for (let j = 0; j < n; j++) if (land[j] === 2) { dw[j] = 0; near[j] = wsurf[j]; q.push(j); }
+      const nsh = new Float32Array(n), nrs = new Float32Array(n);
+      for (let j = 0; j < n; j++) if (land[j] === 2) { dw[j] = 0; near[j] = wsurf[j]; nsh[j] = vshF[j]; nrs[j] = vrsF[j]; q.push(j); }
       for (let k = 0; k < q.length; k++) {
         const c = q[k];
         if (dw[c] >= VALLEY_REACH) continue;
-        for (const nb of nbr4(c)) if (dw[nb] < 0 && land[nb] === 1) { dw[nb] = dw[c] + 1; near[nb] = near[c]; q.push(nb); }
+        for (const nb of nbr4(c)) if (dw[nb] < 0 && land[nb] === 1) { dw[nb] = dw[c] + 1; near[nb] = near[c]; nsh[nb] = nsh[c]; nrs[nb] = nrs[c]; q.push(nb); }
       }
       // Vanilla widens its window a step per pass; at import resolution those steps land as visible bands,
       // so the pull falls off smoothly with distance instead — same concave profile, no rings.
@@ -982,16 +1044,21 @@
           // The bluff only spares ground from being pulled DOWN. Sparing it from the lift as well would
           // leave the low side of a course at its full depth, which is the embankment the lift removes.
           const ease = s * s * (3 - 2 * s);
-          const down = hf[j] + (near[j] - hf[j]) * VALLEY_PULL * (1 - 0.9 * bluff[j]) * ease;
-          const up   = hf[j] + (near[j] - hf[j]) * VALLEY_PULL * ease;
-          const t = near[j] < hf[j] ? down : up;
-          if (t < hf[j]) hf[j] = Math.max(t, near[j] + BLK);     // pull high ground DOWN, never under the water
-          // and pull LOW ground up. The pass used to relax in one direction only, so where a course ran
-          // past ground below it the fall was left at its full depth, and the bank read as the top of an
-          // embankment from the low side. Raising it is capped a block UNDER the water, so the ground
-          // beyond a bank may still lie below the water line — which is the thing that makes authored
-          // water sit in the landscape rather than in a bowl, and is worth keeping.
-          else if (t > hf[j]) hf[j] = Math.min(t, near[j] - LIFT_CEIL);
+          const aim = near[j] + valleyAt(dw[j], nsh[j], nrs[j]); // this stretch's shoulder, not the water line
+          if (hf[j] > aim) {
+            const t = hf[j] + (aim - hf[j]) * VALLEY_PULL * (1 - 0.9 * bluff[j]) * ease;
+            hf[j] = Math.max(t, near[j] + BLK);                  // pull high ground DOWN, never under the water
+          }
+          // and pull LOW ground up, to the same shoulder. It used to stop a fifth of a block UNDER the
+          // water so that the ground beyond a bank could still lie below the water line, and that is what
+          // the ledge was made of: the mod holds the ring beside the water at the surface, so a corridor
+          // sitting just under it steps up at the bank and never climbs again. Measured on the rays that
+          // stood proud, the ground behind the crest averaged 0.34 blocks over the water and stayed there
+          // for the whole 16 m — the water was perched and the bank was what held it in.
+          else if (hf[j] < aim) {
+            const t = hf[j] + (aim - hf[j]) * VALLEY_PULL * ease;
+            hf[j] = Math.min(t, aim);
+          }
         }
       }
     }
@@ -1039,7 +1106,7 @@
       const BLUFF_REACH = Math.max(2, res / 140), BLUFF_SETBACK = 0.9, SETBACK_VARY = 1.5;
       // The plain bank needs a metre or two of its own: the bluff field is nearly binary, so without this
       // every stretch that is not a cliff comes out the same height and the shoreline reads flat.
-      const BANK_VARY = 2 * BLK, BANK_REACH = 2;
+      const BANK_VARY = 1 * BLK, BANK_REACH = 2;
       // The cap used to stop dead at SHORE_REACH and leave the natural ground to resume, which put a ring
       // of risers ~30 m out around every course — the causeway. This lets it climb to meet that ground.
       const OUTER_RISE = 8 * BLK, OUTER_POW = 6;
@@ -1050,10 +1117,11 @@
         bankv[j]   = 0.6 * vnR(x + 911, y + 377, 70, res) + 0.4 * vnR(x + 177, y + 733, 161, res);
       }
       const dl = new Int32Array(n).fill(-1), sw = new Float32Array(n), q = [];
-      for (let j = 0; j < n; j++) if (land[j] === 2) { dl[j] = 0; sw[j] = wsurf[j]; q.push(j); }
+      const csh = new Float32Array(n), crs = new Float32Array(n);
+      for (let j = 0; j < n; j++) if (land[j] === 2) { dl[j] = 0; sw[j] = wsurf[j]; csh[j] = vshF[j]; crs[j] = vrsF[j]; q.push(j); }
       for (let k = 0; k < q.length; k++) {
         const c = q[k]; if (dl[c] >= SHORE_REACH) continue;
-        for (const nb of nbr4(c)) if (dl[nb] < 0 && land[nb] === 1) { dl[nb] = dl[c] + 1; sw[nb] = sw[c]; q.push(nb); }
+        for (const nb of nbr4(c)) if (dl[nb] < 0 && land[nb] === 1) { dl[nb] = dl[c] + 1; sw[nb] = sw[c]; csh[nb] = csh[c]; crs[nb] = crs[c]; q.push(nb); }
       }
       for (let j = 0; j < n; j++) {
         if (land[j] !== 1 || dl[j] < 1) continue;
@@ -1064,10 +1132,81 @@
         // stands. Bounding by the neighbourhood average keeps it from becoming a levee — a bank higher
         // than everything behind it, which is the aqueduct the berm and the settle exist to prevent.
         const cap = Math.max(sw[j] + SHORE_LIP,
-                             Math.min(sw[j] + SHORE_RISE * (0.5 + 1.5 * t * t) + OUTER_RISE * Math.pow(t, OUTER_POW)
+                             Math.min(sw[j] + SHORE_RISE * (0.5 + 1.5 * t * t) + valleyAt(dl[j], csh[j], crs[j]) + OUTER_RISE * Math.pow(t, OUTER_POW)
                                       + BANK_VARY * bankv[j] * Math.min(1, dl[j] / BANK_REACH)
                                       + BLUFF_KEEP * bluff[j] * b * b * (3 - 2 * b), aroundLand[j] + SETTLE_MARGIN));
         if (hf[j] > cap) hf[j] = cap;
+      }
+    }
+    // Snap the shaped corridor back onto the same cells the rest of the land uses.
+    //
+    // Vanilla relaxes its river valleys on POLYGONS — one height per Voronoi cell — so its corridor is
+    // made of cell-sized plateaus and the rise is concentrated on cell boundaries, which are irregular and
+    // in a different place on every stretch. Ours relaxes per import cell (2.7 world blocks), which leaves
+    // the corridor a smooth function of distance-to-water: every block of height then draws its own contour
+    // line parallel to the river, and the bank reads as rice terraces. Measured, a 14 m walk inland crossed
+    // 3.0 separate risers against vanilla's 1.8-2.1, at the same total height gained.
+    //
+    // The ring of land next to the water keeps whatever the passes above gave it — that shape is what stops
+    // the bank being a kerb — and cells sited inside that ring are left alone rather than dragging it up.
+    {
+      const CELL2_SHARP = 0.6, CELL2_KEEP = 1;
+      const CELL2_FLOOR = 0.35 * BLK, CELL2_REACH = 8;
+      const dwc = new Int32Array(n).fill(-1), cws = new Float32Array(n), q2 = [];
+      for (let j = 0; j < n; j++) if (land[j] === 2) { dwc[j] = 0; cws[j] = wsurf[j]; q2.push(j); }
+      for (let k = 0; k < q2.length; k++) { const c = q2[k]; if (dwc[c] >= CELL2_REACH) continue;
+        for (const nb of nbr4(c)) if (dwc[nb] < 0) { dwc[nb] = dwc[c] + 1; cws[nb] = cws[c]; q2.push(nb); } }
+      const CELL_SPACING2 = 6.5;
+      const cells = Math.max(1, Math.round(res / CELL_SPACING2)), cw = res / cells;
+      const wrapC = v => ((v % cells) + cells) % cells;
+      const siteX = new Float32Array(cells * cells), siteY = new Float32Array(cells * cells);
+      const siteV = new Float32Array(cells * cells), siteOk = new Uint8Array(cells * cells);
+      for (let cy = 0; cy < cells; cy++) for (let cx = 0; cx < cells; cx++) {
+        const c = cy * cells + cx;
+        const px = (cx + h2(cx, cy)) * cw, py = (cy + h2(cx + 7777, cy + 3333)) * cw;
+        siteX[c] = px; siteY[c] = py;
+        const ix = Math.min(res - 1, px | 0), iy = Math.min(res - 1, py | 0), si = iy * res + ix;
+        if (land[si] === 1 && (dwc[si] < 0 || dwc[si] > CELL2_KEEP)) { siteV[c] = hf[si]; siteOk[c] = 1; }
+      }
+      const flat = new Float32Array(hf);
+      const wrapD = (a, b) => { const d = Math.abs(a - b); return d > res / 2 ? res - d : d; };
+      for (let y = 0; y < res; y++) for (let x = 0; x < res; x++) {
+        const j = y * res + x;
+        if (land[j] !== 1 || (dwc[j] >= 0 && dwc[j] <= CELL2_KEEP)) continue;
+        const gx = Math.floor(x / cw), gy = Math.floor(y / cw);
+        let best = -1, bd = Infinity;
+        for (let oy = -2; oy <= 2; oy++) for (let ox = -2; ox <= 2; ox++) {
+          const c = wrapC(gy + oy) * cells + wrapC(gx + ox);
+          if (!siteOk[c]) continue;
+          const dx = wrapD(x, siteX[c]), dy = wrapD(y, siteY[c]), d = dx * dx + dy * dy;
+          if (d < bd) { bd = d; best = c; }
+        }
+        if (best >= 0) flat[j] = siteV[best];
+      }
+      const soft = new Float32Array(flat);
+      boxBlurTor(soft, res, 1, 1);
+      // Only the FINE structure is snapped. A cell is 17 blocks across, so on a valley wall one site can
+      // stand ten blocks above the ground beside the water, and taking it whole would put the trench and
+      // the rim straight back. Holding the move to about one terrace band keeps the macro shape the passes
+      // above worked out and still gathers the metre-scale wobble into flat treads with the rise on the
+      // cell boundary.
+      const CELL2_MOVE = 2.5 * BLK;
+      for (let j = 0; j < n; j++) {
+        if (land[j] !== 1 || (dwc[j] >= 0 && dwc[j] <= CELL2_KEEP)) continue;
+        const want = soft[j] * (1 - CELL2_SHARP) + flat[j] * CELL2_SHARP;
+        let v = Math.max(hf[j] - CELL2_MOVE, Math.min(hf[j] + CELL2_MOVE, want));
+        // and it may not push the corridor under the river it runs beside — the passes above lift low
+        // ground to the shoulder for a reason, and a cell dropped below the water line is the perched
+        // channel with a bank holding it in.
+        if (dwc[j] >= 1 && v < cws[j] + CELL2_FLOOR) v = Math.min(hf[j], cws[j] + CELL2_FLOOR);
+        hf[j] = v;
+      }
+      // the shoreline is still owed its block of freeboard after any move
+      for (let j = 0; j < n; j++) {
+        if (land[j] !== 1) continue;
+        let need = -Infinity;
+        for (const nb of nbr4(j)) if (land[nb] === 2 && wsurf[nb] > need) need = wsurf[nb];
+        if (need > -Infinity && hf[j] < need + SHORE_LIP) hf[j] = need + SHORE_LIP;
       }
     }
     // finalize: lakes hold water above their (fixed) bed; other land keeps its relief above sea; sea stays deep
