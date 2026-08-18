@@ -1,0 +1,51 @@
+# Runs the designer's checks on every push to main and every pull request.
+#
+# Hermetic on a stock runner: plain Node, no dependencies, no npm install, no network, no secrets.
+#   test/verify-core.js   the ported .NET Random + SharpNoise stay bit-exact vs references captured from the game DLLs
+#   test/verify-water.js  imported lakes/rivers: runs the real imageToMaps (lifted out of src/designer.js) on a synthetic map
+# plus a build-sync check: index.html is a GENERATED artifact (build.js inlines src/* + WorldGenerator.eco into it) and
+# GitHub Pages serves index.html straight from main — so a commit that edits src/ without rebuilding ships a live page
+# that silently lacks the change. The check rebuilds and fails if the committed page differs from the sources.
+#
+# Note: Pages currently deploys from the branch (the "legacy" build), independent of this workflow — a red check does
+# not stop the page updating. To gate deployment on green tests, switch Pages to "GitHub Actions" in the repo settings
+# and deploy via actions/upload-pages-artifact + actions/deploy-pages behind `needs: test`. Until then, read the check
+# before pushing to main.
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch makes the older run pointless; don't pay for it.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # Node 24: what the suites are developed against locally. No `cache:` — there is no lockfile to key it on.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+
+      - run: node test/verify-core.js
+      - run: node test/verify-water.js
+
+      - name: index.html is in sync with src/
+        run: |
+          node build.js
+          git diff --stat --exit-code index.html || {
+            echo '::error::index.html is stale — run `node build.js` and commit the result. GitHub Pages serves index.html, not src/.'
+            exit 1
+          }
