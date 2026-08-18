@@ -70,6 +70,8 @@ Edit the sources, then rebuild and verify:
 ```
 node build.js               # regenerate index.html
 node test/verify-core.js    # check Random + noise stay bit-exact vs the captured references
+node test/verify-water.js   # imported lakes/rivers stay water-shaped
+node test/verify-shape.js   # river mouths reach the sea, and the ground beside a bank is a valley
 ```
 
 See [`.claude/CLAUDE.md`](.claude/CLAUDE.md) for a full developer guide (architecture, the exact fidelity notes, and gotchas).
