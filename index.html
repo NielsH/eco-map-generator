@@ -9693,6 +9693,96 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
         }
         wsurf.set(next);
       }
+      // Level the surface ACROSS the channel.
+      //
+      // Every cell takes its level from its own bank, so a course drawn across a hillside gets one from the
+      // uphill side and a lower one from the downhill side, and the difference survives everything above:
+      // the flood only stops a cell sitting BELOW the water that reached it, and a 4-neighbour average
+      // shrinks a cross-channel slope and a descent alike. Measured on a real world, the surface still
+      // carried ~0.6 blocks of slope across a 6-cell channel, which rounds to one bank of the river sitting
+      // a block over the other for 30 m at a time — 7.6% of all fresh water touched such a split, against
+      // vanilla's 0.7-3.0, while steps down the flow were already in band at 0.4% (vanilla 0.2-0.6).
+      //
+      // Water has no cross-stream slope, so take it out directionally: weight each neighbour by how far it
+      // lies ACROSS the flow and average. The axis is the structure tensor of the water mask — its major
+      // eigenvector is the across-channel normal — and the weight is (direction . normal)^2, which is 1 for
+      // a neighbour straight across and 0 for one straight along. Repeated, that levels every cross-section
+      // and leaves the profile down the channel alone. Eight neighbours, not four: a channel drawn at 45
+      // degrees has its across direction on a diagonal, and a 4-neighbour stencil can only offer it two
+      // axes that are equally across and equally along, so it would smooth the descent as hard as the slope.
+      {
+        const mask = Float32Array.from(hf, (_, j) => land[j] === 2 ? 1 : 0);
+        boxBlurTor(mask, res, 2, 1);
+        const gx = new Float32Array(n), gy = new Float32Array(n);
+        for (let y = 0; y < res; y++) for (let x = 0; x < res; x++) {
+          const j = y * res + x;
+          gx[j] = (mask[((x + 1) % res) + y * res] - mask[((x + res - 1) % res) + y * res]) / 2;
+          gy[j] = (mask[x + ((y + 1) % res) * res] - mask[x + ((y + res - 1) % res) * res]) / 2;
+        }
+        const Jxx = Float32Array.from(gx, v => v * v), Jyy = Float32Array.from(gy, v => v * v);
+        const Jxy = Float32Array.from(gx, (v, j) => v * gy[j]);
+        boxBlurTor(Jxx, res, 4, 1); boxBlurTor(Jyy, res, 4, 1); boxBlurTor(Jxy, res, 4, 1);
+        const DIR = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]];
+        const idx = new Int32Array(n * 8), wt = new Float32Array(n * 8);
+        const ACROSS_POW = 6;         // exponent on (direction . normal)^2 — 6 gives a twelfth power of the cosine
+        const CLEAN_AXIS = 0.4;       // coherence below this is a junction or open water, and has no axis to use
+        for (let y = 0; y < res; y++) for (let x = 0; x < res; x++) {
+          const j = y * res + x;
+          for (let k = 0; k < 8; k++) idx[j * 8 + k] = ((x + DIR[k][0] + res) % res) + ((y + DIR[k][1] + res) % res) * res;
+          if (land[j] !== 2) continue;
+          const a = Jxx[j], b = Jxy[j], c = Jyy[j], tr = a + c;
+          const l1 = tr / 2 + Math.sqrt(Math.max(0, tr * tr / 4 - (a * c - b * b)));
+          let nx = b, ny = l1 - a; const nn = Math.hypot(nx, ny);
+          const coh = tr > 1e-12 ? (2 * l1 - tr) / tr : 0;      // 1 = a clean channel, 0 = open water or a junction
+          // No axis — a junction, or water wide enough to have no channel direction at all. There is no
+          // cross-section to level here, and the isotropic average this used to fall back on is exactly the
+          // thing that flattens a descent, so leave the cell alone and let its neighbours pull it.
+          if (nn < 1e-12 || coh < CLEAN_AXIS) continue;
+          nx /= nn; ny /= nn;
+          // The weight has to fall away FAST. A squared cosine still passes half of a neighbour lying at 45
+          // degrees to the flow, and half the displacement of that neighbour is along the channel, so over
+          // enough passes the profile down the river is smoothed as well as the slope across it. Measured on
+          // a real world, the squared form took the descent from 52 blocks of fall over all bodies to 19 and
+          // the share of water on a step down the flow from 0.52% to 0.07% — the waterfalls went with the
+          // defect. A twelfth power leaves 0.02% of a 45-degree neighbour's weight, and at the SAME
+          // cross-channel result it keeps 43 blocks of fall and 0.39%, which is where vanilla sits.
+          let s = 0;
+          for (let k = 0; k < 8; k++) {
+            const L = Math.hypot(DIR[k][0], DIR[k][1]), d = (DIR[k][0] * nx + DIR[k][1] * ny) / L;
+            wt[j * 8 + k] = Math.pow(d * d, ACROSS_POW) / L; s += wt[j * 8 + k];
+          }
+          for (let k = 0; k < 8; k++) wt[j * 8 + k] /= s;       // one block of transport per pass, whatever the axis
+        }
+        // Diffusion proper, u += TAU * sum_k w_k (u_nb - u), with each pair weighted by the MEAN of the two
+        // cells' weights. That makes the operator symmetric, so a cross-section keeps its own mean level
+        // instead of drifting toward whichever of its cells has the most water neighbours; TAU 0.5 damps the
+        // checkerboard mode the plain replace-by-weighted-mean form leaves untouched.
+        //
+        // 60 passes takes the cross-channel slope out of a channel up to ~8 cells wide. Measured on a real
+        // world, water sitting on a lengthwise split went 7.5% -> 2.1% (vanilla 0.70-3.03 over seven seeds).
+        //
+        // Levelling lifts the low side of a section as much as it drops the high side, and on ground steep
+        // enough for the two banks to differ by several blocks that means walking the water up the hill.
+        // Cap the lift: past ~2.5 blocks the section is not a channel across a slope any more, and the
+        // levelling has nothing useful to say about it.
+        const CROSS_PASSES = 60, TAU = 0.5, RAISE_CAP = 2.5 * BLK;
+        const was = Float32Array.from(wsurf);
+        for (let pass = 0; pass < CROSS_PASSES; pass++) {
+          const next = Float32Array.from(wsurf);
+          for (let j = 0; j < n; j++) {
+            // Open water is one level per patch already; averaging across its edge would tilt it.
+            if (land[j] !== 2 || fromShore[j] >= OPEN_WATER) continue;
+            let acc = 0;
+            for (let k = 0; k < 8; k++) {
+              const nb = idx[j * 8 + k]; if (land[nb] !== 2) continue;
+              acc += (wt[j * 8 + k] + wt[nb * 8 + k]) / 2 * (wsurf[nb] - wsurf[j]);
+            }
+            next[j] = wsurf[j] + TAU * acc;
+          }
+          wsurf.set(next);
+        }
+        for (let j = 0; j < n; j++) if (land[j] === 2 && wsurf[j] > was[j] + RAISE_CAP) wsurf[j] = was[j] + RAISE_CAP;
+      }
       // Neighbouring water columns that disagree by a FRACTION of a block still render as a step, because
       // Eco fills each column separately and rounds. Taking each cell's level from its own four neighbours
       // leaves exactly that disagreement across a channel, and a channel is only a few cells wide, so the
@@ -10104,6 +10194,14 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     // the sub-block value to survive the trip.
     const MIN_DEPTH = 2.1;                                     // blocks left in the shallowest column
     const WL = 60, RELIEF = 60, MAXGEN = 120;                  // the 60/120 world BLK already assumes
+    // The shelf keeps the bed-to-bank step under CliffExtruder's 5 blocks by holding the shore shallow,
+    // but it only ever compares the bed against its own surface. Where a bank is pinned high by a SECOND
+    // body beside it — two arms of one course passing within a cell, the higher one holding the divider up
+    // — the lower arm's own shelf knows nothing about it and the step clears the threshold anyway. Bound
+    // the bed by the bank as well, keeping a block of water whatever happens.
+    const BANK_STEP = 4;                                       // blocks of bed-to-bank the shelf may leave
+    const bankAbove = new Float32Array(n).fill(-Infinity);
+    for (let j = 0; j < n; j++) if (land[j] === 2) for (const nb of nbr4(j)) if (land[nb] !== 2 && hf[nb] > bankAbove[j]) bankAbove[j] = hf[nb];
     for (let j = 0; j < n; j++) {
       let h = land[j] === 2 ? bed[j] : (land[j] ? Math.max(0.505, hf[j]) : Math.min(hf[j], 0.495));
       height[j] = Math.max(0, Math.min(255, Math.round(h * 255)));
@@ -10115,6 +10213,10 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
         // intended depth is enough: quantisation is what took it away, not the shelf.
         const want = Math.min(MIN_DEPTH, (wsurf[j] - bed[j]) * MAXGEN);
         height[j] = Math.max(0, Math.min(height[j], Math.floor(255 * (wy - want) / MAXGEN)));
+        if (bankAbove[j] > -Infinity) {
+          const floorY = Math.min(wy - 1, (2 * bankAbove[j] - 1) * 60 + 60 - BANK_STEP);
+          height[j] = Math.max(height[j], Math.min(255, Math.ceil(255 * floorY / MAXGEN)));
+        }
       }
     }
     return { res, biome, height, water };
