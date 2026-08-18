@@ -3,6 +3,7 @@
 # Hermetic on a stock runner: plain Node, no dependencies, no npm install, no network, no secrets.
 #   test/verify-core.js   the ported .NET Random + SharpNoise stay bit-exact vs references captured from the game DLLs
 #   test/verify-water.js  imported lakes/rivers: runs the real imageToMaps (lifted out of src/designer.js) on a synthetic map
+#   test/verify-shape.js  the same, on a COASTAL design: river mouths at the sea, and the shape of the ground beside a bank
 # plus a build-sync check: index.html is a GENERATED artifact (build.js inlines src/* + WorldGenerator.eco into it) and
 # GitHub Pages serves index.html straight from main — so a commit that edits src/ without rebuilding ships a live page
 # that silently lacks the change. The check rebuilds and fails if the committed page differs from the sources.
@@ -41,6 +42,7 @@ jobs:
 
       - run: node test/verify-core.js
       - run: node test/verify-water.js
+      - run: node test/verify-shape.js
 
       - name: index.html is in sync with src/
         run: |

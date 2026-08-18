@@ -27,6 +27,7 @@ Unlike the sibling [eco-biome-visualizer](https://github.com/NielsH/eco-biome-vi
 - `build.js` — inlines `src/*` + vectortable + `WorldGenerator.eco` into `index.html` (this file also contains all the main-thread UI as a big template literal: config form, biome-mix editor, ore editor, ore chart, canvas rendering).
 - `WorldGenerator.eco` — Eco's default world (Small preset). Embedded into `index.html` as the on-load example.
 - `test/verify-core.js` + `test/noise_ref.tsv` — bit-exactness check of Random + noise against captured ground truth.
+- `test/designer-harness.js` — lifts `imageToMaps` out of `designer.js` by brace matching and stubs the canvas, so the import pipeline runs headlessly. Shared by the two import suites.
 
 ## Build / verify / run
 
@@ -34,12 +35,22 @@ Unlike the sibling [eco-biome-visualizer](https://github.com/NielsH/eco-biome-vi
 node build.js              # regenerate index.html from src/ + WorldGenerator.eco
 node test/verify-core.js   # Random + 66 noise checks vs references captured from the game DLLs
 node test/verify-water.js  # imported lakes/rivers: no walls of water, no overflow, flat lake basins
+node test/verify-shape.js  # a coastal design: river mouths reach the sea, and the ground beside a bank is a valley
 ```
 
-`verify-water.js` runs the real `imageToMaps` headlessly (it lifts the function out of `designer.js` by
-brace matching and stubs the little of canvas it uses), so the import pipeline can be iterated on without
-a browser. `DESIGNER=<path> node test/verify-water.js` runs it against another copy of designer.js —
-handy for confirming a change actually fixes what it claims.
+Both import suites run the real `imageToMaps` headlessly through `test/designer-harness.js`, so the import
+pipeline can be iterated on without a browser. `DESIGNER=<path> node test/verify-water.js` runs either of
+them against another copy of designer.js.
+
+**That last flag is how a check earns its place.** A check nobody has seen fail is not a check: this suite
+once shipped one that passed with the pass it guarded deleted outright. Before adding one, make a copy of
+`designer.js` with the single change undone, and show the check failing on the copy and passing on `src/`.
+`verify-shape.js` records that table for its four checks in its header comment.
+
+Neither suite can see anything downstream of the export. The terrace, the upscale, `CliffExtruder` and the
+stone extrusion all live in the mod, so what they do to a map is only measurable on a generated world —
+`Eco/Tools/WorldGenAnalysis` has the loop and the metrics for that, and its README lists the checks worth
+running before a release.
 
 - `src/core.js`, `src/geo.js`, `src/worldgen.js` are Node-requirable (they have `module.exports` guards that
   `build.js` strips for the browser). So you can unit-test them directly in Node.
