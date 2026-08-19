@@ -408,7 +408,7 @@
       }
     } else importPreview = null;
     renderPaint();
-    const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target, true);
+    const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target);
     return count;
   }
   function flashMix(count) {
@@ -1457,7 +1457,7 @@
 
   // ================================================================= painter
   // Everything is stored in generation orientation; we DISPLAY flipped-Y to match the map view.
-  function drawGrid(canvas, grid, flip, size) {
+  function drawGrid(canvas, grid, size) {
     const G2 = size || G;
     const ctx = canvas.getContext('2d');
     if (canvas.width !== G2) { canvas.width = G2; canvas.height = G2; }   // backing store; CSS scales it up
@@ -1465,7 +1465,7 @@
     const img = ctx.createImageData(W, W);
     const d = img.data;
     for (let y = 0; y < W; y++) {
-      const gy = flip ? (G2 - 1 - y) : y;
+      const gy = G2 - 1 - y;
       for (let x = 0; x < W; x++) {
         const c = grid[gy * G2 + x], rgb = COL[CN[c]] || [128, 128, 128];
         const o = (y * W + x) * 4;
@@ -1477,8 +1477,8 @@
   function renderPaint() {
     if (paintMode === 'elevation') drawHeight($('dsnCanvas'));
     else if (paintMode === 'water') drawWaterView($('dsnCanvas'));
-    else if (importPreview && !paintedSinceImport) drawGrid($('dsnCanvas'), importPreview, true, IMPORT_RES);
-    else drawGrid($('dsnCanvas'), target, true);
+    else if (importPreview && !paintedSinceImport) drawGrid($('dsnCanvas'), importPreview, IMPORT_RES);
+    else drawGrid($('dsnCanvas'), target);
     drawWrapPreview();
   }
   // Tile the current view 2×2 so the toroidal seams (left↔right, top↔bottom) are visible while drawing.
@@ -1492,7 +1492,7 @@
   }
   // biomes with the painted rivers/lakes overlaid in blue
   function drawWaterView(canvas) {
-    drawGrid(canvas, target, true);
+    drawGrid(canvas, target);
     const ctx = canvas.getContext('2d'), W = canvas.width, img = ctx.getImageData(0, 0, W, W), d = img.data;
     for (let y = 0; y < W; y++) { const gy = G - 1 - y; for (let x = 0; x < W; x++) { if (water[gy * G + x]) { const o = (y * W + x) * 4; d[o] = 30; d[o + 1] = 110; d[o + 2] = 230; } } }
     ctx.putImageData(img, 0, 0);
@@ -1885,9 +1885,9 @@
   }
   function renderGallery() {
     const gal = $('dsnGallery');
-    const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target, true);   // keep the "your drawing" thumbnail in sync
+    const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target);   // keep the "your drawing" thumbnail in sync
     const bestRef = $('dsnBestRef'), bestLbl = $('dsnBestLbl');
-    if (bestRef) { if (pool.length) { drawGrid(bestRef, pool[0].grid, true); if (bestLbl) bestLbl.textContent = 'best match · ' + (pool[0].s.score * 100).toFixed(1) + '%'; } else { bestRef.getContext('2d').clearRect(0, 0, G, G); if (bestLbl) bestLbl.textContent = 'best match'; } }
+    if (bestRef) { if (pool.length) { drawGrid(bestRef, pool[0].grid); if (bestLbl) bestLbl.textContent = 'best match · ' + (pool[0].s.score * 100).toFixed(1) + '%'; } else { bestRef.getContext('2d').clearRect(0, 0, G, G); if (bestLbl) bestLbl.textContent = 'best match'; } }
     if (!pool.length) { $('dsnGalCount').textContent = ''; gal.innerHTML = '<div class="dsnMini">No candidates yet — run a search.</div>'; const sm = $('dsnShowMore'); if (sm) sm.style.display = 'none'; return; }
     // sort a copy by the chosen key, filter by min overall score, page with galShow (Find-mode gallery)
     const list = pool.filter(it => it.s.score >= galleryMin).slice().sort((a, b) => b.s[gallerySort] - a.s[gallerySort]);
@@ -1901,7 +1901,7 @@
         '<div class="dsnMini">mix ' + (it.s.prop * 100).toFixed(0) + ' · shape ' + (it.s.iou * 100).toFixed(0) + ' · fit ' + (it.s.soft * 100).toFixed(0) + '</div>' +
         '<button data-apply="' + i + '">Apply this world</button>' +
       '</div>').join('');
-    gal.querySelectorAll('canvas[data-i]').forEach(c => drawGrid(c, show[+c.dataset.i].grid, true));
+    gal.querySelectorAll('canvas[data-i]').forEach(c => drawGrid(c, show[+c.dataset.i].grid));
     gal.querySelectorAll('button[data-apply]').forEach(b => b.onclick = () => applyCandidate(show[+b.dataset.apply]));
     gal.querySelectorAll('canvas[data-i]').forEach(c => c.onclick = () => applyCandidate(show[+c.dataset.i]));
     const sm = $('dsnShowMore'); if (sm) { const more = list.length - show.length; sm.style.display = more > 0 ? '' : 'none'; sm.textContent = more > 0 ? 'Show more (' + more + ')' : 'Show more'; }
@@ -1958,7 +1958,7 @@
     let empty = true; for (let i = 0; i < target.length; i++) if (target[i] !== SC.Ocean) { empty = false; break; }
     if (empty && typeof result !== 'undefined' && result) seedFromMap();
     updateSpeedHint();
-    const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target, true);
+    const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target);
     renderPaint();
   }
   function close() {
@@ -2192,7 +2192,7 @@
 
         }
         paintMode = 'biome'; markPaintMode(); renderPaint();
-        const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target, true);
+        const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target);
         setStatus('Imported design — tune it, then re-generate or preview.');
       } catch (e) { setStatus('Could not read that design .zip: ' + e.message); }
     };
