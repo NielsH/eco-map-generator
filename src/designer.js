@@ -4,7 +4,7 @@
 // Injected RAW into the page (like render3d.js), AFTER the main script, so it can use template
 // literals freely and reference the main-thread globals ($, baseCfg, readForm, populateForm,
 // generateMap, makeWorker, VT, sharesToWeights, WEIGHT_KEYS, terrain, cfgUsed) and the inlined
-// search core (SCLASS, SC, NUM_CLASSES, scoreGrids, histogram).
+// search core (SCLASS, SC, NUM_CLASSES, scoreGrids, blendScore, histogram).
 //
 // Honest scope: the generator has NO spatial-placement knobs — where a biome lands is a chaotic
 // function of the seed. So this is a lottery scored by similarity, not an optimizer that converges.
@@ -1804,9 +1804,10 @@
   // Combine the weight-independent similarity components into a score for the current layoutWeight.
   // (prop/soft/iou/exact are computed by the worker at the best toroidal shift and don't depend on w,
   // so re-weighting the whole pool is pure arithmetic — no re-scoring of grids on the main thread.)
+  // The blend itself is search.js's, so the gallery cannot drift from the score the worker returned.
   function combine(c, w) {
-    const layout = 0.5 * c.soft + 0.3 * c.iou + 0.2 * c.exact;
-    return { score: (1 - w) * c.prop + w * layout, layout: layout, prop: c.prop, soft: c.soft, iou: c.iou, exact: c.exact };
+    const b = blendScore(c, w);
+    return { score: b.score, layout: b.layout, prop: c.prop, soft: c.soft, iou: c.iou, exact: c.exact };
   }
   function recordCandidate(m) {
     const grid = new Uint8Array(m.grid);
