@@ -477,9 +477,13 @@
     const biome = new Uint8Array(n), height = new Uint8Array(n);
     const hf = new Float32Array(n), land = new Uint8Array(n);   // base height + land mask, in FINAL orientation
     const fresh = new Uint8Array(n);                            // 1 where the source used the fresh-water colour
-    // per-biome base height (mild compression toward a common mean keeps biome edges from being cliffs;
-    // real rolling-hill relief is added on top below). SEA = 0.5.
-    const LAND_MEAN = 0.60, COMPRESS = 0.65, SEA = 0.5;
+    // Only the SEA keeps a height from the decode — the shelf below ramps up from this bed. Every land
+    // cell is redrawn by the ridged/coast-distance field further down, so all the colour decode owes a
+    // land cell is which side of the waterline it is on. (Brightness needs its own value regardless: for
+    // a photo the tone IS the land/water test.) There used to be a per-biome base height here, compressed
+    // toward a common mean so biome edges were not cliffs; the biome nudge in the elevation field does
+    // that job now, off a spatially blurred target, and this one never survived to be read.
+    const SEA_BED = 0.30, SEA = 0.5;
     const put = (x, y, cls, h01, isLand) => { const j = (res - 1 - y) * res + x; biome[j] = cls; hf[j] = h01; land[j] = isLand ? 1 : 0; };   // flip Y like the paint-grid path
     if (importMode === 'brightness') {
       const lum = new Float32Array(n), trans = new Uint8Array(n), op = [];
@@ -488,7 +492,7 @@
       const rank = L => { let lo = 0, hi = op.length; while (lo < hi) { const m = (lo + hi) >> 1; if (op[m] < L) lo = m + 1; else hi = m; } return lo; };
       for (let y = 0; y < res; y++) for (let x = 0; x < res; x++) {
         const i = y * res + x;
-        if (trans[i]) { put(x, y, SC.Ocean, 0.30, 0); continue; }
+        if (trans[i]) { put(x, y, SC.Ocean, SEA_BED, 0); continue; }
         const rf = rank(lum[i]) / N; let b = Math.floor(rf * nB); if (b >= nB) b = nB - 1;
         const h01 = 0.32 + 0.53 * rf;                          // dark→deep water .. light→peaks
         put(x, y, legend[b].cls, h01, h01 >= SEA ? 1 : 0);
@@ -500,8 +504,7 @@
         if (d[o + 3] < 128) cls = SC.Ocean;
         else { let bi = 0, bd = Infinity; for (let k = 0; k < legend.length; k++) { const p = legend[k].rgb, dr = d[o] - p[0], dg = d[o + 1] - p[1], db = d[o + 2] - p[2], dd = dr * dr + dg * dg + db * db; if (dd < bd) { bd = dd; bi = k; } } cls = legend[bi].cls; isFresh = !!legend[bi].fresh; }
         const isOcean = cls === SC.Ocean;
-        const band = ECO_BIOME_ELEV[CN[cls]] || [0.52, 0.62], mid = (band[0] + band[1]) / 2;
-        put(x, y, cls, isOcean ? 0.30 : LAND_MEAN + (mid - LAND_MEAN) * COMPRESS, isOcean ? 0 : 1);
+        put(x, y, cls, SEA_BED, isOcean ? 0 : 1);
         if (isFresh) fresh[(res - 1 - y) * res + x] = 1;
       }
     }
