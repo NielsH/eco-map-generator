@@ -271,34 +271,51 @@ removed (the CLI isn't public). The same bundle-building code below still runs �
   drawn in the fresh-water colour `FRESH_COLOR` = `#1E90FF` (`isFreshRGB`, which survives coast contact so
   rivers to the sea stay fresh) — becomes a lake/river taking the majority shore biome. `buildBundleFiles`
   emits `water.bin` whenever any lake exists; the mod's `WaterModule` reads any above-sea surface as one.
-- **Getting the water SURFACE right is the subtle part**, and it is four steps — Eco fills every column
-  independently to `60 + 60·waterValue`, so whatever per-cell level is exported *is* what the player sees:
-  1. **Bank height, min-propagated** (`MIN_REACH`). Only shore cells have a real constraint (the land they
-     touch). Mid-lake cells take the LOWEST bank within reach, so a lake levels with the shore it would
-     drain over. Carrying the *first* bank to arrive (a plain BFS) is what used to tilt lakes — which shore
-     won was arbitrary. Reach is a genuine trade-off: too low tilts lakes, too high flattens rivers into
-     canals (at 60 the test design's rivers lost their 24-block drop entirely).
-  2. **Priority flood** from each body's lowest cell, `level = surf <= parent ? parent : min(surf, parent +
-     MAX_WATER_STEP)`. A basin cannot sit below the water that reached it, so it fills DEAD FLAT; a channel
-     keeps its own downhill profile, capped so it descends in small steps.
+- **Getting the water SURFACE right is the subtle part** — Eco fills every column independently to
+  `60 + 60·waterValue`, so whatever per-cell level is exported *is* what the player sees. Each step below
+  carries its own measured justification at the code; this is the index, not the argument:
+  1. **The ring average, bounded three ways.** A shore cell takes the AVERAGE height of the land it
+     touches (vanilla's own lake rule); a mid-lake cell takes the body's ring average. The bounds are
+     `BERM` (at most 4 blocks over the LOWEST bank, so holding the level does not wall the downhill arc),
+     `SETTLE_MARGIN` against the local ground average (so a course sits *in* the landscape, not on an
+     embankment) and `seaCap` (`COAST_FLAT`/`COAST_GRADE` — vanilla's measured envelope of fresh-water
+     height against distance to the sea, so a channel arrives AT the sea instead of perching beside it).
+     There is no min-propagation any more: taking the lowest bank within ~54 m put authored water in a
+     bowl by construction, where 30-45% of the ground near vanilla's fresh water sits BELOW it.
+  2. **Priority flood** from each body's lowest cell *and every cell `seaCap` bit on* (a body has as many
+     mouths as it has outlets), `level = surf <= parent ? parent : min(surf, parent + MAX_WATER_STEP)`. A
+     basin cannot sit below the water that reached it, so it fills DEAD FLAT; a channel keeps its own
+     downhill profile, capped so it descends in small steps.
   3. **Level the OPEN WATER** (`OPEN_WATER` = cells this far from any shore). A lake shares one surface
      however wide it is; a drawn river is only a few cells across, so it has no open water at all and is
      left alone — that is what keeps it descending instead of becoming a level canal. Open water also takes
      its level outright in step 2 rather than being ramped into, since ramping tilts the surface of a lake
      entered from below.
-  4. **Shoreline restore, after the blur.** `boxBlurTor` averages across the shoreline and water cells sit
-     low, so it drags banks down — sometimes below the water they hold back. The final pass puts any land
-     touching water a block above it. This CONTAINS the water by construction, which is why there is no
-     separate clamp-water-to-its-banks step; one used to exist and did the same job twice, cutting lakes
-     into pieces that each dropped to the nearest bank (measured: one lake went from 6 levels to 13).
+  4. **Level ACROSS the channel, not along it.** Every cell took its level from its own bank, so a course
+     drawn across a hillside ends up with one bank a block over the other. The axis comes from the
+     structure tensor of the water mask and the weight is `(direction·normal)^(2·ACROSS_POW)` over 8
+     neighbours — a plain average, or even a squared cosine, smooths the descent as hard as the slope and
+     takes the waterfalls with it.
+  5. **One level per LAKE** — a lake has no flow direction, and vanilla gives every cell of a lake polygon
+     one elevation. "Lake" is a shape test (`LAKE_SLIM`: longest way across against its own width), so a
+     wide slow river stays out of it, and the level chosen is the DOMINANT one (fewest cells moved).
+  6. **Shoreline restore, after the blur.** `boxBlurTor` averages across the shoreline and water cells sit
+     low, so it drags banks down — sometimes below the water they hold back. `restoreShore()` puts any land
+     touching water a block above it, and runs again after the corridor is snapped back onto its cells.
+     This CONTAINS the water by construction, which is why there is no separate clamp-water-to-its-banks
+     step; one used to exist and did the same job twice, cutting lakes into pieces that each dropped to the
+     nearest bank (measured: one lake went from 6 levels to 13).
   Do not add a step that lowers water per region to fit its banks — that is the trap. Big steps are not
   wrong in themselves: a lake falling into a lower channel is a waterfall, and those all sit at outlets.
   What must never happen is a step out in open water, because a ramp across a lake quantises to whole
   blocks and reads in game as a ridged bed under flat water.
-  Then `BANK_SLOPE`/`CARVE_REACH` carve a valley: walk out from the water lowering land to at most
-  `BANK_SLOPE` per cell above it, so banks rise away from the shore instead of walling it. It must keep
-  walking through cells where the cap does not bite (terrain may rise again further out) — and it is
-  deliberately short-reach, since it is a valley, not a global reshape.
+  The land beside the water is then RELAXED into a valley (`VALLEY_REACH`/`VALLEY_PASSES`/`VALLEY_PULL`) —
+  a port of `VoronoiWorldGenerator`'s smooth pass 2, pulling near-water ground a fraction of the way to
+  the shoulder each pass and letting the profile come out concave. It replaced a fixed-slope cone, which
+  was a ceiling rather than a valley: it permitted 3 blocks of rise per cell and did nothing at all past
+  its reach, so a river drawn across high ground kept a sheer wall (half of all fresh-water shoreline rose
+  11.5 blocks within 20 m). The shoulder height and the distance it takes are low-frequency FIELDS, not
+  constants — one profile applied to every bank renders as concentric shelving.
 - **Measure water, don't eyeball it.** Screenshots are genuinely misleading here — a flat surface over a
   varying bed looks like a deep lake. What matters is the step between ADJACENT water cells and whether
   water sits above the LAND beside it (ocean neighbours excluded — a river mouth is meant to be above sea

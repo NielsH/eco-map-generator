@@ -171,8 +171,8 @@ function meanDistAt(target, cand, G, sx, sy) {
 }
 // Best toroidal shift (minimizing mean class-distance) via a coarse full scan + local refine.
 // A global scan is used (not a centroid seed) because a mostly-land map has no meaningful land
-// centroid, so a local search would miss the true alignment. Cost is ~1M distance lookups for
-// G=64 — trivial next to the ~1s it takes to generate the candidate being scored.
+// centroid, so a local search would miss the true alignment. Cost is ~4M distance lookups at the
+// designer's G=128 — trivial next to the ~1s it takes to generate the candidate being scored.
 function bestShift(target, cand, G) {
   const stride = Math.max(1, Math.round(G / 16));   // ~constant coarse-scan positions, so cost stays ~O(cells) not O(G^4)
   let bx = 0, by = 0, best = Infinity;

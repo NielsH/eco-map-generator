@@ -86,7 +86,7 @@
   // display switches back to it.
   let importPreview = null;      // Uint8Array(IMPORT_RES^2) class per cell, generation orientation
   let importLegendIdxHi = null;  // legend index per hi-res cell, so remapping a colour rebuilds instantly
-  let paintedSinceImport = false; // once the user hand-edits an import, export falls back to the 64² grid
+  let paintedSinceImport = false; // once the user hand-edits an import, export falls back to the G² paint grid
   const IMPORT_RES = 448;        // biome/height resolution exported for a pure image import (finer = steeper, less-terraced terrain)
   // dark -> light biome ramp for brightness mode (low/dark = deep water, high/light = snow), reads as terrain
   const BRIGHT_RAMP = ['Ocean', 'Wetland', 'ColdForest', 'Taiga', 'RainForest', 'Grassland', 'WarmForest', 'Desert', 'Tundra', 'Coast', 'Ice'];
@@ -451,10 +451,6 @@
     $('lgAuto').onclick = () => { pushUndo(); legend.forEach(e => e.cls = e.def); renderLegend(); flashMix(applyLegend()); };
   }
   function hideLegend() { legend = []; imgLegendIdx = null; lastImgData = null; importedImg = null; paintedSinceImport = false; importPreview = null; importLegendIdxHi = null; const w = $('dsnLegendWrap'); if (w) { w.style.display = 'none'; w.innerHTML = ''; } }
-  // Resample the ORIGINAL imported image at a higher resolution and produce aligned biome + height maps
-  // (bypassing the coarse 64² paint grid) so a photo/portrait exports with far sharper features. Uses the
-  // current legend + mode; height follows the picture (dark/low = deep water, light/high = land) so the
-  // land/water outline stays crisp and matched to the biome tint.
   // toroidal separable box blur (in place); spreads biome-edge height steps into gentle slopes
   function boxBlurTor(a, res, r, passes) {
     const tmp = new Float32Array(res * res), inv = 1 / (2 * r + 1), wrap = (v) => ((v % res) + res) % res;
@@ -467,6 +463,10 @@
   }
   // value/fractal noise over the res grid (toroidal), reusing the painter's hash h2 — for within-biome relief
   function vnR(x, y, P, res) { const fx = x / res * P, fy = y / res * P, x0 = Math.floor(fx), y0 = Math.floor(fy), tx = fx - x0, ty = fy - y0, w = v => ((v % P) + P) % P; const a = h2(w(x0), w(y0)), b = h2(w(x0 + 1), w(y0)), c = h2(w(x0), w(y0 + 1)), e = h2(w(x0 + 1), w(y0 + 1)), sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty); return (a + (b - a) * sx) * (1 - sy) + (c + (e - c) * sx) * sy; }
+  // Resample the ORIGINAL imported image at `res` (well above the G² paint grid) and produce aligned biome
+  // + height maps, so a photo/portrait exports with far sharper features. Uses the current legend + mode;
+  // height follows the picture (dark/low = deep water, light/high = land) so the land/water outline stays
+  // crisp and matched to the biome tint.
   function imageToMaps(res, blocksPerCell) {
     const BPC = blocksPerCell || 1200 / res;      // a 120-wide world unless told otherwise
     const c = document.createElement('canvas'); c.width = res; c.height = res;
@@ -480,7 +480,7 @@
     // per-biome base height (mild compression toward a common mean keeps biome edges from being cliffs;
     // real rolling-hill relief is added on top below). SEA = 0.5.
     const LAND_MEAN = 0.60, COMPRESS = 0.65, SEA = 0.5;
-    const put = (x, y, cls, h01, isLand) => { const j = (res - 1 - y) * res + x; biome[j] = cls; hf[j] = h01; land[j] = isLand ? 1 : 0; };   // flip Y like the 64² path
+    const put = (x, y, cls, h01, isLand) => { const j = (res - 1 - y) * res + x; biome[j] = cls; hf[j] = h01; land[j] = isLand ? 1 : 0; };   // flip Y like the paint-grid path
     if (importMode === 'brightness') {
       const lum = new Float32Array(n), trans = new Uint8Array(n), op = [];
       for (let i = 0; i < n; i++) { const o = i * 4; if (d[o + 3] < 128) { trans[i] = 1; continue; } const L = 0.299 * d[o] + 0.587 * d[o + 1] + 0.114 * d[o + 2]; lum[i] = L; op.push(L); }
@@ -670,8 +670,8 @@
     // rather than on top of it. The radius is ~19 m, the distance at which the perch is visible.
     const around = Float32Array.from(hf);
     boxBlurTor(around, res, Math.max(1, Math.round(res / 23)), 2);
-    // The same average over LAND ONLY.  blurs the height field whole, and a water column's
-    // height is its bed, so within a radius of any river the average reads several blocks below the ground
+    // The same average over LAND ONLY. `around` blurs the height field whole, and a water column's height
+    // is its bed, so within a radius of any river the average reads several blocks below the ground
     // actually there. Anything that bounds a BANK has to compare it against land, not against the channel.
     const aroundLand = Float32Array.from(hf, (v, j) => land[j] === 1 ? v : 0);
     const landWeight = Float32Array.from(hf, (_, j) => land[j] === 1 ? 1 : 0);
@@ -2039,8 +2039,8 @@
       waterBin[i] = Math.max(0, Math.min(255, Math.round(terrain.waterVal[i] * 255)));
       if (water[i]) anyWater = true;
     }
-    // A pure image import exports hi-res biome + height straight from the source image (the coarse 64²
-    // paint grid would waste an ~11-block chunk per pixel). Hand-painting over the import opts back out.
+    // A pure image import exports hi-res biome + height straight from the source image (the G² paint
+    // grid would spread several world blocks over every pixel). Hand-painting over the import opts back out.
     let biomeOut = biomeBin, heightOut = heightBin, waterOut = waterBin, hi = null;
     if (importedImg && !paintedSinceImport) {
       // Water depth follows vanilla's rule, which is defined per world BLOCK, so the import needs to know
