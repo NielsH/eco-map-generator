@@ -1,7 +1,7 @@
 // Regression test for the SHAPE of imported land — where a river meets the sea, and what the ground
 // beside a river does. Companion to verify-water.js, which guards the water itself.
 //
-// Four defects were found in authored worlds and fixed together. None of them was catchable by
+// Five defects were found in authored worlds and fixed. The first four came together; None of them was catchable by
 // verify-water.js: its design has no water near the sea, and none of its checks looks at how the ground
 // climbs away from a bank. Each check below is paired with a copy of designer.js that undoes exactly one
 // of the four, and was kept only after it was shown to FAIL on that copy and pass on the real source:
@@ -11,6 +11,13 @@
 //   land drawn per cell (CELL_SHARP)       0.90    0.90   0.25       0.90      0.90    >= 0.8
 //   bank climb follows the land behind     0.479   0.461  0.479      0.204     0.623   rho >= 0.35
 //   climb concentrated in a riser or two   0.683   0.671  0.682      0.710     0.526   >= 0.60
+//
+// A fifth was added when the water levelling landed, and the four reverts above were regenerated from the
+// designer of the day so the table stays honest — an old revert copy predates later fixes and fails checks
+// it was never meant to exercise:
+//
+//   check                                  main    sea    pinstripe  corridor  shelf   level   bound
+//   surface tilts along, not across        0.35    0.20   0.35       0.35      0.35    0.65    <= 0.60
 //
 // Run:  node test/verify-shape.js
 //       DESIGNER=<copy> node test/verify-shape.js      (to check a variant)
@@ -199,6 +206,46 @@ const rays = (() => {
     'the biggest riser carries ' + (100 * share).toFixed(1) + '% of the 14 m climb on average over ' + V.length
     + ' rays, and the whole of it on ' + (100 * risers / V.length).toFixed(0) + '%');
 }
+
+// A river's surface may vary ALONG its length — that is a river descending — but not ACROSS it, which is one
+// bank sitting a block over the other. A channel drawn over a hillside takes a high level from its uphill
+// side and a low one from its downhill side, and nothing above removes that tilt: the flood only stops a
+// cell sitting below the water that reached it, and a plain average shrinks a cross-slope and a descent
+// alike. Measured on a real world it left 7.6% of fresh water on a lengthwise split against vanilla's
+// 0.7-3.0%, while steps down the flow were already in band.
+//
+// Scale-free on purpose: the ratio of how much the surface moves across the channel to how much it moves
+// along it. Levelling drives the across term toward nothing and leaves the along term alone, so the ratio
+// collapses; without it the two are comparable. An absolute bound in blocks would be calibrated on this
+// fixture's drawing, which is the mistake the near-water check in verify-water.js made.
+{
+  const wet = i => water[i] > 0;
+  // the local across-channel normal, from the gradient of the water mask
+  const mask = new Float32Array(g * g);
+  for (let i = 0; i < g * g; i++) mask[i] = wet(i) ? 1 : 0;
+  let across = 0, alongSum = 0, nAcross = 0, nAlong = 0;
+  for (let y = 1; y < g - 1; y++) for (let x = 1; x < g - 1; x++) {
+    const j = y * g + x;
+    if (!wet(j)) continue;
+    const gx = mask[j + 1] - mask[j - 1], gy = mask[j + g] - mask[j - g];
+    const len = Math.hypot(gx, gy);
+    if (len < 0.5) continue;                       // interior of a wide body has no usable axis
+    const nx = gx / len, ny = gy / len;
+    for (const [dx, dy] of [[1, 0], [0, 1]]) {
+      const k = j + dx + dy * g;
+      if (!wet(k)) continue;
+      const d = Math.abs(water[j] - water[k]);   // exported bytes; the ratio is scale-free
+      const dot = Math.abs(dx * nx + dy * ny);     // 1 = across the channel, 0 = along it
+      if (dot > 0.85) { across += d; nAcross++; } else if (dot < 0.5) { alongSum += d; nAlong++; }
+    }
+  }
+  const a = nAcross ? across / nAcross : 0, b = nAlong ? alongSum / nAlong : 0;
+  const ratio = b > 1e-9 ? a / b : (a > 1e-9 ? 99 : 0);
+  check('the water surface tilts along the channel, not across it', nAcross > 20 && nAlong > 20 && ratio <= 0.60,
+    'across/along movement ' + ratio.toFixed(2) + '  (across ' + a.toFixed(4) + ' over ' + nAcross
+    + ' pairs, along ' + b.toFixed(4) + ' over ' + nAlong + ')');
+}
+
 
 console.log(fails ? '\n' + fails + ' FAILED' : '\nALL PASS ✓');
 process.exit(fails ? 1 : 0);
