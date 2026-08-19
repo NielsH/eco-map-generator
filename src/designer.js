@@ -924,6 +924,100 @@
           wsurf.set(next);
         }
       }
+      // One level per LAKE.
+      //
+      // A lake has no flow direction, so it has no reason to hold more than one surface level, and
+      // vanilla's never does: VoronoiWorldGenerator gives every cell of a lake polygon a single elevation.
+      // Everything above works cell by cell instead, so a lake drawn across a slope keeps a low shore on
+      // its downhill side — measured on a generated world one 894-column lake arrived over four levels,
+      // with the water running over the step between them. The cross-channel levelling cannot reach it:
+      // the middle of a lake has no edge in the water mask, so its structure tensor has no coherence and
+      // every cell of it is skipped, which leaves the shallow ring taking its level from its own bank.
+      //
+      // A lake is a piece of water no LONGER than it is wide: the longest way across it, in cells, against
+      // its own width. That is a ratio, so it does not care how big the body is or which way it lies, and
+      // it is what keeps a wide slow river out — widening a channel raises both terms, lengthening it only
+      // the first. The area of a bounding box, the obvious alternative, cannot tell a lake from a straight
+      // reach of a wide river at all. Measured on the shipping map its lakes read 1.2-2.8, a drawn stream
+      // 5-6 and its two river systems 36.
+      {
+        const LAKE_SLIM = 4;
+        const lake = new Uint8Array(n);
+        const slimOf = inS => {                       // longest way across a set of cells / its width
+          let wide = 0, seed = -1;
+          for (const c of inS) { if (fromShore[c] > wide) wide = fromShore[c]; if (seed < 0) seed = c; }
+          const far = s => { const d = new Map([[s, 0]]); const q = [s]; let best = s;
+            for (let h = 0; h < q.length; h++) for (const nb of nbr4(q[h])) if (inS.has(nb) && !d.has(nb)) { d.set(nb, d.get(q[h]) + 1); q.push(nb); best = nb; }
+            return [best, d.get(best)]; };
+          const [a] = far(seed); const [, diam] = far(a);
+          return [diam, wide];
+        };
+        // A whole body first, which is what a lake usually is.
+        const seenB = new Uint8Array(n), bodies = [];
+        for (let j = 0; j < n; j++) {
+          if (land[j] !== 2 || seenB[j]) continue;
+          const st = [j]; seenB[j] = 1; const inB = new Set([j]);
+          while (st.length) { const c = st.pop(); for (const nb of nbr4(c)) if (land[nb] === 2 && !seenB[nb]) { seenB[nb] = 1; inB.add(nb); st.push(nb); } }
+          const [diam, wide] = slimOf(inB);
+          if (diam <= LAKE_SLIM * Math.max(1, 2 * wide - 1)) { for (const c of inB) lake[c] = 1; } else bodies.push(inB);
+        }
+        // A lake drawn ONTO a river system shares its body with the whole system, and both test designs do
+        // exactly that, so the body test alone would never see one. In a body that is not itself a lake,
+        // look for a compact patch of OPEN water instead and take the shallow ring around it with it — the
+        // ring is the part that carries the low shore.
+        const core = j => land[j] === 2 && fromShore[j] >= OPEN_WATER;
+        for (const inB of bodies) {
+          const seenC = new Set();
+          for (const j of inB) {
+            if (!core(j) || seenC.has(j)) continue;
+            const st = [j]; seenC.add(j); const inP = new Set([j]);
+            while (st.length) { const c = st.pop(); for (const nb of nbr4(c)) if (core(nb) && !seenC.has(nb)) { seenC.add(nb); inP.add(nb); st.push(nb); } }
+            const [diam, wide] = slimOf(inP);
+            if (wide <= OPEN_WATER) continue;                        // one cell thick: a pinch in a channel, not a lake
+            if (diam > LAKE_SLIM * (2 * (wide - OPEN_WATER) + 1)) continue;    // a reach, and it descends
+            for (const c of inP) lake[c] = 1;
+          }
+        }
+        // The ring goes with it. A ring cell is one that lies on the way from the open water out to the
+        // bank, so its steps from the core plus its own distance to the shore still come to OPEN_WATER; a
+        // channel leaving the lake fails that within a cell of the mouth however shallow it is, and so
+        // keeps its own descent. Without the test the ring simply grew four cells down the outflow and
+        // turned a five-block taper into a waterfall.
+        { const q = [], d = new Int32Array(n).fill(-1);
+          for (let j = 0; j < n; j++) if (lake[j]) { d[j] = 0; q.push(j); }
+          for (let h = 0; h < q.length; h++) { const c = q[h];
+            for (const nb of nbr4(c)) if (land[nb] === 2 && d[nb] < 0 && d[c] + 1 + fromShore[nb] <= OPEN_WATER) { d[nb] = d[c] + 1; lake[nb] = 1; q.push(nb); } } }
+        // And the mouth is not the lake. Lifting the last cell before an outflow lifts the bank beside it,
+        // while the outflow's bed a cell away is already lower, so the pair clears Eco's 5-block cliff
+        // threshold and a rock wall is built across the outlet — measured on verify-water's design, a
+        // 9-block one. Stand the ring off from any water the lake has not claimed, by the width of the
+        // ring itself. Where a lake is its own body there is no such water and this does nothing.
+        for (let p = 0; p < OPEN_WATER - 1; p++) {
+          const drop = [];
+          for (let j = 0; j < n; j++) if (lake[j] && fromShore[j] < OPEN_WATER)
+            for (const nb of nbr4(j)) if (land[nb] === 2 && !lake[nb]) { drop.push(j); break; }
+          if (!drop.length) break;
+          for (const j of drop) lake[j] = 0;
+        }
+        const seenL = new Uint8Array(n);
+        for (let j = 0; j < n; j++) {
+          if (!lake[j] || seenL[j]) continue;
+          const st = [j]; seenL[j] = 1; const cells = [];
+          while (st.length) { const c = st.pop(); cells.push(c); for (const nb of nbr4(c)) if (lake[nb] && !seenL[nb]) { seenL[nb] = 1; st.push(nb); } }
+          // Which level: the lake's DOMINANT one — the mean over the cells of whichever block level already
+          // holds most of its area. Raising a lake lifts the bank beside it and lowering it drains the
+          // shallow ring, so the level that moves the fewest cells costs least of either. Measured on a
+          // generated world against the alternatives: the dominant level took banks standing proud from
+          // 1.01% to 0.51% and the water from 23,446 columns to 23,466, the MEAN left the banks where they
+          // were (1.02%), and the MINIMUM cost 3,639 columns — 15.5% of the fresh water — for 1.14%.
+          let lv = 0, bn = -1;
+          const bucket = new Map();
+          for (const c of cells) { const k = Math.trunc(120 * wsurf[c] - 60); const b = bucket.get(k) || [0, 0]; b[0]++; b[1] += wsurf[c]; bucket.set(k, b); }
+          for (const [, b] of bucket) if (b[0] > bn) { bn = b[0]; lv = b[1] / b[0]; }
+          for (const c of cells) wsurf[c] = lv;
+        }
+      }
+      // the surface as it will be exported
       for (let j = 0; j < n; j++) {
         if (land[j] !== 2) continue;
         const surface = Math.max(SEA + 0.01, wsurf[j]);
