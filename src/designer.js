@@ -467,7 +467,6 @@
   }
   // value/fractal noise over the res grid (toroidal), reusing the painter's hash h2 — for within-biome relief
   function vnR(x, y, P, res) { const fx = x / res * P, fy = y / res * P, x0 = Math.floor(fx), y0 = Math.floor(fy), tx = fx - x0, ty = fy - y0, w = v => ((v % P) + P) % P; const a = h2(w(x0), w(y0)), b = h2(w(x0 + 1), w(y0)), c = h2(w(x0), w(y0 + 1)), e = h2(w(x0 + 1), w(y0 + 1)), sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty); return (a + (b - a) * sx) * (1 - sy) + (c + (e - c) * sx) * sy; }
-  function fbmR(x, y, res) { return 0.5 * vnR(x, y, 10, res) + 0.3 * vnR(x, y, 26, res) + 0.2 * vnR(x, y, 64, res); }
   function imageToMaps(res, blocksPerCell) {
     const BPC = blocksPerCell || 1200 / res;      // a 120-wide world unless told otherwise
     const c = document.createElement('canvas'); c.width = res; c.height = res;
@@ -736,7 +735,6 @@
     // the choice of levels. So relax the surface first, then carve the land to match.
     const BLK = 1 / 120;                  // one world block, in designer frac (Y = 60 + (2h-1)*60)
     const MAX_WATER_STEP = 0.5 * BLK;     // biggest rise allowed between neighbouring water cells
-    const FLAT_TOL = 1.5 * BLK;           // cells this close in height count as one pool, and level together
     const surfOf = j => (isFinite(surf[j]) ? surf[j] : 0.55);
     // Priority flood, spreading out from each body's LOWEST cell and always expanding the lowest water
     // next. Each cell takes
@@ -1046,8 +1044,7 @@
     {
       const SHELF_CELLS = 3;                    // how far in the shallows reach
       const SHORE_DEPTH = 1.2 * BLK;            // depth right at the bank; below ~1.8 a shore cell can round to no water at all
-      const GRAY = 0.4706 * BLK;
-      const BEACH_MIN = 4;                      // rings the water must reach nearby before its edge is beached                // one unit of vanilla's depth
+      const GRAY = 0.4706 * BLK;                // one unit of vanilla's depth
       const dIn = new Int32Array(n).fill(-1), qs = [];
       for (let j = 0; j < n; j++) if (land[j] !== 2) { dIn[j] = 0; qs.push(j); }
       for (let k = 0; k < qs.length; k++) {
