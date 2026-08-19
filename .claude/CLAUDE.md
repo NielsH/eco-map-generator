@@ -51,6 +51,13 @@ once shipped one that passed with the pass it guarded deleted outright. Before a
 `designer.js` with the single change undone, and show the check failing on the copy and passing on `src/`.
 `verify-shape.js` records that table for its four checks in its header comment.
 
+**A constant can be tested for inertness**: perturb it, re-export the maps through
+`Eco/Tools/WorldGenAnalysis/model/realrun.js`, and diff the bytes. Two traps, both hit in practice. An
+integer threshold needs a delta bigger than 1 — `CELL2_KEEP` 1→1.37 is the same predicate. And one input
+is one world size: the fresh-water `SHELF_CELLS` looks completely inert on a 120-wide world, because
+vanilla's depth ramp overtakes the shelf past the first ring at that BPC, but it bites on a small world
+(`WORLD=480`). Sweep at more than one size before believing a constant is dead.
+
 Still unguarded, and worth knowing before trusting a green run: `gridToPng` (it is `canvas.toBlob`, and the
 PNGs are for humans — the mod reads the .bin files), everything touching the DOM or the worker pool, the
 hosted-generation POST/poll, and `src/geo.js` / `src/worldgen.js` / `src/voxel.js` / `src/raster.js`, whose
