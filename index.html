@@ -9966,31 +9966,32 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     // Cells come from a jittered grid (one site per grid square, so the nearest site is always within the
     // 5x5 block around a pixel — no full Voronoi build needed). Cells whose site is not land are left
     // alone, which keeps coastlines smooth instead of stepping them.
-    {
-      const CELL_SPACING = 6.5;     // cells across, in import cells (~17 world blocks, close to vanilla's)
-      const CELL_SHARP = 0.90;      // how much of the hard cell edge survives the smoothing
+    const CELL_SPACING = 6.5;       // cells across, in import cells (~17 world blocks, close to vanilla's)
+    // Reads hf as it stands and hands back the hard per-cell field plus a once-blurred copy of it, for the
+    // caller to mix. `siteOk(si)` says which sites may be sampled, `cellOk(j)` which pixels may move; the
+    // corridor pass below runs it a second time with a narrower pair of those.
+    const cellFlatten = (siteOk, cellOk) => {
       const cells = Math.max(1, Math.round(res / CELL_SPACING)), cw = res / cells;
       const wrapC = v => ((v % cells) + cells) % cells;
+      const wrapD = (a, b) => { const d = Math.abs(a - b); return d > res / 2 ? res - d : d; };
       const siteX = new Float32Array(cells * cells), siteY = new Float32Array(cells * cells);
-      const siteV = new Float32Array(cells * cells), siteOk = new Uint8Array(cells * cells);
+      const siteV = new Float32Array(cells * cells), siteUse = new Uint8Array(cells * cells);
       for (let cy = 0; cy < cells; cy++) for (let cx = 0; cx < cells; cx++) {
         const c = cy * cells + cx;
         const px = (cx + h2(cx, cy)) * cw, py = (cy + h2(cx + 7777, cy + 3333)) * cw;
         siteX[c] = px; siteY[c] = py;
         const ix = Math.min(res - 1, px | 0), iy = Math.min(res - 1, py | 0), si = iy * res + ix;
-        if (land[si] === 1) { siteV[c] = hf[si]; siteOk[c] = 1; }
+        if (siteOk(si)) { siteV[c] = hf[si]; siteUse[c] = 1; }
       }
-      const flat = new Float32Array(n);
-      for (let j = 0; j < n; j++) flat[j] = hf[j];
-      const wrapD = (a, b) => { const d = Math.abs(a - b); return d > res / 2 ? res - d : d; };
+      const flat = new Float32Array(hf);
       for (let y = 0; y < res; y++) for (let x = 0; x < res; x++) {
         const j = y * res + x;
-        if (land[j] !== 1) continue;
+        if (!cellOk(j)) continue;
         const gx = Math.floor(x / cw), gy = Math.floor(y / cw);
         let best = -1, bd = Infinity;
         for (let oy = -2; oy <= 2; oy++) for (let ox = -2; ox <= 2; ox++) {
           const c = wrapC(gy + oy) * cells + wrapC(gx + ox);
-          if (!siteOk[c]) continue;
+          if (!siteUse[c]) continue;
           const dx = wrapD(x, siteX[c]), dy = wrapD(y, siteY[c]), d = dx * dx + dy * dy;
           if (d < bd) { bd = d; best = c; }
         }
@@ -9998,6 +9999,12 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
       }
       const soft = new Float32Array(flat);
       boxBlurTor(soft, res, 1, 1);
+      return { flat, soft };
+    };
+    {
+      const CELL_SHARP = 0.90;      // how much of the hard cell edge survives the smoothing
+      const isLand = j => land[j] === 1;
+      const { flat, soft } = cellFlatten(isLand, isLand);
       for (let j = 0; j < n; j++) if (land[j] === 1) hf[j] = soft[j] * (1 - CELL_SHARP) + flat[j] * CELL_SHARP;
     }
     // A real river is not the same on both banks or along its length: the inside of a bend silts up into
@@ -10146,12 +10153,17 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     // — far enough, in places, to leave the bank UNDER the water it is holding back, which reads in game as
     // a lake spilling over the terrain. Put the shore back: any land touching water sits a block above it.
     const SHORE_LIP = 0.35 * BLK;
-    for (let j = 0; j < n; j++) {
-      if (land[j] !== 1) continue;
-      let need = -Infinity;
-      for (const nb of nbr4(j)) if (land[nb] === 2 && wsurf[nb] > need) need = wsurf[nb];
-      if (need > -Infinity && hf[j] < need + SHORE_LIP) hf[j] = need + SHORE_LIP;
-    }
+    // Runs again after the corridor is snapped back onto its cells, since that move can drop the ring below
+    // the water a second time; it is the lower bound on the shore, so nothing may leave it unenforced.
+    const restoreShore = () => {
+      for (let j = 0; j < n; j++) {
+        if (land[j] !== 1) continue;
+        let need = -Infinity;
+        for (const nb of nbr4(j)) if (land[nb] === 2 && wsurf[nb] > need) need = wsurf[nb];
+        if (need > -Infinity && hf[j] < need + SHORE_LIP) hf[j] = need + SHORE_LIP;
+      }
+    };
+    restoreShore();
     // The first few metres of LAND have to stay near the water too. Capping only the ring that touches it
     // leaves the ground behind free to climb, and read out of a real save that is what the bank actually is:
     // the highest ground within 3 m of our shores is 2 blocks over the water at p50 where vanilla's is 1.
@@ -10217,35 +10229,10 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
       for (let j = 0; j < n; j++) if (land[j] === 2) { dwc[j] = 0; cws[j] = wsurf[j]; q2.push(j); }
       for (let k = 0; k < q2.length; k++) { const c = q2[k]; if (dwc[c] >= CELL2_REACH) continue;
         for (const nb of nbr4(c)) if (dwc[nb] < 0) { dwc[nb] = dwc[c] + 1; cws[nb] = cws[c]; q2.push(nb); } }
-      const CELL_SPACING2 = 6.5;
-      const cells = Math.max(1, Math.round(res / CELL_SPACING2)), cw = res / cells;
-      const wrapC = v => ((v % cells) + cells) % cells;
-      const siteX = new Float32Array(cells * cells), siteY = new Float32Array(cells * cells);
-      const siteV = new Float32Array(cells * cells), siteOk = new Uint8Array(cells * cells);
-      for (let cy = 0; cy < cells; cy++) for (let cx = 0; cx < cells; cx++) {
-        const c = cy * cells + cx;
-        const px = (cx + h2(cx, cy)) * cw, py = (cy + h2(cx + 7777, cy + 3333)) * cw;
-        siteX[c] = px; siteY[c] = py;
-        const ix = Math.min(res - 1, px | 0), iy = Math.min(res - 1, py | 0), si = iy * res + ix;
-        if (land[si] === 1 && (dwc[si] < 0 || dwc[si] > CELL2_KEEP)) { siteV[c] = hf[si]; siteOk[c] = 1; }
-      }
-      const flat = new Float32Array(hf);
-      const wrapD = (a, b) => { const d = Math.abs(a - b); return d > res / 2 ? res - d : d; };
-      for (let y = 0; y < res; y++) for (let x = 0; x < res; x++) {
-        const j = y * res + x;
-        if (land[j] !== 1 || (dwc[j] >= 0 && dwc[j] <= CELL2_KEEP)) continue;
-        const gx = Math.floor(x / cw), gy = Math.floor(y / cw);
-        let best = -1, bd = Infinity;
-        for (let oy = -2; oy <= 2; oy++) for (let ox = -2; ox <= 2; ox++) {
-          const c = wrapC(gy + oy) * cells + wrapC(gx + ox);
-          if (!siteOk[c]) continue;
-          const dx = wrapD(x, siteX[c]), dy = wrapD(y, siteY[c]), d = dx * dx + dy * dy;
-          if (d < bd) { bd = d; best = c; }
-        }
-        if (best >= 0) flat[j] = siteV[best];
-      }
-      const soft = new Float32Array(flat);
-      boxBlurTor(soft, res, 1, 1);
+      // Same cells as the land pass, minus the ring beside the water at either end: a site sited in it
+      // would drag it up, and a pixel in it would lose the shape the passes above gave it.
+      const outsideRing = j => land[j] === 1 && (dwc[j] < 0 || dwc[j] > CELL2_KEEP);
+      const { flat, soft } = cellFlatten(outsideRing, outsideRing);
       // Only the FINE structure is snapped. A cell is 17 blocks across, so on a valley wall one site can
       // stand ten blocks above the ground beside the water, and taking it whole would put the trench and
       // the rim straight back. Holding the move to about one terrace band keeps the macro shape the passes
@@ -10262,13 +10249,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
         if (dwc[j] >= 1 && v < cws[j] + CELL2_FLOOR) v = Math.min(hf[j], cws[j] + CELL2_FLOOR);
         hf[j] = v;
       }
-      // the shoreline is still owed its block of freeboard after any move
-      for (let j = 0; j < n; j++) {
-        if (land[j] !== 1) continue;
-        let need = -Infinity;
-        for (const nb of nbr4(j)) if (land[nb] === 2 && wsurf[nb] > need) need = wsurf[nb];
-        if (need > -Infinity && hf[j] < need + SHORE_LIP) hf[j] = need + SHORE_LIP;
-      }
+      restoreShore();   // the shoreline is still owed its freeboard after any move
     }
     // finalize: lakes hold water above their (fixed) bed; other land keeps its relief above sea; sea stays deep
     //
