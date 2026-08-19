@@ -12,12 +12,17 @@
 //   bank climb follows the land behind     0.479   0.461  0.479      0.204     0.623   rho >= 0.35
 //   climb concentrated in a riser or two   0.683   0.671  0.682      0.710     0.526   >= 0.60
 //
-// A fifth was added when the water levelling landed, and the four reverts above were regenerated from the
-// designer of the day so the table stays honest — an old revert copy predates later fixes and fails checks
-// it was never meant to exercise:
+// A fifth was added when the water levelling landed, and a sixth when lakes were given one level each.
+// Every revert is regenerated from the designer of the day so the table stays honest — an old revert copy
+// predates later fixes and fails checks it was never meant to exercise:
 //
-//   check                                  main    sea    pinstripe  corridor  shelf   level   bound
-//   surface tilts along, not across        0.35    0.20   0.35       0.35      0.35    0.65    <= 0.60
+//   check                                  main    sea   pinstripe corridor shelf  level  lake   bound
+//   surface tilts along, not across        0.35   0.20   0.35      0.35     0.35   0.72   0.35   <= 0.60
+//   a lake comes out at one level          0.0%   0.0%   0.0%      0.0%     0.0%   0.0%   3.7%   <= 1%
+//
+// The seventh check is not paired with a revert, because what it guards against is not a revert but a
+// wrong fix: levelling every body of water rather than the lakes passes all six above and takes the coast
+// design's course from five levels to one.
 //
 // Run:  node test/verify-shape.js
 //       DESIGNER=<copy> node test/verify-shape.js      (to check a variant)
@@ -246,6 +251,66 @@ const rays = (() => {
     + ' pairs, along ' + b.toFixed(4) + ' over ' + nAlong + ')');
 }
 
+
+
+// A lake has no flow direction, so it holds ONE surface level, and vanilla's always does — it assigns
+// one elevation per lake polygon (VoronoiWorldGenerator). The authored pipeline takes every cell's level
+// from its own bank instead, so a lake drawn across a slope keeps a low shore on its downhill side.
+// Measured on a generated 1200² world, 4.21% of the water in lake-shaped bodies sat off its lake's main
+// level; one 894-column lake arrived over four levels with the water visibly running over the step. Seven
+// stock vanilla worlds read 0.00% each.
+//
+// This needs a THIRD drawing. Neither design above can see the defect: both draw their lakes on ground
+// level enough that the ring comes out flat anyway, and the share below reads 0.0% on them whatever the
+// source does. What it takes is a lake whose two sides stand on ground of clearly different heights, so
+// the drawing puts a biome step through the middle of one.
+{
+  const S = 192, G = 448;                         // 448: the export size the shipping map uses
+  const LKX = 0.58, LKY = 0.30, LKR = 0.030;      // the lake, sitting on the biome step at LKX
+  const draw = () => {
+    const px = new Uint8ClampedArray(S * S * 4);
+    const put = (x, y, c) => { if (x < 0 || y < 0 || x >= S || y >= S) return; const o = (y * S + x) * 4; px[o] = c[0]; px[o + 1] = c[1]; px[o + 2] = c[2]; px[o + 3] = 255; };
+    for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) { const t = x / S;
+      put(x, y, t < 0.08 ? COLOR.Ocean : t < 0.11 ? COLOR.Coast : t < LKX ? COLOR.Grassland : COLOR.Ice); }
+    const disc = (cx, cy, r, c) => { for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) if (dx * dx + dy * dy <= r * r) put(Math.round(cx + dx), Math.round(cy + dy), c); };
+    disc(S * LKX, S * LKY, Math.round(S * LKR), FRESH);
+    return { width: S, height: S, data: px };
+  };
+  const m = runImageToMaps(draw(), G);
+  // The test drew the lake, so it knows where it is. Deliberately no shape rule here: the check stays
+  // independent of whatever rule the source uses to decide what a lake is.
+  const cx = LKX * G, cy = G - 1 - LKY * G, rr = LKR * G + 2;     // export rows run opposite to drawn rows
+  const lv = new Map(); let lake = 0;
+  for (let j = 0; j < G * G; j++) {
+    const x = j % G, y = (j / G) | 0;
+    if (!m.water[j] || (x - cx) * (x - cx) + (y - cy) * (y - cy) > rr * rr) continue;
+    lake++; const wy = waterY(m.water[j]); lv.set(wy, (lv.get(wy) || 0) + 1);
+  }
+  const levels = [...lv.entries()].sort((a, b) => b[1] - a[1]);
+  const off = lake - (levels.length ? levels[0][1] : 0);
+  // Without the levelling this drawing reads 3.7%, and 3.2-11.7% over a range of lake sizes and biome
+  // steps; with it, 0.0% on every one of them. The bound is a share, so it survives the lake being drawn
+  // bigger or smaller, and it is deliberately not zero: the export quantises the surface to a byte and a
+  // byte is 0.24 of a block, so a level lake can in principle still straddle a block boundary.
+  check('a lake comes out at ONE level', lake > 300 && off <= 0.01 * lake,
+    lake + ' cells in the drawn lake, ' + off + ' off its main level (' + (100 * off / Math.max(1, lake)).toFixed(1)
+    + '%), levels ' + levels.map(([k, v]) => k + ':' + v).join(' '));
+}
+
+// And the opposite, which matters as much: levelling every body of water would pass the check above and
+// destroy the world. The whole of the water work exists to take the tilt out ACROSS a channel while
+// leaving the fall ALONG it, and the ratio checked further up cannot see this — with both terms driven to
+// zero it reads 0.00 and passes. So assert the fall itself, on the coast design, whose course drops four
+// blocks from its head to the sea. A pass that levelled bodies rather than lakes brings this to one level
+// and a span of 0.
+{
+  const lv = new Set();
+  for (let i = 0; i < g * g; i++) if (water[i]) lv.add(waterY(water[i]));
+  const ys = [...lv].sort((a, b) => a - b);
+  check('the water still descends along its course', ys.length >= 3 && ys[ys.length - 1] - ys[0] >= 3,
+    'fresh water occupies ' + ys.length + ' levels, ' + ys[0] + '..' + ys[ys.length - 1]
+    + ' — a fall of ' + (ys[ys.length - 1] - ys[0]) + ' blocks');
+}
 
 console.log(fails ? '\n' + fails + ' FAILED' : '\nALL PASS ✓');
 process.exit(fails ? 1 : 0);
