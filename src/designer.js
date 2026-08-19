@@ -784,10 +784,10 @@
     for (const cells of groups) {
       const tally = {}; for (const j of cells) for (const nb of nbr4(j)) if (land[nb] === 1) tally[biome[nb]] = (tally[biome[nb]] || 0) + 1;
       let lb = SC.Grassland, bc = -1; for (const k in tally) if (tally[k] > bc) { bc = tally[k]; lb = +k; }   // majority shore biome
+      // Only the mask and the surface are settled here. hf/water/bed are written once, at the end, out of
+      // the surface the passes below leave behind — anything put in them now is overwritten unread.
       for (const j of cells) {
-        const surface = Math.max(SEA + 0.01, level[j] - 0.012);                   // just under the surrounding bank
-        const bottom = Math.max(0.03, surface - 0.03);
-        biome[j] = lb; land[j] = 2; water[j] = Math.max(1, Math.min(255, Math.round((2 * surface - 1) * 255))); bed[j] = bottom; hf[j] = surface; wsurf[j] = surface;
+        biome[j] = lb; land[j] = 2; wsurf[j] = Math.max(SEA + 0.01, level[j] - 0.012);   // just under the surrounding bank
       }
     }
     // Knock isolated spikes out of the water surface. The priority flood lets a cell in open water take its
@@ -1021,7 +1021,6 @@
         const surface = Math.max(SEA + 0.01, wsurf[j]);
         wsurf[j] = surface; hf[j] = surface;
         water[j] = Math.max(1, Math.min(255, Math.round((2 * surface - 1) * 255)));
-        bed[j] = Math.min(bed[j], Math.max(0.03, surface - 0.03));
       }
     }
     // Shelve the fresh water at its edges, the way the sea already is. A flat bed a fixed depth below the
