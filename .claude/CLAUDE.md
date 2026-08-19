@@ -95,9 +95,9 @@ mechanism — no separate state. `syncWorldFields()` pulls current values in on 
 design-zip re-import; `wireWorldFields()` mirrors edits back out; `updateWorldMeta()` shows `w chunks · w·10×w·10 m`.
 Other config knobs (pointRadius, biome weights, continents…) don't affect authored output, so they stay on the map page.
 
-Removed in the cleanup pass: the Ore-distribution chart (`OreChart`) + its toggles, the Block-composition
-Crushed/Emphasize toggles (fixed to separate/normal), the Manual-knobs ore editor (`buildOreEditor` is a
-guarded no-op kept for shared callers), and the "Open in ore visualizer" handoff.
+Removed in the cleanup passes, and gone rather than stubbed: the Ore-distribution chart (`OreChart`) + its
+toggles, the Block-composition Crushed/Emphasize toggles (fixed to separate/normal), the Manual-knobs ore
+editor (`buildOreEditor`/`wireOreEditor`), and the "Open in ore visualizer" handoff.
 
 ## Architecture
 
@@ -141,9 +141,10 @@ model's honesty caveats). Underground editing changes the ore chart + the export
 - On load, `derefTerrain()` resolves the `TerrainModule`'s `$id`/`$ref` graph into a plain editable tree
   (keeps `$type`, drops `$id`/`$ref`) stored in the global `terrain`. Export writes it back as plain JSON
   (no cycles, so it deserializes fine without the reference ids).
-- The **Manual knobs** editor exposes material-bearing **veins** (`DepositTerrainModule`) and **scatter**
-  (`StandardTerrainModule`) with slider+number knobs; add/remove per biome. `oreOpen` preserves which
-  `<details>` are expanded across rebuilds.
+- **veins** are `DepositTerrainModule`, **scatter** is `StandardTerrainModule`. `ORE_SLIDER`/`KNOB_LABEL`
+  and the `knob1`/`knobR`/`blockSelect` helpers build the slider+number knobs for both; `tmplVein`/
+  `tmplScatter` are the nodes the Add buttons insert. The separate Manual-knobs editor that used to own
+  these is gone — the Visual editor is the only one.
 - The **Visual editor** (`OreVisual` IIFE in `build.js`) draws the whole underground for one biome as a single
   100%-stacked column and lets you drag blocks to edit them. It builds a per-**depth** composition (veins
   overwrite first-wins, then each stratum's rock is carved by its scatters — the same model as `BlockChart`),
@@ -153,10 +154,8 @@ model's honesty caveats). Underground editing changes the ore chart + the export
   (`fracY`/`cumY`/`xOf`), so it's gap-free. Editing stays depth-based: pointer-Y maps back to depth through the
   surface **midpoint** (`depthAtSvgY`), so drags past the midpoint can fall off-screen — use the detail-panel
   number inputs for those. Vertical scale is `SCe = 1000 / max(60, MaxGenerationHeight)` (taller worlds scale up).
-- Two charts render from the live `buildExportJson()`: **`BlockChart`** (the 100%-stacked block-composition
-  chart the Visual editor is designed to match) and **`OreChart`**, ported from the eco-biome-visualizer
-  (`extract`/`depthProfile`/`smearY`/`render`). The hand-off button posts the config to the standalone
-  visualizer (`eco-oreviz-ready` → `eco-config` postMessage handshake).
+- One chart renders from the live `buildExportJson()`: **`BlockChart`**, the 100%-stacked block-composition
+  chart the Visual editor is designed to match. `scheduleOreRender()` debounces it after every edit.
 
 ## The "Design a map" inverse search (src/search.js + src/designer.js)
 
