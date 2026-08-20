@@ -5,6 +5,7 @@
 //   * neighbouring water cells must not step much — a big step is a wall of water mid-lake
 //   * water must never sit above the LAND beside it — that is water pouring over terrain
 //   * a lake basin must be ONE level, or it is a staircase
+//   * a lake must be dug to a lake's depth and a channel to a channel's
 // Note what is deliberately NOT asserted: distinct levels per body. A river descending a hillside
 // legitimately has one per block; counting them flags correct output as broken.
 //
@@ -13,7 +14,7 @@
 //
 //   node test/verify-water.js
 'use strict';
-const { SC, COLOR, FRESH, runImageToMaps, WL, RELIEF, waterY, landY } = require('./designer-harness');
+const { SC, COLOR, FRESH, runImageToMaps, constValue, WL, RELIEF, waterY, landY } = require('./designer-harness');
 
 /** A continent with a round lake and a river running off it to the sea. */
 function drawDesign(S) {
@@ -119,6 +120,9 @@ check('water is a sane depth, not a pit', dmin >= 1, dmin + '..' + dmax + ' bloc
     if (!water[i] || dIn[i] < 1) continue;
     // Capped at 8 blocks. Vanilla's rule deepens without limit, which suits channels 6-12 m wide; ours are
     // 16-32 m by design and the same rule takes them to 15, against vanilla's own measured max of 11.
+    // It is the CHANNEL cap that applies across this design: its lake drains into the river, so the two
+    // are one body, and no body here fills enough of its own box to be dug deeper. The lake cap gets its
+    // own design at the end of this file.
     const want = Math.min(8, Math.max(1.8, Math.max(1, 2 * ((dIn[i] - 0.5) * BPC) - 1) * 0.4706));
     if (waterY(water[i]) - want < 4) { atFloor++; continue; }   // vanilla bottoms out here too
     const d = Math.abs((waterY(water[i]) - landY(height[i])) - want);
@@ -514,6 +518,108 @@ check('no wall of water out in open water', midOpen === 0, midOpen + ' such pair
   // catches a return to a slope-limited carve without tripping on ordinary retuning of the pull or reach.
   check('fresh-water banks are a valley, not a trench', P(0.9) <= 26,
     'median ' + P(0.5) + ', p90 ' + P(0.9) + ', max ' + (rises[rises.length - 1] || 0) + ' blocks within 20 m');
+}
+
+// ---- a LAKE gets a deeper bed than a channel, and nothing else does ------------------------------
+//
+// The bed is capped at 8 blocks because a deep channel cuts like a canyon. A lake has no such problem,
+// and a stock world's are not 8 either: over seven of them fresh water reaches 10-12 blocks at p99 and
+// 13-17 at worst, and their ~2,500-cell lakes run 11-14 deep. `imageToMaps` separates the two by SHAPE,
+// the way WorldGenAnalysis/metrics/lakes.js does when it measures a generated world — a body's area
+// against the area of its own bounding box.
+//
+// So this design draws four bodies of the SAME width, wide enough that vanilla's ramp wants far more
+// than the cap in every one of them, and leaves that ratio as the only thing separating them: a round
+// lake, a winding river, and a pair of diagonal bars whose lengths land either side of the threshold
+// (a 45-degree bar of width h and length w fills 2wh/(w+h)² of its box, so length alone moves it).
+// Each body is drawn well clear of the others, since two that touch are one body to the test.
+function drawBodies(S) {
+  const px = new Uint8ClampedArray(S * S * 4);
+  const put = (x, y, c) => { if (x < 0 || y < 0 || x >= S || y >= S) return; const o = (y * S + x) * 4; px[o] = c[0]; px[o + 1] = c[1]; px[o + 2] = c[2]; px[o + 3] = 255; };
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const dx = x - S / 2, dy = y - S / 2, r = Math.sqrt(dx * dx + dy * dy);
+    put(x, y, r < S * 0.47 ? (r < S * 0.18 ? COLOR.Taiga : COLOR.Grassland) : COLOR.Ocean);
+  }
+  const disc = (cx, cy, rad) => { for (let y = cy - rad; y <= cy + rad; y++) for (let x = cx - rad; x <= cx + rad; x++)
+    if ((x - cx) ** 2 + (y - cy) ** 2 <= rad * rad) put(x, y, FRESH); };
+  // A 45-degree bar: |u| <= w/2 across the long axis, |v| <= h/2 across the short one.
+  const bar = (cx, cy, w, h) => { const R = Math.ceil((w + h) / 2);
+    for (let y = cy - R; y <= cy + R; y++) for (let x = cx - R; x <= cx + R; x++) {
+      const u = (x - cx + y - cy) / Math.SQRT2, v = (x - cx - y + cy) / Math.SQRT2;
+      if (Math.abs(u) <= w / 2 && Math.abs(v) <= h / 2) put(x, y, FRESH);
+    } };
+  disc(Math.round(S * 0.30), Math.round(S * 0.28), Math.round(S * 0.080));    // the lake
+  bar(Math.round(S * 0.71), Math.round(S * 0.27), S * 0.150, S * 0.052);      // short bar: fills ~0.38 of its box
+  bar(Math.round(S * 0.71), Math.round(S * 0.66), S * 0.235, S * 0.052);      // long bar:  fills ~0.29
+  // The river: a meander of the same width. Its bends are what keep its body from filling its own box —
+  // the excursion sets the box's height while only the channel itself is water.
+  for (let t = 0; t <= 1; t += 0.0015) {
+    const x = Math.round(S * (0.13 + 0.37 * t)), y = Math.round(S * (0.72 + 0.12 * Math.sin(t * 2 * Math.PI)));
+    disc(x, y, Math.round(S * 0.024));
+  }
+  return { width: S, height: S, data: px };
+}
+
+{
+  const S = 320, R2 = 256;
+  const m2 = runImageToMaps(drawBodies(S), R2);
+  const wet = i => m2.water[i] > 0;
+  const nb2 = i => { const x = i % R2, y = (i / R2) | 0; return [((x + 1) % R2) + y * R2, ((x + R2 - 1) % R2) + y * R2, x + ((y + 1) % R2) * R2, x + ((y + R2 - 1) % R2) * R2]; };
+  const OLD_CAP = constValue('MAX_DEPTH');            // what every body used to be held to
+  const LAKE_FILL = constValue('LAKE_FILL');
+  const LAKE_MAX = constValue('LAKE_MAX_DEPTH');
+  const seen = new Uint8Array(R2 * R2), bodies = [];
+  for (let i = 0; i < R2 * R2; i++) {
+    if (!wet(i) || seen[i]) continue;
+    const st = [i]; seen[i] = 1; const cells = [];
+    while (st.length) { const c = st.pop(); cells.push(c); for (const n of nb2(c)) if (wet(n) && !seen[n]) { seen[n] = 1; st.push(n); } }
+    if (cells.length < 40) continue;                  // stray specks left by the resample
+    let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9, deepest = 0;
+    for (const c of cells) {
+      const x = c % R2, y = (c / R2) | 0;
+      x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+      const d = waterY(m2.water[c]) - landY(m2.height[c]); if (d > deepest) deepest = d;
+    }
+    bodies.push({ cells, fill: cells.length / ((x1 - x0 + 1) * (y1 - y0 + 1)), deepest });
+  }
+  // In fill order the design's four bodies are: the round lake, the short bar, then the long bar and
+  // the river. Which side of the threshold each bar lands on IS the threshold, so the split is pinned
+  // to the design rather than read back out of LAKE_FILL — a check that recomputes its own expectation
+  // from the constant it is guarding moves with it and can never fail.
+  bodies.sort((a, b) => b.fill - a.fill);
+  const shown = bodies.map(b => 'fill ' + b.fill.toFixed(2) + ' -> ' + b.deepest + ' blocks (' + b.cells.length + ' cells)').join(', ');
+  const lakes = bodies.slice(0, 2), chans = bodies.slice(2);
+  check('the design draws the four bodies it means to', bodies.length === 4, shown);
+
+  // Every body here is wide enough that vanilla's ramp asks for far more than the cap, so a body that
+  // came out AT the old cap is one the cap held — which is what makes the split meaningful.
+  check('a drawn lake is dug deeper than the old fixed cap', lakes.every(b => b.deepest > OLD_CAP),
+    'the round lake and the short bar reach ' + lakes.map(b => b.deepest).join(' and ')
+    + ' blocks, against the old cap of ' + OLD_CAP);
+  check('a drawn river keeps its shallow bed', chans.every(b => b.deepest <= OLD_CAP),
+    'the long bar and the meander reach ' + chans.map(b => b.deepest).join(' and ')
+    + ' blocks, against the cap of ' + OLD_CAP);
+  // The two bars differ in nothing but length, so they carry the same width and the same demand for
+  // depth to either side of the threshold. Without the fill test both would go the same way.
+  check('the deepening splits the bodies exactly where the shape test does',
+    lakes[1].fill >= LAKE_FILL && chans[0].fill < LAKE_FILL && lakes[1].deepest > chans[0].deepest,
+    'threshold ' + LAKE_FILL + ' — ' + shown);
+  // Depth stays inside the range a stock world holds — it is a lake bed, not a shaft. 17 is the deepest
+  // fresh water measured over seven of them.
+  const STOCK_MAX_DEPTH = 17;
+  check('no bed is dug past the deepest fresh water a stock world holds',
+    LAKE_MAX <= STOCK_MAX_DEPTH && bodies.every(b => b.deepest <= STOCK_MAX_DEPTH),
+    'bound ' + LAKE_MAX + ' against a stock world\'s ' + STOCK_MAX_DEPTH + ', deepest here '
+    + Math.max.apply(null, bodies.map(b => b.deepest)) + ' blocks');
+  // Deepening the middle must not cost the lake its single surface: the level pass runs before the bed
+  // is cut, so the two are independent, and this is what says so.
+  const lakeLevels = lakes.map(b => new Set(b.cells.map(c => waterY(m2.water[c]))).size);
+  check('a deepened lake still comes out at ONE level', lakeLevels.every(k => k === 1),
+    lakes.map((b, k) => b.cells.length + ' cells/' + lakeLevels[k] + ' level(s)').join(', '));
+  // And the bed stays under its own surface everywhere, however deep the body is allowed to go.
+  let dry = 0, worst = 99;
+  for (let i = 0; i < R2 * R2; i++) if (wet(i)) { const d = waterY(m2.water[i]) - landY(m2.height[i]); if (d < 1) dry++; if (d < worst) worst = d; }
+  check('the bed never reaches its own water surface', dry === 0, dry + ' columns holding no water, shallowest ' + worst + ' blocks');
 }
 
 console.log(fails ? '\n' + fails + ' FAILED' : '\nALL PASS ✓');
