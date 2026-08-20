@@ -4,7 +4,7 @@
 // Injected RAW into the page (like render3d.js), AFTER the main script, so it can use template
 // literals freely and reference the main-thread globals ($, baseCfg, readForm, populateForm,
 // generateMap, makeWorker, VT, sharesToWeights, WEIGHT_KEYS, terrain, cfgUsed) and the inlined
-// search core (SCLASS, SC, NUM_CLASSES, scoreGrids, histogram).
+// search core (SCLASS, SC, NUM_CLASSES, scoreGrids, blendScore, histogram).
 //
 // Honest scope: the generator has NO spatial-placement knobs — where a biome lands is a chaotic
 // function of the seed. So this is a lottery scored by similarity, not an optimizer that converges.
@@ -86,7 +86,7 @@
   // display switches back to it.
   let importPreview = null;      // Uint8Array(IMPORT_RES^2) class per cell, generation orientation
   let importLegendIdxHi = null;  // legend index per hi-res cell, so remapping a colour rebuilds instantly
-  let paintedSinceImport = false; // once the user hand-edits an import, export falls back to the 64² grid
+  let paintedSinceImport = false; // once the user hand-edits an import, export falls back to the G² paint grid
   const IMPORT_RES = 448;        // biome/height resolution exported for a pure image import (finer = steeper, less-terraced terrain)
   // dark -> light biome ramp for brightness mode (low/dark = deep water, high/light = snow), reads as terrain
   const BRIGHT_RAMP = ['Ocean', 'Wetland', 'ColdForest', 'Taiga', 'RainForest', 'Grassland', 'WarmForest', 'Desert', 'Tundra', 'Coast', 'Ice'];
@@ -408,7 +408,7 @@
       }
     } else importPreview = null;
     renderPaint();
-    const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target, true);
+    const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target);
     return count;
   }
   function flashMix(count) {
@@ -451,10 +451,6 @@
     $('lgAuto').onclick = () => { pushUndo(); legend.forEach(e => e.cls = e.def); renderLegend(); flashMix(applyLegend()); };
   }
   function hideLegend() { legend = []; imgLegendIdx = null; lastImgData = null; importedImg = null; paintedSinceImport = false; importPreview = null; importLegendIdxHi = null; const w = $('dsnLegendWrap'); if (w) { w.style.display = 'none'; w.innerHTML = ''; } }
-  // Resample the ORIGINAL imported image at a higher resolution and produce aligned biome + height maps
-  // (bypassing the coarse 64² paint grid) so a photo/portrait exports with far sharper features. Uses the
-  // current legend + mode; height follows the picture (dark/low = deep water, light/high = land) so the
-  // land/water outline stays crisp and matched to the biome tint.
   // toroidal separable box blur (in place); spreads biome-edge height steps into gentle slopes
   function boxBlurTor(a, res, r, passes) {
     const tmp = new Float32Array(res * res), inv = 1 / (2 * r + 1), wrap = (v) => ((v % res) + res) % res;
@@ -467,7 +463,10 @@
   }
   // value/fractal noise over the res grid (toroidal), reusing the painter's hash h2 — for within-biome relief
   function vnR(x, y, P, res) { const fx = x / res * P, fy = y / res * P, x0 = Math.floor(fx), y0 = Math.floor(fy), tx = fx - x0, ty = fy - y0, w = v => ((v % P) + P) % P; const a = h2(w(x0), w(y0)), b = h2(w(x0 + 1), w(y0)), c = h2(w(x0), w(y0 + 1)), e = h2(w(x0 + 1), w(y0 + 1)), sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty); return (a + (b - a) * sx) * (1 - sy) + (c + (e - c) * sx) * sy; }
-  function fbmR(x, y, res) { return 0.5 * vnR(x, y, 10, res) + 0.3 * vnR(x, y, 26, res) + 0.2 * vnR(x, y, 64, res); }
+  // Resample the ORIGINAL imported image at `res` (well above the G² paint grid) and produce aligned biome
+  // + height maps, so a photo/portrait exports with far sharper features. Uses the current legend + mode;
+  // height follows the picture (dark/low = deep water, light/high = land) so the land/water outline stays
+  // crisp and matched to the biome tint.
   function imageToMaps(res, blocksPerCell) {
     const BPC = blocksPerCell || 1200 / res;      // a 120-wide world unless told otherwise
     const c = document.createElement('canvas'); c.width = res; c.height = res;
@@ -478,10 +477,14 @@
     const biome = new Uint8Array(n), height = new Uint8Array(n);
     const hf = new Float32Array(n), land = new Uint8Array(n);   // base height + land mask, in FINAL orientation
     const fresh = new Uint8Array(n);                            // 1 where the source used the fresh-water colour
-    // per-biome base height (mild compression toward a common mean keeps biome edges from being cliffs;
-    // real rolling-hill relief is added on top below). SEA = 0.5.
-    const LAND_MEAN = 0.60, COMPRESS = 0.65, SEA = 0.5;
-    const put = (x, y, cls, h01, isLand) => { const j = (res - 1 - y) * res + x; biome[j] = cls; hf[j] = h01; land[j] = isLand ? 1 : 0; };   // flip Y like the 64² path
+    // Only the SEA keeps a height from the decode — the shelf below ramps up from this bed. Every land
+    // cell is redrawn by the ridged/coast-distance field further down, so all the colour decode owes a
+    // land cell is which side of the waterline it is on. (Brightness needs its own value regardless: for
+    // a photo the tone IS the land/water test.) There used to be a per-biome base height here, compressed
+    // toward a common mean so biome edges were not cliffs; the biome nudge in the elevation field does
+    // that job now, off a spatially blurred target, and this one never survived to be read.
+    const SEA_BED = 0.30, SEA = 0.5;
+    const put = (x, y, cls, h01, isLand) => { const j = (res - 1 - y) * res + x; biome[j] = cls; hf[j] = h01; land[j] = isLand ? 1 : 0; };   // flip Y like the paint-grid path
     if (importMode === 'brightness') {
       const lum = new Float32Array(n), trans = new Uint8Array(n), op = [];
       for (let i = 0; i < n; i++) { const o = i * 4; if (d[o + 3] < 128) { trans[i] = 1; continue; } const L = 0.299 * d[o] + 0.587 * d[o + 1] + 0.114 * d[o + 2]; lum[i] = L; op.push(L); }
@@ -489,7 +492,7 @@
       const rank = L => { let lo = 0, hi = op.length; while (lo < hi) { const m = (lo + hi) >> 1; if (op[m] < L) lo = m + 1; else hi = m; } return lo; };
       for (let y = 0; y < res; y++) for (let x = 0; x < res; x++) {
         const i = y * res + x;
-        if (trans[i]) { put(x, y, SC.Ocean, 0.30, 0); continue; }
+        if (trans[i]) { put(x, y, SC.Ocean, SEA_BED, 0); continue; }
         const rf = rank(lum[i]) / N; let b = Math.floor(rf * nB); if (b >= nB) b = nB - 1;
         const h01 = 0.32 + 0.53 * rf;                          // dark→deep water .. light→peaks
         put(x, y, legend[b].cls, h01, h01 >= SEA ? 1 : 0);
@@ -501,8 +504,7 @@
         if (d[o + 3] < 128) cls = SC.Ocean;
         else { let bi = 0, bd = Infinity; for (let k = 0; k < legend.length; k++) { const p = legend[k].rgb, dr = d[o] - p[0], dg = d[o + 1] - p[1], db = d[o + 2] - p[2], dd = dr * dr + dg * dg + db * db; if (dd < bd) { bd = dd; bi = k; } } cls = legend[bi].cls; isFresh = !!legend[bi].fresh; }
         const isOcean = cls === SC.Ocean;
-        const band = ECO_BIOME_ELEV[CN[cls]] || [0.52, 0.62], mid = (band[0] + band[1]) / 2;
-        put(x, y, cls, isOcean ? 0.30 : LAND_MEAN + (mid - LAND_MEAN) * COMPRESS, isOcean ? 0 : 1);
+        put(x, y, cls, SEA_BED, isOcean ? 0 : 1);
         if (isFresh) fresh[(res - 1 - y) * res + x] = 1;
       }
     }
@@ -606,6 +608,34 @@
       const above = Math.max(0.02, (relief + nudge + (vnR(x, y, 24, res) - 0.5) * FINE_AMP) * maxE);
       hf[j] = 0.5 + above * 0.5;                                                  // designer frac (0.5 = sea)
     }
+    // The sea bed is a single flat plane. Every ocean cell is exported at one constant, so 100% of deep
+    // water sits at exactly 24 blocks down with four identical neighbours, where a stock world's modal
+    // depth holds under 15% of its sea and its floor reaches 48-53 blocks. Give it a profile — dropping
+    // away from the shelf, with enough roughness that it is a sea bed rather than a swimming pool.
+    {
+      const DEEP_CELLS = 45;        // how far out the floor keeps dropping
+      const SHALLOW = 0.45;         // where the sea leaves the shelf, ~12 blocks down
+      const DEEP_FLOOR = 0.25;      // ~30 blocks down: a stock world's MEDIAN is 24-27, not its floor
+      const BED_RELIEF = 0.095;     // roughness, growing with depth so the shallows stay calm
+      const dist = new Int16Array(n).fill(-1), q = [];
+      for (let j = 0; j < n; j++) if (land[j] === 1) { dist[j] = 0; q.push(j); }
+      for (let h = 0; h < q.length; h++) {
+        const c = q[h];
+        if (dist[c] >= DEEP_CELLS) continue;
+        for (const nb of nbr4(c)) if (dist[nb] < 0 && land[nb] === 0) { dist[nb] = dist[c] + 1; q.push(nb); }
+      }
+      for (let j = 0; j < n; j++) {
+        if (land[j] !== 0) continue;
+        const x = j % res, y = (j / res) | 0;
+        const d = dist[j] < 0 ? DEEP_CELLS : dist[j];
+        const t = Math.min(1, d / DEEP_CELLS), sm = t * t * (3 - 2 * t);
+        const bed = SHALLOW + (DEEP_FLOOR - SHALLOW) * sm;
+        const rough = (vnR(x, y, 14, res) - 0.5) * 2 * BED_RELIEF * sm
+                    + (vnR(x + 61.7, y + 23.1, 30, res) - 0.5) * BED_RELIEF * sm;
+        hf[j] = Math.max(0.03, Math.min(0.495, bed + rough));
+      }
+    }
+
     // Shelve the sea bed near the shore. Left at full depth the sea floor sits ~14 blocks below the land
     // it touches, and Eco carves a rock face wherever neighbouring columns differ by 5 or more — so EVERY
     // coastal cell qualified and the whole coastline came out lined with extruded sandstone. Real coasts
@@ -671,8 +701,8 @@
     // rather than on top of it. The radius is ~19 m, the distance at which the perch is visible.
     const around = Float32Array.from(hf);
     boxBlurTor(around, res, Math.max(1, Math.round(res / 23)), 2);
-    // The same average over LAND ONLY.  blurs the height field whole, and a water column's
-    // height is its bed, so within a radius of any river the average reads several blocks below the ground
+    // The same average over LAND ONLY. `around` blurs the height field whole, and a water column's height
+    // is its bed, so within a radius of any river the average reads several blocks below the ground
     // actually there. Anything that bounds a BANK has to compare it against land, not against the channel.
     const aroundLand = Float32Array.from(hf, (v, j) => land[j] === 1 ? v : 0);
     const landWeight = Float32Array.from(hf, (_, j) => land[j] === 1 ? 1 : 0);
@@ -736,7 +766,6 @@
     // the choice of levels. So relax the surface first, then carve the land to match.
     const BLK = 1 / 120;                  // one world block, in designer frac (Y = 60 + (2h-1)*60)
     const MAX_WATER_STEP = 0.5 * BLK;     // biggest rise allowed between neighbouring water cells
-    const FLAT_TOL = 1.5 * BLK;           // cells this close in height count as one pool, and level together
     const surfOf = j => (isFinite(surf[j]) ? surf[j] : 0.55);
     // Priority flood, spreading out from each body's LOWEST cell and always expanding the lowest water
     // next. Each cell takes
@@ -786,10 +815,10 @@
     for (const cells of groups) {
       const tally = {}; for (const j of cells) for (const nb of nbr4(j)) if (land[nb] === 1) tally[biome[nb]] = (tally[biome[nb]] || 0) + 1;
       let lb = SC.Grassland, bc = -1; for (const k in tally) if (tally[k] > bc) { bc = tally[k]; lb = +k; }   // majority shore biome
+      // Only the mask and the surface are settled here. hf/water/bed are written once, at the end, out of
+      // the surface the passes below leave behind — anything put in them now is overwritten unread.
       for (const j of cells) {
-        const surface = Math.max(SEA + 0.01, level[j] - 0.012);                   // just under the surrounding bank
-        const bottom = Math.max(0.03, surface - 0.03);
-        biome[j] = lb; land[j] = 2; water[j] = Math.max(1, Math.min(255, Math.round((2 * surface - 1) * 255))); bed[j] = bottom; hf[j] = surface; wsurf[j] = surface;
+        biome[j] = lb; land[j] = 2; wsurf[j] = Math.max(SEA + 0.01, level[j] - 0.012);   // just under the surrounding bank
       }
     }
     // Knock isolated spikes out of the water surface. The priority flood lets a cell in open water take its
@@ -1023,7 +1052,6 @@
         const surface = Math.max(SEA + 0.01, wsurf[j]);
         wsurf[j] = surface; hf[j] = surface;
         water[j] = Math.max(1, Math.min(255, Math.round((2 * surface - 1) * 255)));
-        bed[j] = Math.min(bed[j], Math.max(0.03, surface - 0.03));
       }
     }
     // Shelve the fresh water at its edges, the way the sea already is. A flat bed a fixed depth below the
@@ -1046,8 +1074,7 @@
     {
       const SHELF_CELLS = 3;                    // how far in the shallows reach
       const SHORE_DEPTH = 1.2 * BLK;            // depth right at the bank; below ~1.8 a shore cell can round to no water at all
-      const GRAY = 0.4706 * BLK;
-      const BEACH_MIN = 4;                      // rings the water must reach nearby before its edge is beached                // one unit of vanilla's depth
+      const GRAY = 0.4706 * BLK;                // one unit of vanilla's depth
       // Vanilla's rule deepens without limit, which is right for vanilla's channels — 6-12 m wide, so it
       // yields 3-6 blocks. Ours are 16-32 m wide by design, and the same rule yields 8-15: measured
       // against a real vanilla world, depth p50 3 / p90 9 / max 15 against its 2 / 4 / 11. Cap it, so a
@@ -1132,31 +1159,32 @@
     // Cells come from a jittered grid (one site per grid square, so the nearest site is always within the
     // 5x5 block around a pixel — no full Voronoi build needed). Cells whose site is not land are left
     // alone, which keeps coastlines smooth instead of stepping them.
-    {
-      const CELL_SPACING = 6.5;     // cells across, in import cells (~17 world blocks, close to vanilla's)
-      const CELL_SHARP = 0.90;      // how much of the hard cell edge survives the smoothing
+    const CELL_SPACING = 6.5;       // cells across, in import cells (~17 world blocks, close to vanilla's)
+    // Reads hf as it stands and hands back the hard per-cell field plus a once-blurred copy of it, for the
+    // caller to mix. `siteOk(si)` says which sites may be sampled, `cellOk(j)` which pixels may move; the
+    // corridor pass below runs it a second time with a narrower pair of those.
+    const cellFlatten = (siteOk, cellOk) => {
       const cells = Math.max(1, Math.round(res / CELL_SPACING)), cw = res / cells;
       const wrapC = v => ((v % cells) + cells) % cells;
+      const wrapD = (a, b) => { const d = Math.abs(a - b); return d > res / 2 ? res - d : d; };
       const siteX = new Float32Array(cells * cells), siteY = new Float32Array(cells * cells);
-      const siteV = new Float32Array(cells * cells), siteOk = new Uint8Array(cells * cells);
+      const siteV = new Float32Array(cells * cells), siteUse = new Uint8Array(cells * cells);
       for (let cy = 0; cy < cells; cy++) for (let cx = 0; cx < cells; cx++) {
         const c = cy * cells + cx;
         const px = (cx + h2(cx, cy)) * cw, py = (cy + h2(cx + 7777, cy + 3333)) * cw;
         siteX[c] = px; siteY[c] = py;
         const ix = Math.min(res - 1, px | 0), iy = Math.min(res - 1, py | 0), si = iy * res + ix;
-        if (land[si] === 1) { siteV[c] = hf[si]; siteOk[c] = 1; }
+        if (siteOk(si)) { siteV[c] = hf[si]; siteUse[c] = 1; }
       }
-      const flat = new Float32Array(n);
-      for (let j = 0; j < n; j++) flat[j] = hf[j];
-      const wrapD = (a, b) => { const d = Math.abs(a - b); return d > res / 2 ? res - d : d; };
+      const flat = new Float32Array(hf);
       for (let y = 0; y < res; y++) for (let x = 0; x < res; x++) {
         const j = y * res + x;
-        if (land[j] !== 1) continue;
+        if (!cellOk(j)) continue;
         const gx = Math.floor(x / cw), gy = Math.floor(y / cw);
         let best = -1, bd = Infinity;
         for (let oy = -2; oy <= 2; oy++) for (let ox = -2; ox <= 2; ox++) {
           const c = wrapC(gy + oy) * cells + wrapC(gx + ox);
-          if (!siteOk[c]) continue;
+          if (!siteUse[c]) continue;
           const dx = wrapD(x, siteX[c]), dy = wrapD(y, siteY[c]), d = dx * dx + dy * dy;
           if (d < bd) { bd = d; best = c; }
         }
@@ -1164,6 +1192,12 @@
       }
       const soft = new Float32Array(flat);
       boxBlurTor(soft, res, 1, 1);
+      return { flat, soft };
+    };
+    {
+      const CELL_SHARP = 0.90;      // how much of the hard cell edge survives the smoothing
+      const isLand = j => land[j] === 1;
+      const { flat, soft } = cellFlatten(isLand, isLand);
       for (let j = 0; j < n; j++) if (land[j] === 1) hf[j] = soft[j] * (1 - CELL_SHARP) + flat[j] * CELL_SHARP;
     }
     // A real river is not the same on both banks or along its length: the inside of a bend silts up into
@@ -1312,12 +1346,17 @@
     // — far enough, in places, to leave the bank UNDER the water it is holding back, which reads in game as
     // a lake spilling over the terrain. Put the shore back: any land touching water sits a block above it.
     const SHORE_LIP = 0.35 * BLK;
-    for (let j = 0; j < n; j++) {
-      if (land[j] !== 1) continue;
-      let need = -Infinity;
-      for (const nb of nbr4(j)) if (land[nb] === 2 && wsurf[nb] > need) need = wsurf[nb];
-      if (need > -Infinity && hf[j] < need + SHORE_LIP) hf[j] = need + SHORE_LIP;
-    }
+    // Runs again after the corridor is snapped back onto its cells, since that move can drop the ring below
+    // the water a second time; it is the lower bound on the shore, so nothing may leave it unenforced.
+    const restoreShore = () => {
+      for (let j = 0; j < n; j++) {
+        if (land[j] !== 1) continue;
+        let need = -Infinity;
+        for (const nb of nbr4(j)) if (land[nb] === 2 && wsurf[nb] > need) need = wsurf[nb];
+        if (need > -Infinity && hf[j] < need + SHORE_LIP) hf[j] = need + SHORE_LIP;
+      }
+    };
+    restoreShore();
     // The first few metres of LAND have to stay near the water too. Capping only the ring that touches it
     // leaves the ground behind free to climb, and read out of a real save that is what the bank actually is:
     // the highest ground within 3 m of our shores is 2 blocks over the water at p50 where vanilla's is 1.
@@ -1383,35 +1422,10 @@
       for (let j = 0; j < n; j++) if (land[j] === 2) { dwc[j] = 0; cws[j] = wsurf[j]; q2.push(j); }
       for (let k = 0; k < q2.length; k++) { const c = q2[k]; if (dwc[c] >= CELL2_REACH) continue;
         for (const nb of nbr4(c)) if (dwc[nb] < 0) { dwc[nb] = dwc[c] + 1; cws[nb] = cws[c]; q2.push(nb); } }
-      const CELL_SPACING2 = 6.5;
-      const cells = Math.max(1, Math.round(res / CELL_SPACING2)), cw = res / cells;
-      const wrapC = v => ((v % cells) + cells) % cells;
-      const siteX = new Float32Array(cells * cells), siteY = new Float32Array(cells * cells);
-      const siteV = new Float32Array(cells * cells), siteOk = new Uint8Array(cells * cells);
-      for (let cy = 0; cy < cells; cy++) for (let cx = 0; cx < cells; cx++) {
-        const c = cy * cells + cx;
-        const px = (cx + h2(cx, cy)) * cw, py = (cy + h2(cx + 7777, cy + 3333)) * cw;
-        siteX[c] = px; siteY[c] = py;
-        const ix = Math.min(res - 1, px | 0), iy = Math.min(res - 1, py | 0), si = iy * res + ix;
-        if (land[si] === 1 && (dwc[si] < 0 || dwc[si] > CELL2_KEEP)) { siteV[c] = hf[si]; siteOk[c] = 1; }
-      }
-      const flat = new Float32Array(hf);
-      const wrapD = (a, b) => { const d = Math.abs(a - b); return d > res / 2 ? res - d : d; };
-      for (let y = 0; y < res; y++) for (let x = 0; x < res; x++) {
-        const j = y * res + x;
-        if (land[j] !== 1 || (dwc[j] >= 0 && dwc[j] <= CELL2_KEEP)) continue;
-        const gx = Math.floor(x / cw), gy = Math.floor(y / cw);
-        let best = -1, bd = Infinity;
-        for (let oy = -2; oy <= 2; oy++) for (let ox = -2; ox <= 2; ox++) {
-          const c = wrapC(gy + oy) * cells + wrapC(gx + ox);
-          if (!siteOk[c]) continue;
-          const dx = wrapD(x, siteX[c]), dy = wrapD(y, siteY[c]), d = dx * dx + dy * dy;
-          if (d < bd) { bd = d; best = c; }
-        }
-        if (best >= 0) flat[j] = siteV[best];
-      }
-      const soft = new Float32Array(flat);
-      boxBlurTor(soft, res, 1, 1);
+      // Same cells as the land pass, minus the ring beside the water at either end: a site sited in it
+      // would drag it up, and a pixel in it would lose the shape the passes above gave it.
+      const outsideRing = j => land[j] === 1 && (dwc[j] < 0 || dwc[j] > CELL2_KEEP);
+      const { flat, soft } = cellFlatten(outsideRing, outsideRing);
       // Only the FINE structure is snapped. A cell is 17 blocks across, so on a valley wall one site can
       // stand ten blocks above the ground beside the water, and taking it whole would put the trench and
       // the rim straight back. Holding the move to about one terrace band keeps the macro shape the passes
@@ -1428,13 +1442,7 @@
         if (dwc[j] >= 1 && v < cws[j] + CELL2_FLOOR) v = Math.min(hf[j], cws[j] + CELL2_FLOOR);
         hf[j] = v;
       }
-      // the shoreline is still owed its block of freeboard after any move
-      for (let j = 0; j < n; j++) {
-        if (land[j] !== 1) continue;
-        let need = -Infinity;
-        for (const nb of nbr4(j)) if (land[nb] === 2 && wsurf[nb] > need) need = wsurf[nb];
-        if (need > -Infinity && hf[j] < need + SHORE_LIP) hf[j] = need + SHORE_LIP;
-      }
+      restoreShore();   // the shoreline is still owed its freeboard after any move
     }
     // finalize: lakes hold water above their (fixed) bed; other land keeps its relief above sea; sea stays deep
     //
@@ -1523,7 +1531,7 @@
 
   // ================================================================= painter
   // Everything is stored in generation orientation; we DISPLAY flipped-Y to match the map view.
-  function drawGrid(canvas, grid, flip, size) {
+  function drawGrid(canvas, grid, size) {
     const G2 = size || G;
     const ctx = canvas.getContext('2d');
     if (canvas.width !== G2) { canvas.width = G2; canvas.height = G2; }   // backing store; CSS scales it up
@@ -1531,7 +1539,7 @@
     const img = ctx.createImageData(W, W);
     const d = img.data;
     for (let y = 0; y < W; y++) {
-      const gy = flip ? (G2 - 1 - y) : y;
+      const gy = G2 - 1 - y;
       for (let x = 0; x < W; x++) {
         const c = grid[gy * G2 + x], rgb = COL[CN[c]] || [128, 128, 128];
         const o = (y * W + x) * 4;
@@ -1543,8 +1551,8 @@
   function renderPaint() {
     if (paintMode === 'elevation') drawHeight($('dsnCanvas'));
     else if (paintMode === 'water') drawWaterView($('dsnCanvas'));
-    else if (importPreview && !paintedSinceImport) drawGrid($('dsnCanvas'), importPreview, true, IMPORT_RES);
-    else drawGrid($('dsnCanvas'), target, true);
+    else if (importPreview && !paintedSinceImport) drawGrid($('dsnCanvas'), importPreview, IMPORT_RES);
+    else drawGrid($('dsnCanvas'), target);
     drawWrapPreview();
   }
   // Tile the current view 2×2 so the toroidal seams (left↔right, top↔bottom) are visible while drawing.
@@ -1558,7 +1566,7 @@
   }
   // biomes with the painted rivers/lakes overlaid in blue
   function drawWaterView(canvas) {
-    drawGrid(canvas, target, true);
+    drawGrid(canvas, target);
     const ctx = canvas.getContext('2d'), W = canvas.width, img = ctx.getImageData(0, 0, W, W), d = img.data;
     for (let y = 0; y < W; y++) { const gy = G - 1 - y; for (let x = 0; x < W; x++) { if (water[gy * G + x]) { const o = (y * W + x) * 4; d[o] = 30; d[o + 1] = 110; d[o + 2] = 230; } } }
     ctx.putImageData(img, 0, 0);
@@ -1628,16 +1636,18 @@
 
   // Full-field height in [0,1]. Unpainted land is placed within its biome's [low,high] band by distance
   // to the coast (shore=low, interior=high) plus multi-octave rolling relief; ocean stays below sea
-  // level. Painted values override. Blurred so biome edges are slopes, not cliffs.
+  // level and land stays above it. Painted values override. Blurred so biome edges are slopes, not cliffs.
   const OCEAN_FALLOFF = G / 4, RELIEF_AMP = 0.10;   // coast→interior ramp, kept proportional to grid size
   function computeHeightField() {
     const dist = oceanDistField();
     let a = new Float32Array(G * G);
+    const dryLand = new Uint8Array(G * G);   // cells the sea-level floor owns; re-applied once the blur is done
     for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) {
       const i = y * G + x;
       if (elevPainted[i]) {                                             // painted: add the per-cell micro-relief baked at paint time
         const v = elev[i] + (fbm(x, y) - 0.5) * rough[i];
-        a[i] = elev[i] >= 0.505 ? Math.max(0.505, v) : v;               // painted land stays above sea (no accidental puddles)
+        // a value painted BELOW sea is a deliberate hollow, so only land-side paint claims the floor
+        if (elev[i] >= 0.505) { a[i] = Math.max(0.505, v); dryLand[i] = 1; } else a[i] = v;
         continue;
       }
       const band = ECO_BIOME_ELEV[CN[target[i]]] || [0.52, 0.62], lo = band[0], hi = band[1];
@@ -1645,6 +1655,7 @@
       const fall = Math.min(1, dist[i] / OCEAN_FALLOFF), s = fall * fall * (3 - 2 * fall);    // smoothstep coast->inland
       const base = lo + (hi - lo) * s;                                                        // rise from shore to interior
       a[i] = Math.max(0.505, base + (fbm(x, y) - 0.5) * RELIEF_AMP * (0.4 + 0.6 * s));         // rolling hills, gentler near shore
+      dryLand[i] = 1;
     }
     let b = new Float32Array(G * G);
     for (let p = 0; p < HEIGHT_BLUR_PASSES; p++) {
@@ -1655,6 +1666,12 @@
       }
       const t = a; a = b; b = t;
     }
+    // The floor has to hold AFTER the blur. Averaging a coastal cell with its ocean neighbours drags it
+    // back under sea level — up to 10 blocks under, two cells inland — while biome.bin still calls that
+    // cell Grassland, so the two exported layers contradict each other and the waterline lands inland of
+    // where it was drawn. imageToMaps applies the same floor at its finalize step, after all of ITS
+    // smoothing, for the same reason; this keeps the painted path's promise identical to the imported one.
+    for (let i = 0; i < G * G; i++) if (dryLand[i] && a[i] < 0.505) a[i] = 0.505;
     return a;
   }
   // Final terrain for export + height preview: the base field, with painted rivers/lakes carved into a
@@ -1870,9 +1887,10 @@
   // Combine the weight-independent similarity components into a score for the current layoutWeight.
   // (prop/soft/iou/exact are computed by the worker at the best toroidal shift and don't depend on w,
   // so re-weighting the whole pool is pure arithmetic — no re-scoring of grids on the main thread.)
+  // The blend itself is search.js's, so the gallery cannot drift from the score the worker returned.
   function combine(c, w) {
-    const layout = 0.5 * c.soft + 0.3 * c.iou + 0.2 * c.exact;
-    return { score: (1 - w) * c.prop + w * layout, layout: layout, prop: c.prop, soft: c.soft, iou: c.iou, exact: c.exact };
+    const b = blendScore(c, w);
+    return { score: b.score, layout: b.layout, prop: c.prop, soft: c.soft, iou: c.iou, exact: c.exact };
   }
   function recordCandidate(m) {
     const grid = new Uint8Array(m.grid);
@@ -1951,9 +1969,9 @@
   }
   function renderGallery() {
     const gal = $('dsnGallery');
-    const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target, true);   // keep the "your drawing" thumbnail in sync
+    const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target);   // keep the "your drawing" thumbnail in sync
     const bestRef = $('dsnBestRef'), bestLbl = $('dsnBestLbl');
-    if (bestRef) { if (pool.length) { drawGrid(bestRef, pool[0].grid, true); if (bestLbl) bestLbl.textContent = 'best match · ' + (pool[0].s.score * 100).toFixed(1) + '%'; } else { bestRef.getContext('2d').clearRect(0, 0, G, G); if (bestLbl) bestLbl.textContent = 'best match'; } }
+    if (bestRef) { if (pool.length) { drawGrid(bestRef, pool[0].grid); if (bestLbl) bestLbl.textContent = 'best match · ' + (pool[0].s.score * 100).toFixed(1) + '%'; } else { bestRef.getContext('2d').clearRect(0, 0, G, G); if (bestLbl) bestLbl.textContent = 'best match'; } }
     if (!pool.length) { $('dsnGalCount').textContent = ''; gal.innerHTML = '<div class="dsnMini">No candidates yet — run a search.</div>'; const sm = $('dsnShowMore'); if (sm) sm.style.display = 'none'; return; }
     // sort a copy by the chosen key, filter by min overall score, page with galShow (Find-mode gallery)
     const list = pool.filter(it => it.s.score >= galleryMin).slice().sort((a, b) => b.s[gallerySort] - a.s[gallerySort]);
@@ -1967,7 +1985,7 @@
         '<div class="dsnMini">mix ' + (it.s.prop * 100).toFixed(0) + ' · shape ' + (it.s.iou * 100).toFixed(0) + ' · fit ' + (it.s.soft * 100).toFixed(0) + '</div>' +
         '<button data-apply="' + i + '">Apply this world</button>' +
       '</div>').join('');
-    gal.querySelectorAll('canvas[data-i]').forEach(c => drawGrid(c, show[+c.dataset.i].grid, true));
+    gal.querySelectorAll('canvas[data-i]').forEach(c => drawGrid(c, show[+c.dataset.i].grid));
     gal.querySelectorAll('button[data-apply]').forEach(b => b.onclick = () => applyCandidate(show[+b.dataset.apply]));
     gal.querySelectorAll('canvas[data-i]').forEach(c => c.onclick = () => applyCandidate(show[+c.dataset.i]));
     const sm = $('dsnShowMore'); if (sm) { const more = list.length - show.length; sm.style.display = more > 0 ? '' : 'none'; sm.textContent = more > 0 ? 'Show more (' + more + ')' : 'Show more'; }
@@ -2024,7 +2042,7 @@
     let empty = true; for (let i = 0; i < target.length; i++) if (target[i] !== SC.Ocean) { empty = false; break; }
     if (empty && typeof result !== 'undefined' && result) seedFromMap();
     updateSpeedHint();
-    const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target, true);
+    const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target);
     renderPaint();
   }
   function close() {
@@ -2105,8 +2123,8 @@
       waterBin[i] = Math.max(0, Math.min(255, Math.round(terrain.waterVal[i] * 255)));
       if (water[i]) anyWater = true;
     }
-    // A pure image import exports hi-res biome + height straight from the source image (the coarse 64²
-    // paint grid would waste an ~11-block chunk per pixel). Hand-painting over the import opts back out.
+    // A pure image import exports hi-res biome + height straight from the source image (the G² paint
+    // grid would spread several world blocks over every pixel). Hand-painting over the import opts back out.
     let biomeOut = biomeBin, heightOut = heightBin, waterOut = waterBin, hi = null;
     if (importedImg && !paintedSinceImport) {
       // Water depth follows vanilla's rule, which is defined per world BLOCK, so the import needs to know
@@ -2258,7 +2276,7 @@
 
         }
         paintMode = 'biome'; markPaintMode(); renderPaint();
-        const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target, true);
+        const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target);
         setStatus('Imported design — tune it, then re-generate or preview.');
       } catch (e) { setStatus('Could not read that design .zip: ' + e.message); }
     };
