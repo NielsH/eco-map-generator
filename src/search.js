@@ -171,8 +171,8 @@ function meanDistAt(target, cand, G, sx, sy) {
 }
 // Best toroidal shift (minimizing mean class-distance) via a coarse full scan + local refine.
 // A global scan is used (not a centroid seed) because a mostly-land map has no meaningful land
-// centroid, so a local search would miss the true alignment. Cost is ~1M distance lookups for
-// G=64 — trivial next to the ~1s it takes to generate the candidate being scored.
+// centroid, so a local search would miss the true alignment. Cost is ~4M distance lookups at the
+// designer's G=128 — trivial next to the ~1s it takes to generate the candidate being scored.
 function bestShift(target, cand, G) {
   const stride = Math.max(1, Math.round(G / 16));   // ~constant coarse-scan positions, so cost stays ~O(cells) not O(G^4)
   let bx = 0, by = 0, best = Infinity;
@@ -190,6 +190,14 @@ function bestShift(target, cand, G) {
     }
   }
   return { sx: bx, sy: by, dist: best };
+}
+// The layout half of the score, and the mix-vs-layout blend. None of the components depends on `w`, so
+// the designer re-weights a whole pool of candidates with this alone when the slider moves — which is
+// why it lives here rather than in either caller: two copies of these weights would let the leaderboard
+// disagree with the score the worker returned.
+function blendScore(c, w) {
+  const layout = 0.5 * c.soft + 0.3 * c.iou + 0.2 * c.exact;
+  return { score: (1 - w) * c.prop + w * layout, layout: layout };
 }
 // Score a candidate class grid against the target. opts.layoutWeight in [0,1] trades biome-mix
 // fidelity (0) against spatial-layout fidelity (1). Wrap-invariant: finds the best cyclic shift.
@@ -217,9 +225,8 @@ function scoreGrids(target, cand, G, opts) {
   const soft = 1 - bestDist;               // partial-credit agreement
   const exactFrac = exact / cells;
   const iou = uni ? inter / uni : 1;       // land-shape overlap
-  const layout = 0.5 * soft + 0.3 * iou + 0.2 * exactFrac;
-  const score = (1 - w) * prop + w * layout;
-  return { score, prop, soft, exact: exactFrac, iou, layout, shift: [bestSx, bestSy] };
+  const b = blendScore({ prop: prop, soft: soft, iou: iou, exact: exactFrac }, w);
+  return { score: b.score, prop, soft, exact: exactFrac, iou, layout: b.layout, shift: [bestSx, bestSy] };
 }
 
-if (typeof module !== 'undefined') module.exports = { SCLASS, NUM_CLASSES, SC, DIST, classOfName, classGridAt, scoreGrids, proportionScore, rasterClassR, downsampleMajority, histogram, bestShift };
+if (typeof module !== 'undefined') module.exports = { SCLASS, NUM_CLASSES, SC, DIST, classOfName, classGridAt, scoreGrids, proportionScore, rasterClassR, downsampleMajority, histogram, bestShift, blendScore };

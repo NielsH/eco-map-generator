@@ -157,7 +157,6 @@ function distanceTo(polys, start, pred) {
   } while (current.every(i => pred(polys[i])));
   return distance;
 }
-const distanceToOcean = (polys, start) => distanceTo(polys, start, p => isLand(p.biome));
 
 // ---- SeamlessNoise / FlatTerrace ----
 class SeamlessNoise {
@@ -426,7 +425,7 @@ function generate(cfg, opts = {}) {
   progress('elevation');
 
   // ---- elevation, temperature, moisture ----
-  const distToOcean = distanceFieldTo(polys, p => isLand(p.biome)); // == distanceToOcean for all cells
+  const distToOcean = distanceFieldTo(polys, p => isLand(p.biome)); // the server's DistanceToOcean, for every cell at once
   const invOceanDist = f(1 / cfg.maxElevationOceanDistance);
   for (const p of polys) if (isLand(p.biome)) {
     const d = distToOcean[p.index];
