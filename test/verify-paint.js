@@ -27,7 +27,12 @@
 //   the same design yields the same terrain      a Math.random() in the coast ramp
 //   painted elevation survives to the middle     the painted branch scales its value by 0.98
 //   height in [0,1], ocean under water           the ocean band is widened by 0.3
-//   submerged land confined to the shoreline     HEIGHT_BLUR_PASSES 2 -> 12
+//   land never exports at/below the water line   computeHeightField's post-blur floor is deleted
+//   the floor only catches the coast             HEIGHT_BLUR_PASSES 2 -> 12
+//   the blur still softens the biome edge        HEIGHT_BLUR_PASSES 2 -> 0
+//   ground painted below sea stays below it      that floor drops its `dryLand[i] &&` guard
+//   the painted and imported paths agree         either path's floor deleted — the paint one sinks 308
+//                                                cells against the import's 0, the import one 40 against 0
 //   a painted river holds water                  RIVER_CARVE 0.045 -> 0.008 (shallower than the lip)
 //   a painted river not above its bank           RIVER_LIP 0.012 -> -0.02
 //   water values zero off the channel            computeTerrain drops its `if (!water[i]) continue`
@@ -42,7 +47,7 @@
 //
 //   node test/verify-paint.js
 'use strict';
-const { run, SC, SCLASS, reporter, waterY, landY } = require('./designer-harness');
+const { run, SC, SCLASS, COLOR, reporter, runImageToMaps, waterY, landY } = require('./designer-harness');
 
 const G = 128;                                   // the designer's paint grid
 const { check, done } = reporter();
@@ -233,21 +238,113 @@ const terrain = run(TERRAIN_PARTS, terrainArgs(design), 'return computeTerrain()
     'range ' + lo.toFixed(4) + '..' + hi.toFixed(4) + ', ' + oceanDry + ' ocean cells at or above sea level');
 }
 
-// Painted LAND is floored just over sea level before the blur, and the blur then pulls the cells nearest
-// the coast back under it — a soft beach rather than a wall, which is what the field is for. What must not
-// happen is that reaching inland: a submerged cell well away from the water is a hole in the map. The
-// bound is the blur's own reach (2 passes of a 3x3 window = 2 cells), plus a cell of slack.
+// ---------------------------------------------------------------- land stays out of the sea
+
+// Land the user drew has to come out ABOVE sea level. The floor that promises this is applied while the
+// field is built, but the blur runs after it and averages every coastal cell with its ocean neighbours,
+// which pulls it back under — so the floor is applied again once the blur is done.
+//
+// Calling that a soft beach would be defensible if it were one. It isn't: measured before the second pass
+// the worst cell landed at y=50 against a water level of 60 — ten blocks under — and `biome.bin` still
+// called those cells Grassland. Two exported layers disagreeing about where the sea is is not a beach.
+//
+// A design with BOTH kinds of land, because the field builds them in different branches: unpainted land
+// placed from its biome band, and a strip painted by hand at 0.51 (the first slider step above the floor).
+function makeCoastDesign() {
+  const st = makeDesign();
+  for (let y = 0; y < G; y++) for (let x = 20; x < 40; x++) { const i = y * G + x; st.elev[i] = 0.51; st.elevPainted[i] = 1; st.water[i] = 0; }
+  return st;
+}
+const coast = makeCoastDesign();
+const coastTerrain = run(TERRAIN_PARTS, terrainArgs(coast), 'return computeTerrain();');
+
+// Eco reads the exported BYTE, not the float, so ask the question in its arithmetic: the top block of the
+// column against the level Eco fills that column to. Flush counts as taken — ground that tops out exactly
+// AT the water line is the waterline itself, not land above it, and both paths clear it by a block today.
+const heightByte = v => Math.max(0, Math.min(255, Math.round(v * 255)));
+const drowned = b => landY(b) <= waterY(0);
 {
-  const dist = run(['fn:oceanDistField'], { G, SC, target: design.target }, 'return oceanDistField();');
-  let inland = 0, worstDist = 0, sunk = 0;
+  let land = 0, sunk = 0, worstY = Infinity, painted = 0;
   for (let i = 0; i < G * G; i++) {
-    if (design.target[i] === SC.Ocean || design.water[i] || terrain.height[i] >= 0.5) continue;
-    sunk++;
-    worstDist = Math.max(worstDist, dist[i]);
+    if (coast.target[i] === SC.Ocean || coast.water[i]) continue;          // sea and painted channels may go under
+    land++;
+    const y = landY(heightByte(coastTerrain.height[i]));
+    if (y > waterY(0)) continue;
+    sunk++; if (coast.elevPainted[i]) painted++;
+    if (y < worstY) worstY = y;
+  }
+  check('land never exports at or below the water line', sunk === 0,
+    sunk + ' of ' + land + ' land cells sit at or under the water line' + (sunk ? ' (' + painted + ' hand-painted, worst y=' + worstY + ' against ' + waterY(0) + ')' : ''));
+}
+
+// The floor must not be silently rewriting the map. Its footprint is the cells the blur pushed under it,
+// and the blur's reach is 2 passes of a 3x3 window = 2 cells — so every cell resting ON the floor has to
+// be within that of the ocean, plus a cell of slack. This is the containment the old submerged-land bound
+// was really holding, asked of the fix instead of the defect. It must also be non-empty, or the check is
+// measuring a design that never exercised the floor at all.
+{
+  const dist = run(['fn:oceanDistField'], { G, SC, target: coast.target }, 'return oceanDistField();');
+  const FLOOR = Math.fround(0.505);                    // the field is a Float32Array; a clamped cell holds this exactly
+  let onFloor = 0, inland = 0, worstDist = 0;
+  const hf = run(TERRAIN_PARTS, terrainArgs(coast), 'return computeHeightField();');   // before computeTerrain carves
+  for (let i = 0; i < G * G; i++) {
+    if (hf[i] !== FLOOR) continue;
+    onFloor++;
+    if (dist[i] > worstDist) worstDist = dist[i];
     if (dist[i] > 3) inland++;
   }
-  check('submerged land is confined to the shoreline the blur softens', inland === 0,
-    sunk + ' land cells sit below sea level, none further than ' + worstDist.toFixed(1) + ' cells from the ocean (' + inland + ' beyond 3)');
+  check('the floor only catches the coast the blur softens', onFloor > 0 && inland === 0,
+    onFloor + ' cells rest on the floor, none further than ' + worstDist.toFixed(1) + ' cells from the ocean (' + inland + ' beyond 3)');
+}
+
+// Flooring the land must not flatten the field: the blur's own job is turning the step between two biome
+// bands into a slope, and that happens well inland of anything the floor touches. Measured against the
+// same field with the blur switched off, so there is no tuned number to drift.
+{
+  const parts = TERRAIN_PARTS.filter(p => p !== 'const:HEIGHT_BLUR_PASSES');
+  const raw = run(parts, Object.assign(terrainArgs(coast), { HEIGHT_BLUR_PASSES: 0 }), 'return computeHeightField();');
+  const hf = run(TERRAIN_PARTS, terrainArgs(coast), 'return computeHeightField();');
+  const meanStep = f => { let s = 0; for (let y = 0; y < G; y++) s += Math.abs(f[y * G + 91] - f[y * G + 90]); return s / G; };
+  const soft = meanStep(hf), hard = meanStep(raw);      // x=90|91 is the Grassland/Taiga edge, 70 cells inland
+  check('the blur still softens the biome edge into a slope', soft < 0.6 * hard,
+    'the Grassland/Taiga step is ' + (soft * 120).toFixed(2) + ' blocks blurred vs ' + (hard * 120).toFixed(2) + ' raw (' + (soft / hard).toFixed(2) + 'x)');
+}
+
+// The floor is for land, so it must not lift ground the user deliberately painted BELOW sea. That is how
+// an inland sea or a quarry floor is drawn, and a floor applied to every cell would fill it in.
+{
+  const st = makeCoastDesign();
+  for (let y = 50; y < 78; y++) for (let x = 60; x < 88; x++) { const i = y * G + x; st.elev[i] = 0.42; st.elevPainted[i] = 1; st.water[i] = 0; }
+  const hf = run(TERRAIN_PARTS, terrainArgs(st), 'return computeHeightField();');
+  let lifted = 0, worst = 0;
+  for (let y = 58; y < 70; y++) for (let x = 68; x < 80; x++) {          // the middle of the hollow, clear of its own blur
+    const v = hf[y * G + x];
+    if (v >= 0.5) lifted++;
+    worst = Math.max(worst, v);
+  }
+  check('ground painted below sea level stays below it', lifted === 0,
+    lifted + ' cells of a hollow painted at 0.42 were lifted out of the water (highest ' + worst.toFixed(4) + ')');
+}
+
+// The two export paths must agree about the rule. `buildBundleFiles` picks between them on
+// `paintedSinceImport` — import a picture and the maps come from `imageToMaps`, touch the brush once and
+// they come from `computeTerrain` instead — and nothing on screen says which one is live. So the SAME
+// coastline drawn either way has to put its land on the same side of the water line.
+{
+  const S = G, px = new Uint8ClampedArray(S * S * 4);
+  const put = (x, y, c) => { const o = (y * S + x) * 4; px[o] = c[0]; px[o + 1] = c[1]; px[o + 2] = c[2]; px[o + 3] = 255; };
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) put(x, y, x < 20 ? COLOR.Ocean : (x > 90 ? COLOR.Taiga : COLOR.Grassland));
+  const imported = runImageToMaps({ width: S, height: S, data: px }, G, { blocksPerCell: 1200 / G });
+
+  const painted = makeDesign();
+  for (let i = 0; i < G * G; i++) painted.water[i] = 0;                   // the image has no river to match
+  const pt = run(TERRAIN_PARTS, terrainArgs(painted), 'return computeTerrain();');
+
+  const sunkImported = imported.height.reduce((n, b, i) => n + (imported.biome[i] !== SC.Ocean && imported.water[i] === 0 && drowned(b) ? 1 : 0), 0);
+  let sunkPainted = 0;
+  for (let i = 0; i < G * G; i++) if (painted.target[i] !== SC.Ocean && drowned(heightByte(pt.height[i]))) sunkPainted++;
+  check('the painted path and the imported path agree about land and sea', sunkImported === sunkPainted,
+    'the same coastline sinks ' + sunkPainted + ' land cells painted and ' + sunkImported + ' imported');
 }
 
 // ---------------------------------------------------------------- the painted river
