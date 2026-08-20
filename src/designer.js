@@ -1118,6 +1118,48 @@
       const SHELF_CELLS = 3;                    // how far in the shallows reach
       const SHORE_DEPTH = 1.2 * BLK;            // depth right at the bank; below ~1.8 a shore cell can round to no water at all
       const GRAY = 0.4706 * BLK;                // one unit of vanilla's depth
+      // Vanilla's rule deepens without limit, which is right for vanilla's channels — 6-12 m wide, so it
+      // yields 3-6 blocks. Ours are 16-32 m wide by design, and the same rule yields 8-15: measured
+      // against a real vanilla world, depth p50 3 / p90 9 / max 15 against its 2 / 4 / 11. Cap it, so a
+      // wide river is a wide river rather than a canyon. The cap only ever binds in the middle; the shelf
+      // still owns the shore, which is what the bank is measured against.
+      //
+      // But one cap for everything makes every LAKE 8 blocks too, and a stock world's are not: over seven
+      // of them fresh water reaches 10-12 at p99 and 13-17 at worst, and their ~2,500-cell lakes run 11-14
+      // deep where ours arrived at 8. A lake is wide in every direction, so vanilla's depth reads as a bed
+      // there rather than as the gorge it would cut along a channel. Tell the two apart by SHAPE, the same
+      // way Eco/Tools/WorldGenAnalysis/metrics/lakes.js does when it measures a generated world: a body
+      // that fills a good part of its own bounding box is a lake, and a winding course never does however
+      // long or wide it is drawn. A lake DRAINING into a river shares its body with the whole system and
+      // so keeps the channel bed — the safe way to be wrong, and the same way lakes.js reads that case.
+      const MAX_DEPTH = 8 * BLK;                // a channel's bed stops here, whatever vanilla's ramp says
+      const LAKE_DEEPEN = 0.6;                  // of vanilla's remaining ramp, once a lake is past that
+      const LAKE_MAX_DEPTH = 16 * BLK;          // and never past the deepest fresh water a stock world holds
+      const LAKE_FILL = 0.35;                   // of the body's bounding box
+      const LAKE_MIN_BLOCKS = 60;               // smallest body worth calling a lake, in world blocks of area
+      const deepBed = new Uint8Array(n);
+      {
+        const seenB = new Uint8Array(n);
+        // The map wraps, so a body's box is the shortest interval that still holds every cell — what is
+        // left once the widest EMPTY run is taken out. Reading x0..x1 straight would hand a body lying
+        // over the seam the whole world as its box, and demote it to a channel.
+        const span = (cells, key) => {
+          const used = new Uint8Array(res);
+          for (const c of cells) used[key(c)] = 1;
+          let gap = 0, run = 0;
+          for (let k = 0; k < 2 * res; k++) { if (used[k % res]) run = 0; else if (++run > gap) gap = run; }
+          return res - gap;
+        };
+        for (let j = 0; j < n; j++) {
+          if (land[j] !== 2 || seenB[j]) continue;
+          const st = [j], cells = []; seenB[j] = 1;
+          while (st.length) { const c = st.pop(); cells.push(c); for (const nb of nbr4(c)) if (land[nb] === 2 && !seenB[nb]) { seenB[nb] = 1; st.push(nb); } }
+          if (cells.length * BPC * BPC < LAKE_MIN_BLOCKS) continue;
+          const box = span(cells, c => c % res) * span(cells, c => (c / res) | 0);
+          if (cells.length / box < LAKE_FILL) continue;
+          for (const c of cells) deepBed[c] = 1;
+        }
+      }
       const dIn = new Int32Array(n).fill(-1), qs = [];
       for (let j = 0; j < n; j++) if (land[j] !== 2) { dIn[j] = 0; qs.push(j); }
       for (let k = 0; k < qs.length; k++) {
@@ -1137,13 +1179,14 @@
         const s = t * t * (3 - 2 * t);
         const shelf = SHORE_DEPTH + (3.6 * BLK - SHORE_DEPTH) * s;
         const vanilla = Math.max(1, 2 * (dIn[j] - 0.5) * BPC - 1) * GRAY;
-        // Vanilla's rule deepens without limit, which is right for vanilla's channels — 6-12 m wide, so it
-        // yields 3-6 blocks. Ours are 16-32 m wide by design, and the same rule yields 8-15: measured
-        // against a real vanilla world, depth p50 3 / p90 9 / max 15 against its 2 / 4 / 11. Cap it, so a
-        // wide river is a wide river rather than a canyon. The cap only ever binds in the middle; the shelf
-        // still owns the shore, which is what the bank is measured against.
-        const MAX_DEPTH = 8 * BLK;
-        bed[j] = Math.max(0.03, wsurf[j] - Math.min(MAX_DEPTH, Math.max(shelf, vanilla)));
+        // A lake carries on deepening past the cap rather than stopping dead at it. Stopping gives it a
+        // flat plateau for a bed — on the real map p90 and p99 both landed exactly on the cap — where a
+        // stock lake's bed peaks: p90 8-9 blocks under a max of 13-15.
+        const want = Math.max(shelf, vanilla);
+        const depth = deepBed[j] && want > MAX_DEPTH
+          ? Math.min(LAKE_MAX_DEPTH, MAX_DEPTH + (want - MAX_DEPTH) * LAKE_DEEPEN)
+          : Math.min(MAX_DEPTH, want);
+        bed[j] = Math.max(0.03, wsurf[j] - depth);
       }
     }
     // minimal smoothing — keep the ridged relief steep (just knock off single-pixel noise + shoreline step)

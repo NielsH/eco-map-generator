@@ -34,7 +34,7 @@ Unlike the sibling [eco-biome-visualizer](https://github.com/NielsH/eco-biome-vi
 ```
 node build.js               # regenerate index.html from src/ + WorldGenerator.eco
 node test/verify-core.js    # Random + 66 noise checks vs references captured from the game DLLs
-node test/verify-water.js   # imported lakes/rivers: no walls of water, no overflow, flat lake basins
+node test/verify-water.js   # imported lakes/rivers: no walls of water, no overflow, flat lake basins, lake beds deeper than channel beds
 node test/verify-shape.js   # a coastal design: river mouths reach the sea, and the ground beside a bank is a valley
 node test/verify-import.js  # the legend decode: colour matching, the 12-colour cap, brightness mode
 node test/verify-paint.js   # the hand-painted path: brush/fill on the torus, the height field, a painted river
