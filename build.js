@@ -235,10 +235,6 @@ const html = `<!DOCTYPE html>
   #chartTabs button{font-size:13px; padding:6px 13px;}
   #ovBiomes{display:flex; gap:6px; flex-wrap:wrap; margin:6px 0 2px;}
   #ovLane svg{max-width:100%;}
-  #oreEditor{display:flex; flex-direction:column; gap:6px; margin:8px 0 12px;}
-  #oreEditor details{border:0.5px solid var(--border); border-radius:8px; background:var(--surf); padding:2px 10px;}
-  #oreEditor summary{cursor:pointer; font-weight:600; font-size:13px; padding:5px 0; user-select:none;}
-  #oreEditor summary .cnt{color:var(--muted); font-weight:400; font-size:12px;}
   .oreNode{display:flex; align-items:center; gap:7px 10px; flex-wrap:wrap; padding:6px 0; border-top:0.5px solid var(--border); font-size:12px; color:var(--text2);}
   .oreNode:first-of-type{border-top:none;}
   .oreNode .ndot{width:11px; height:11px; border-radius:50%; border:0.5px solid var(--border2); flex:none;}
@@ -687,7 +683,6 @@ function loadConfigText(text, userInitiated) {
   populateForm(cfg);
   $('cfgPanel').style.display = 'block';
   terrain = derefTerrain(rawJson);
-  buildOreEditor();
   OreVisual.build();
   $('chartsPanel').style.display = terrain ? 'block' : 'none';
   if (terrain) { const ej = buildExportJson(); BlockChart.render(ej); }
@@ -792,10 +787,8 @@ function blockKeyInfo(t, merge) {
   return { key: 'rock:' + b, label: prettyName(b), color: BLOCK_COL[b] || hashColor(b), rank: blockRank(t), ore: false };
 }
 
-// ---- focused ore/scatter editor (edits the dereferenced terrain tree in place) ----
+// ---- ore/scatter knobs + node templates, shared by the visual editor below ----
 // "vein" = DepositTerrainModule (concentrated ore vein); "scatter" = StandardTerrainModule (chance-based blocks/bands).
-let oreNodes = [];
-const oreOpen = new Set(); // biome names whose <details> are expanded (preserved across rebuilds)
 const ORE_SLIDER = {
   SpawnPercentChance: { min:0, max:0.05, step:0.0005 },
   PercentChance:      { min:0, max:1,    step:0.01 },
@@ -806,7 +799,6 @@ const ORE_SLIDER = {
 };
 const KNOB_LABEL = { SpawnPercentChance:'chance', PercentChance:'chance', NoiseFrequency:'freq', DepthRange:'seed depth', DepositDepthRange:'grows over', BlocksCountRange:'blocks (vein size)' };
 const sMax = (f, v) => { const c = ORE_SLIDER[f]; v = v || 0; return c.step < 1 ? Math.max(c.max, +(v * 1.25).toFixed(4)) : Math.max(c.max, Math.ceil(v)); };
-const sFmt = (f, v) => (ORE_SLIDER[f].step < 1 ? String(+(+v).toFixed(4)) : String(Math.round(v)));
 function collectBlockTypes() {
   const set = new Set();
   (function walk(o){ if (o && typeof o === 'object'){ if (!Array.isArray(o) && typeof o.Type === 'string') set.add(o.Type); for (const k in o) walk(o[k]); } })(terrain);
@@ -824,61 +816,6 @@ function knobR(field, r) { r = r || {}; const c = ORE_SLIDER[field], mx = sMax(f
   return '<span class="kk"><label>' + KNOB_LABEL[field] + '</label>' + slPair(field + '_min', c, mx, r.min != null ? r.min : 0) + '<span class="dash">–</span>' + slPair(field + '_max', c, mx, r.max != null ? r.max : 0) + '</span>'; }
 function tmplVein() { return { '$type':'Eco.WorldGenerator.DepositTerrainModule, Eco.WorldGenerator', SpawnAtLeastOne:false, SpawnPercentChance:0.005, DepthRange:{min:10,max:30}, DepositDepthRange:{min:0,max:40}, BlocksCountRange:{min:10,max:40}, BlockType:{Type:'Eco.Mods.TechTree.IronOreBlock, Eco.Mods'}, DirectionWeights:[{X:1,Y:1,Z:1}], WeightVariance:{X:1,Y:1,Z:1} }; }
 function tmplScatter() { return { '$type':'Eco.WorldGenerator.StandardTerrainModule, Eco.WorldGenerator', BlockType:{Type:'Eco.Mods.TechTree.CoalBlock, Eco.Mods'}, HeightRange:{min:-1,max:1}, DepthRange:{min:0,max:6}, PercentChance:0.3, NoiseFrequency:20, NoiseType:'Perlin', NoiseDistributionType:'Bands' }; }
-function oreAdd(bi, type) {
-  const bm = terrain.Modules[bi]; if (!bm) return;
-  bm.Module = bm.Module || {};
-  if (!bm.Module.BlockDepthRanges || !bm.Module.BlockDepthRanges.length) { bm.Module.BlockDepthRanges = [{ NoiseFrequency:40, Min:0, Max:0, BlockType:{ Type:'Eco.World.Blocks.DirtBlock, Eco.World' }, SubModules:[] }]; }
-  const layer = bm.Module.BlockDepthRanges[0]; layer.SubModules = layer.SubModules || [];
-  layer.SubModules.push(type === 'vein' ? tmplVein() : tmplScatter());
-  oreOpen.add(bm.BiomeName); buildOreEditor(); OreVisual.build(); scheduleOreRender();
-}
-function oreRemove(idx) { const e = oreNodes[idx]; if (!e) return; const i = e.sub.indexOf(e.node); if (i >= 0) e.sub.splice(i, 1); buildOreEditor(); OreVisual.build(); scheduleOreRender(); }
-function buildOreEditor() {
-  const host = $('oreEditor'); if (!host) return;   // manual-knobs editor removed; kept as a safe no-op for shared callers
-  host.innerHTML = ''; oreNodes = [];
-  if (!terrain || !terrain.Modules) { host.innerHTML = '<div class="lbl">This config has no TerrainModule to edit.</div>'; return; }
-  const opts = collectBlockTypes();
-  terrain.Modules.forEach((bm, bi) => {
-    const biome = bm.BiomeName; const ranges = (bm.Module && bm.Module.BlockDepthRanges) || [];
-    const rows = [];
-    for (const layer of ranges) for (const sm of (layer.SubModules || [])) {
-      const ty = sm['$type'] || ''; const mat = oreMaterial(btOf(sm.BlockType)); if (!mat) continue;
-      const idx = oreNodes.length; const dot = '<span class="ndot" style="background:' + ORE_COL[mat] + '"></span>';
-      const del = '<button class="ndel" title="Remove this node">✕</button>';
-      if (ty.indexOf('DepositTerrainModule') >= 0) {
-        oreNodes.push({ node: sm, kind: 'dep', sub: layer.SubModules });
-        rows.push('<div class="oreNode" data-idx="' + idx + '">' + dot + '<span class="tag" title="A concentrated vein of ore blocks">vein</span>' + blockSelect(btOf(sm.BlockType), opts) + knob1('SpawnPercentChance', sm.SpawnPercentChance) + knobR('DepthRange', sm.DepthRange) + knobR('BlocksCountRange', sm.BlocksCountRange) + del + '</div>');
-      } else if (ty.indexOf('StandardTerrainModule') >= 0) {
-        oreNodes.push({ node: sm, kind: 'std', sub: layer.SubModules });
-        rows.push('<div class="oreNode" data-idx="' + idx + '">' + dot + '<span class="tag" title="Blocks scattered or banded through a depth range by chance">scatter</span>' + blockSelect(btOf(sm.BlockType), opts) + knob1('PercentChance', sm.PercentChance) + knobR('DepthRange', sm.DepthRange) + knob1('NoiseFrequency', sm.NoiseFrequency) + del + '</div>');
-      }
-    }
-    const d = document.createElement('details'); if (oreOpen.has(biome)) d.open = true;
-    d.innerHTML = '<summary>' + (ORE_DISP[biome] || biome) + ' <span class="cnt">· ' + rows.length + ' node' + (rows.length === 1 ? '' : 's') + '</span></summary>' + rows.join('') +
-      '<div class="oreAdd"><button data-add="vein" data-b="' + bi + '">+ vein</button><button data-add="scatter" data-b="' + bi + '">+ scatter</button></div>';
-    d.addEventListener('toggle', () => { if (d.open) oreOpen.add(biome); else oreOpen.delete(biome); });
-    host.appendChild(d);
-  });
-  wireOreEditor();
-}
-function wireOreEditor() {
-  const host = $('oreEditor');
-  host.querySelectorAll('.oreNode').forEach(row => {
-    const idx = +row.dataset.idx, node = oreNodes[idx].node;
-    row.querySelectorAll('input,select').forEach(inp => inp.addEventListener('input', () => {
-      const f = inp.dataset.f; if (!f) return;
-      if (f === 'block') { node.BlockType = node.BlockType || {}; node.BlockType.Type = inp.value; scheduleOreRender(); return; }
-      const val = parseFloat(inp.value); if (!isFinite(val)) return;
-      if (f.endsWith('_min') || f.endsWith('_max')) { const key = f.slice(0, -4), mm = f.slice(-3); node[key] = node[key] || {}; node[key][mm] = val; }
-      else node[f] = val;
-      // keep the slider and its editable number in sync; a number beyond the slider's max grows the slider
-      row.querySelectorAll('input[data-f="' + f + '"]').forEach(sib => { if (sib === inp) return; if (sib.type === 'range' && val > +sib.max) sib.max = val; sib.value = val; });
-      scheduleOreRender();
-    }));
-    const del = row.querySelector('.ndel'); if (del) del.addEventListener('click', () => oreRemove(idx));
-  });
-  host.querySelectorAll('button[data-add]').forEach(b => b.addEventListener('click', () => oreAdd(+b.dataset.b, b.dataset.add)));
-}
 let oreRenderTimer = null;
 function scheduleOreRender() { clearTimeout(oreRenderTimer); oreRenderTimer = setTimeout(() => { if (terrain) { const ej = buildExportJson(); BlockChart.render(ej); } }, 150); }
 
@@ -1100,13 +1037,13 @@ const OreVisual = (function () {
       else sel = objs[+row.dataset.li] || null;
       render(); renderDetail(); renderList(); });
     listEl.querySelectorAll('.ndel[data-del]').forEach(btn => btn.onclick = e => { e.stopPropagation();
-      const o = objs[+btn.dataset.del]; if (!o) return; const idx = o.sub.indexOf(o.node); if (idx >= 0) o.sub.splice(idx, 1); if (sel && sel.node === o.node) sel = null; buildOreEditor(); render(); renderDetail(); renderList(); scheduleOreRender(); });
+      const o = objs[+btn.dataset.del]; if (!o) return; const idx = o.sub.indexOf(o.node); if (idx >= 0) o.sub.splice(idx, 1); if (sel && sel.node === o.node) sel = null; render(); renderDetail(); renderList(); scheduleOreRender(); });
     listEl.querySelectorAll('.ndel[data-delstrat]').forEach(btn => btn.onclick = e => { e.stopPropagation(); removeStratum(strata[+btn.dataset.delstrat]); });
   }
   // remove a base-rock layer (its BlockDepthRange, along with any veins/scatters nested in it)
   function removeStratum(st) { if (!st) return; const bm = biomes()[biomeIdx]; const arr = bm && bm.Module && bm.Module.BlockDepthRanges; if (!arr) return;
     const idx = arr.indexOf(st.node); if (idx < 0) return; arr.splice(idx, 1); if (sel && sel.node === st.node) sel = null;
-    buildOreEditor(); render(); renderDetail(); renderList(); scheduleOreRender(); }
+    render(); renderDetail(); renderList(); scheduleOreRender(); }
   function renderDetail() {
     if (!detailEl) return;
     if (!sel) { detailEl.innerHTML = '<div class="lbl" style="padding:6px 0">Click a base-rock layer, vein, or scatter to edit it — or add a vein/scatter below.</div>'; return; }
@@ -1132,7 +1069,7 @@ const OreVisual = (function () {
       detailEl.querySelectorAll('input[data-f="' + f + '"]').forEach(sib => { if (sib === inp) return; if (sib.type === 'range' && val > +sib.max) sib.max = val; sib.value = val; });
       render(); scheduleOreRender();
     }));
-    const d = detailEl.querySelector('.ndel'); if (d) d.onclick = () => { const idx = o.sub.indexOf(o.node); if (idx >= 0) o.sub.splice(idx, 1); sel = null; buildOreEditor(); render(); renderDetail(); renderList(); scheduleOreRender(); };
+    const d = detailEl.querySelector('.ndel'); if (d) d.onclick = () => { const idx = o.sub.indexOf(o.node); if (idx >= 0) o.sub.splice(idx, 1); sel = null; render(); renderDetail(); renderList(); scheduleOreRender(); };
   }
   function stratNoteHtml(node) { let top = null, bot = null; lastBands.forEach(b => { if (b.st.node === node) { top = top == null ? b.top : Math.min(top, b.top); bot = bot == null ? b.bot : Math.max(bot, b.bot); } });
     const cov = top != null ? ('fills depth <b>' + top + '–' + bot + '</b>') : '<b>overridden</b> — its bottom sits below a deeper layer, so the engine skips it. Lower this bottom, or raise the layers below it.';
@@ -1147,7 +1084,7 @@ const OreVisual = (function () {
   function add(type) { const bm = biomes()[biomeIdx]; if (!bm) return; bm.Module = bm.Module || {};
     if (!bm.Module.BlockDepthRanges || !bm.Module.BlockDepthRanges.length) bm.Module.BlockDepthRanges = [{ NoiseFrequency: 40, Min: 0, Max: 0, BlockType: { Type: 'Eco.World.Blocks.DirtBlock, Eco.World' }, SubModules: [] }];
     const layer = bm.Module.BlockDepthRanges[0]; layer.SubModules = layer.SubModules || []; const n = type === 'vein' ? tmplVein() : tmplScatter();
-    layer.SubModules.push(n); buildOreEditor(); render(); sel = objs.find(x => x.node === n) || null; renderDetail(); renderList(); scheduleOreRender(); }
+    layer.SubModules.push(n); render(); sel = objs.find(x => x.node === n) || null; renderDetail(); renderList(); scheduleOreRender(); }
   function build() { laneEl = $('ovLane'); detailEl = $('ovDetail'); listEl = $('ovList');
     if (!terrain || !terrain.Modules) { if (laneEl) laneEl.innerHTML = '<div class="lbl" style="padding:10px">No TerrainModule to edit.</div>'; if (detailEl) detailEl.innerHTML = ''; return; }
     if (biomeIdx >= terrain.Modules.length) biomeIdx = 0; render(); renderDetail(); renderList(); }

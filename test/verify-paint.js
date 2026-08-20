@@ -93,24 +93,22 @@ const terrain = run(TERRAIN_PARTS, terrainArgs(design), 'return computeTerrain()
 // the lattice wrap `w()` leaves the two edges sampling different lattice cells, which prints a seam down
 // the map that no amount of blurring removes.
 {
-  const r = run(['fn:h2', 'fn:vnR', 'fn:fbmR', 'fn:vnW', 'fn:fbm'], { G }, `
+  const r = run(['fn:h2', 'fn:vnR', 'fn:vnW', 'fn:fbm'], { G }, `
     const res = 256;
-    let vnrPeriod = 0, fbmrPeriod = 0, fbmPeriod = 0, oob = 0;
+    let vnrPeriod = 0, fbmPeriod = 0, oob = 0;
     for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) {
       for (const P of [10, 26, 64]) {
         const a = vnR(x, y, P, res);
         if (a < 0 || a > 1) oob++;
         vnrPeriod = Math.max(vnrPeriod, Math.abs(a - vnR(x + res, y, P, res)), Math.abs(a - vnR(x, y + res, P, res)));
       }
-      const f = fbmR(x, y, res); if (f < 0 || f > 1) oob++;
-      fbmrPeriod = Math.max(fbmrPeriod, Math.abs(f - fbmR(x + res, y + res, res)));
       const w = fbm(x, y); if (w < 0 || w > 1) oob++;
       fbmPeriod = Math.max(fbmPeriod, Math.abs(w - fbm(x + G, y + G)));
     }
-    return { vnrPeriod, fbmrPeriod, fbmPeriod, oob };`);
+    return { vnrPeriod, fbmPeriod, oob };`);
   check('the noise repeats exactly over the grid and stays in [0,1]',
-    r.vnrPeriod === 0 && r.fbmrPeriod === 0 && r.fbmPeriod === 0 && r.oob === 0,
-    'worst period error vnR ' + r.vnrPeriod + ', fbmR ' + r.fbmrPeriod + ', fbm ' + r.fbmPeriod + '; ' + r.oob + ' samples out of range');
+    r.vnrPeriod === 0 && r.fbmPeriod === 0 && r.oob === 0,
+    'worst period error vnR ' + r.vnrPeriod + ', fbm ' + r.fbmPeriod + '; ' + r.oob + ' samples out of range');
 }
 
 // Exact repetition is not the same as a smooth join: the value AT the seam has to arrive there gradually
