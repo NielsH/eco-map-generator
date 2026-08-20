@@ -175,10 +175,23 @@ const rays = (() => {
 // of shores with the land 25-45 m out below the river, against vanilla's 4-13%.
 //
 // The statistic is the RANK correlation between the two, which is why it survives this design being far
-// steeper than any real map: it asks whether the ordering holds, not how many blocks anything gained. The
-// fixed-profile version reads 0.204 here and the real source 0.479, stable to +-0.03 over a range of
-// drawn geometries; the bound sits between them. It is deliberately not a bound on the climb itself —
-// that is a height, and heights on this design run about twice vanilla's.
+// steeper than any real map: it asks whether the ordering holds, not how many blocks anything gained. It is
+// deliberately not a bound on the climb itself - that is a height, and heights on this design run about
+// twice vanilla's.
+//
+// The bound sits between the correct field and the defect, measured on both sides of the trend removal:
+//
+//              correct   with the fixed profile
+//   before        0.480          0.200
+//   after         0.304          0.170
+//
+// Removing the coast-to-interior trend costs the correlation about 0.18 without reintroducing what this
+// guards: it takes away the shared driver that made the two quantities co-vary, since both used to follow
+// distance from the sea. The statistic it stands in for moved the RIGHT way over the same change - land
+// 25-45 m back sitting below the river went 7% -> 5%, against vanilla's 4-13%, and far-field p90 16 -> 11.
+//
+// So 0.26 rather than 0.35. That is a margin of 0.06 over the worst defect reading and 0.04 under the
+// worst correct one - tighter than it was, and worth knowing when reading a near-miss here.
 {
   const V = rays.filter(r => isFinite(r.behind));
   const rank = key => { const ix = V.map((_, i) => i).sort((a, b) => V[a][key] - V[b][key]); const r = []; ix.forEach((v, i) => { r[v] = i; }); return r; };
@@ -186,7 +199,7 @@ const rays = (() => {
   let s = 0; for (let i = 0; i < V.length; i++) { const dd = ra[i] - rb[i]; s += dd * dd; }
   const n = V.length, rho = 1 - 6 * s / (n * (n * n - 1));
   const band = (a, b) => { const w = V.filter(r => r.behind >= a && r.behind < b); return w.length < 15 ? null : (w.reduce((t, r) => t + r.climb, 0) / w.length).toFixed(1); };
-  check('how far a bank climbs follows the land behind it', n > 100 && rho >= 0.35,
+  check('how far a bank climbs follows the land behind it', n > 100 && rho >= 0.26,
     'rank correlation ' + rho.toFixed(3) + ' over ' + n + ' shore rays; mean 14 m climb by the land 25-45 m back: '
     + '0-3 -> ' + band(0, 3) + ', 3-7 -> ' + band(3, 7) + ', 7-15 -> ' + band(7, 15) + ', 15+ -> ' + band(15, 1e9));
 }
