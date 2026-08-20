@@ -10424,16 +10424,18 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
 
   // Full-field height in [0,1]. Unpainted land is placed within its biome's [low,high] band by distance
   // to the coast (shore=low, interior=high) plus multi-octave rolling relief; ocean stays below sea
-  // level. Painted values override. Blurred so biome edges are slopes, not cliffs.
+  // level and land stays above it. Painted values override. Blurred so biome edges are slopes, not cliffs.
   const OCEAN_FALLOFF = G / 4, RELIEF_AMP = 0.10;   // coast→interior ramp, kept proportional to grid size
   function computeHeightField() {
     const dist = oceanDistField();
     let a = new Float32Array(G * G);
+    const dryLand = new Uint8Array(G * G);   // cells the sea-level floor owns; re-applied once the blur is done
     for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) {
       const i = y * G + x;
       if (elevPainted[i]) {                                             // painted: add the per-cell micro-relief baked at paint time
         const v = elev[i] + (fbm(x, y) - 0.5) * rough[i];
-        a[i] = elev[i] >= 0.505 ? Math.max(0.505, v) : v;               // painted land stays above sea (no accidental puddles)
+        // a value painted BELOW sea is a deliberate hollow, so only land-side paint claims the floor
+        if (elev[i] >= 0.505) { a[i] = Math.max(0.505, v); dryLand[i] = 1; } else a[i] = v;
         continue;
       }
       const band = ECO_BIOME_ELEV[CN[target[i]]] || [0.52, 0.62], lo = band[0], hi = band[1];
@@ -10441,6 +10443,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
       const fall = Math.min(1, dist[i] / OCEAN_FALLOFF), s = fall * fall * (3 - 2 * fall);    // smoothstep coast->inland
       const base = lo + (hi - lo) * s;                                                        // rise from shore to interior
       a[i] = Math.max(0.505, base + (fbm(x, y) - 0.5) * RELIEF_AMP * (0.4 + 0.6 * s));         // rolling hills, gentler near shore
+      dryLand[i] = 1;
     }
     let b = new Float32Array(G * G);
     for (let p = 0; p < HEIGHT_BLUR_PASSES; p++) {
@@ -10451,6 +10454,12 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
       }
       const t = a; a = b; b = t;
     }
+    // The floor has to hold AFTER the blur. Averaging a coastal cell with its ocean neighbours drags it
+    // back under sea level — up to 10 blocks under, two cells inland — while biome.bin still calls that
+    // cell Grassland, so the two exported layers contradict each other and the waterline lands inland of
+    // where it was drawn. imageToMaps applies the same floor at its finalize step, after all of ITS
+    // smoothing, for the same reason; this keeps the painted path's promise identical to the imported one.
+    for (let i = 0; i < G * G; i++) if (dryLand[i] && a[i] < 0.505) a[i] = 0.505;
     return a;
   }
   // Final terrain for export + height preview: the base field, with painted rivers/lakes carved into a
