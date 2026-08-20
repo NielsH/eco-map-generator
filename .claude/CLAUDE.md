@@ -27,25 +27,34 @@ Unlike the sibling [eco-biome-visualizer](https://github.com/NielsH/eco-biome-vi
 - `build.js` — inlines `src/*` + vectortable + `WorldGenerator.eco` into `index.html` (this file also contains all the main-thread UI as a big template literal: config form, biome-mix editor, ore editor, ore chart, canvas rendering).
 - `WorldGenerator.eco` — Eco's default world (Small preset). Embedded into `index.html` as the on-load example.
 - `test/verify-core.js` + `test/noise_ref.tsv` — bit-exactness check of Random + noise against captured ground truth.
-- `test/designer-harness.js` — lifts `imageToMaps` out of `designer.js` by brace matching and stubs the canvas, so the import pipeline runs headlessly. Shared by the two import suites.
+- `test/designer-harness.js` — lifts pieces out of `designer.js` by brace matching and stubs the canvas, so the designer runs headlessly. `grabFn`/`grabConst`/`grabLet` name a piece, `run(parts, args, body)` assembles a sandbox out of several (which is how a check reaches a helper the module never exports), and `runImageToMaps` drives the whole import. The stubbed canvas honours `imageSmoothingEnabled`, so the "colours must not blend" check has something to fail on. Shared by every designer suite.
 
 ## Build / verify / run
 
 ```
-node build.js              # regenerate index.html from src/ + WorldGenerator.eco
-node test/verify-core.js   # Random + 66 noise checks vs references captured from the game DLLs
-node test/verify-water.js  # imported lakes/rivers: no walls of water, no overflow, flat lake basins
-node test/verify-shape.js  # a coastal design: river mouths reach the sea, and the ground beside a bank is a valley
+node build.js               # regenerate index.html from src/ + WorldGenerator.eco
+node test/verify-core.js    # Random + 66 noise checks vs references captured from the game DLLs
+node test/verify-water.js   # imported lakes/rivers: no walls of water, no overflow, flat lake basins
+node test/verify-shape.js   # a coastal design: river mouths reach the sea, and the ground beside a bank is a valley
+node test/verify-import.js  # the legend decode: colour matching, the 12-colour cap, brightness mode
+node test/verify-paint.js   # the hand-painted path: brush/fill on the torus, the height field, a painted river
+node test/verify-export.js  # the exported bundle: zip writer + reader, CRC-32, the design round trip
+node test/verify-search.js  # src/search.js: the wrap-invariant score that ranks every candidate seed
 ```
 
-Both import suites run the real `imageToMaps` headlessly through `test/designer-harness.js`, so the import
-pipeline can be iterated on without a browser. `DESIGNER=<path> node test/verify-water.js` runs either of
-them against another copy of designer.js.
+The designer suites run the real code headlessly through `test/designer-harness.js`, so the pipeline can be
+iterated on without a browser. `DESIGNER=<path> node test/verify-water.js` runs any of them against another
+copy of designer.js; `SEARCH=<path> node test/verify-search.js` does the same for search.js.
 
-**That last flag is how a check earns its place.** A check nobody has seen fail is not a check: this suite
+**Those flags are how a check earns its place.** A check nobody has seen fail is not a check: this suite
 once shipped one that passed with the pass it guarded deleted outright. Before adding one, make a copy of
 `designer.js` with the single change undone, and show the check failing on the copy and passing on `src/`.
 `verify-shape.js` records that table for its four checks in its header comment.
+
+Still unguarded, and worth knowing before trusting a green run: `gridToPng` (it is `canvas.toBlob`, and the
+PNGs are for humans — the mod reads the .bin files), everything touching the DOM or the worker pool, the
+hosted-generation POST/poll, and `src/geo.js` / `src/worldgen.js` / `src/voxel.js` / `src/raster.js`, whose
+correctness is fidelity to the server and is only measurable against a generated world.
 
 Neither suite can see anything downstream of the export. The terrace, the upscale, `CliffExtruder` and the
 stone extrusion all live in the mod, so what they do to a map is only measurable on a generated world —

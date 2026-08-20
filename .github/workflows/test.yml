@@ -1,9 +1,13 @@
 # Runs the designer's checks on every push to main and every pull request.
 #
 # Hermetic on a stock runner: plain Node, no dependencies, no npm install, no network, no secrets.
-#   test/verify-core.js   the ported .NET Random + SharpNoise stay bit-exact vs references captured from the game DLLs
-#   test/verify-water.js  imported lakes/rivers: runs the real imageToMaps (lifted out of src/designer.js) on a synthetic map
-#   test/verify-shape.js  the same, on a COASTAL design: river mouths at the sea, and the shape of the ground beside a bank
+#   test/verify-core.js    the ported .NET Random + SharpNoise stay bit-exact vs references captured from the game DLLs
+#   test/verify-water.js   imported lakes/rivers: runs the real imageToMaps (lifted out of src/designer.js) on a synthetic map
+#   test/verify-shape.js   the same, on a COASTAL design: river mouths at the sea, and the shape of the ground beside a bank
+#   test/verify-import.js  the legend decode in front of those: colour matching, the 12-colour cap, brightness mode
+#   test/verify-paint.js   the HAND-PAINTED path instead: brush and fill on the torus, the height field, a painted river
+#   test/verify-export.js  the bundle it all leaves in: the zip writer and its reader, the CRC, the design round trip
+#   test/verify-search.js  src/search.js: the wrap-invariant similarity score that ranks every candidate seed
 # plus a build-sync check: index.html is a GENERATED artifact (build.js inlines src/* + WorldGenerator.eco into it) and
 # GitHub Pages serves index.html straight from main — so a commit that edits src/ without rebuilding ships a live page
 # that silently lacks the change. The check rebuilds and fails if the committed page differs from the sources.
@@ -43,6 +47,10 @@ jobs:
       - run: node test/verify-core.js
       - run: node test/verify-water.js
       - run: node test/verify-shape.js
+      - run: node test/verify-import.js
+      - run: node test/verify-paint.js
+      - run: node test/verify-export.js
+      - run: node test/verify-search.js
 
       - name: index.html is in sync with src/
         run: |
