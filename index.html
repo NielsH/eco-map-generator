@@ -9509,6 +9509,38 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
       }
     }
 
+    // A drawn highland decides WHERE the mountains are. It cannot do that through the elevation nudge in
+    // the field above: the trend removal is a 60-block high-pass over land, and a biome-wide offset is
+    // exactly the shape it deletes. Quadrupling that nudge moved the median land cell 0.00 blocks and the
+    // middle of a drawn highland 0.5-2.4; the only thing left of it was the filter's other lobe, a ring
+    // from 10 cells inside the highland to 20 outside pushed DOWN by up to 2.5 blocks. Fresh water takes
+    // its level from its immediate bank, so that ring dropped the water standing in it, and the ground
+    // beyond a rim that may sit below the water fell from 11.9% to 2.5% — the land had hardly moved, the
+    // WATER had sunk. (Swapping only the water surfaces between the two runs reproduces the whole fall.)
+    //
+    // So the drawing is applied AFTER the trend removal, and as a stretch of the relief already there
+    // rather than as a lift. The gain follows the same ridged field the peaks do, which is near zero in
+    // the valleys, so crests gain and the basin a lake sits in does not: fresh water comes out at the same
+    // 22,958 columns at the same levels, and the rim check is unmoved at 11.1%.
+    //
+    // Only the highland gains. Scaling the low biomes DOWN by the same rule takes the crests the water
+    // reads its level from with them, and the rim check falls again — 9.8% at a third of this gain, 5.8%
+    // at two thirds.
+    {
+      const HL_SPAN = 0.33;      // how far a biome's band must sit over the middle to count as fully highland
+      const HL_RELIEF = 0.9;     // relief a fully-highland biome gains, in the peak pass's own units
+      for (let j = 0; j < n; j++) {
+        if (land[j] !== 1) continue;
+        const x = j % res, y = (j / res) | 0;
+        // Read the band at the WARPED position, as the nudge does, so a drawn biome edge is not printed
+        // into the terrain as a ruled line.
+        const wj = (((Math.round(warpY(x, y)) % res) + res) % res) * res + (((Math.round(warpX(x, y)) % res) + res) % res);
+        const hl = Math.min(1, (tgt[wj] - 0.25) / HL_SPAN);
+        if (hl <= 0) continue;
+        hf[j] += HL_RELIEF * hl * Math.pow(ridged(x, y), 1.3) * ceil[j] * 0.5;
+      }
+    }
+
     // The sea bed is a single flat plane. Every ocean cell is exported at one constant, so 100% of deep
     // water sits at exactly 24 blocks down with four identical neighbours, where a stock world's modal
     // depth holds under 15% of its sea and its floor reaches 48-53 blocks. Give it a profile — dropping
