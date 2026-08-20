@@ -562,6 +562,20 @@
     const aboveMid = cls => { const b = ECO_BIOME_ELEV[CN[cls]] || [0.52, 0.62]; return Math.max(0, ((b[0] + b[1]) / 2 - 0.5) * 2); };   // biome target elevation above sea, [0,1]
     const tgt = new Float32Array(n); for (let j = 0; j < n; j++) tgt[j] = land[j] === 1 ? aboveMid(biome[j]) : 0;
     boxBlurTor(tgt, res, Math.max(3, Math.round(res / 27)), 2);                   // smooth the biome nudge so borders ramp, not step
+    // The extra lift keeps away from fresh water. Raising the ground a lake sits in makes it a bowl on a
+    // plateau: on the test design it took the ground beyond a rim that may sit below the water from 11.9%
+    // to 2.5%, against vanilla's 30-45%. Full strength once clear of the bank, ordinary strength at it.
+    const LIFT_CLEAR = 12;                                                       // cells, about 32 blocks
+    const wetDist = new Float32Array(n).fill(LIFT_CLEAR);
+    {
+      const dq = [], seen = new Uint8Array(n);
+      for (let j2 = 0; j2 < n; j2++) if (fresh[j2]) { wetDist[j2] = 0; seen[j2] = 1; dq.push(j2); }
+      for (let h = 0; h < dq.length; h++) {
+        const c = dq[h];
+        if (wetDist[c] >= LIFT_CLEAR) continue;
+        for (const nb of nbr4(c)) if (!seen[nb]) { seen[nb] = 1; wetDist[nb] = wetDist[c] + 1; dq.push(nb); }
+      }
+    }
     // Ridged multifractal in [0,1]. Vanilla's elevation is drawn once per Voronoi cell — chunky patches
     // tens of blocks across — so its terraces come out wide. Piling on high octaves here gives detail finer
     // than a terrace band, which just makes the height cross a band every block or two: a dense corduroy
@@ -579,6 +593,7 @@
     const warpY = (x, y) => y + (vnR(x + 137.5, y + 91.3, WARP_FREQ, res) - 0.5) * 2 * WARP_AMP;
     const ridged = (x0, y0) => { const x = warpX(x0, y0), y = warpY(x0, y0); let s = 0, amp = 1, fr = RIDGE_FREQ, norm = 0; for (let o = 0; o < RIDGE_OCTAVES; o++) { const nz = vnR(x, y, fr, res); s += amp * (1 - Math.abs(2 * nz - 1)); norm += amp; amp *= RIDGE_FALLOFF; fr *= 2; } return s / norm; };
     const DIST_WOBBLE = 12;     // cells the coast-distance ramp wanders, so its contours are not clean offsets
+    const HIGHLAND_LIFT = 1.70;   // how much a drawn highland biome raises the ground
     const MAXH = 1.35;
     const ceil = new Float32Array(n);                                            // coastal ceiling, reused by the peak pass                                                           // interior peaks reach near the world's max height
     for (let j = 0; j < n; j++) {
@@ -600,7 +615,16 @@
       // border. Vanilla never shows this because its biome edges follow Voronoi cells. The biome map itself
       // is untouched; only where the height TRANSITION happens gets bent.
       const wj = (((Math.round(warpY(x, y)) % res) + res) % res) * res + (((Math.round(warpX(x, y)) % res) + res) % res);
-      const nudge = (tgt[wj] - 0.25) * 0.40;                                      // high-elevation biomes trend higher
+      // A painted highland has to actually make a mountain. At 0.40 a Taiga cell was worth about 4 blocks
+      // over a grassland one, while the ridged field decides where the peaks go — so DOUBLING the highland
+      // area on the map moved the land at 85+ blocks from 1.35% to 1.36%. The drawing had almost no say.
+      //
+      // Only the lift is amplified. Scaling both directions equally also pushes the low biomes down, and
+      // that drains the lakes sitting in them: measured, fresh water fell 25% (22,958 columns -> 17,167).
+      // Lifting alone leaves them where they were.
+      const d = tgt[wj] - 0.25;
+      const lift = 0.40 + (HIGHLAND_LIFT - 0.40) * Math.min(1, wetDist[j] / LIFT_CLEAR);
+      const nudge = d > 0 ? d * lift : d * 0.40;
       // SHAPE the relief by the coastal ceiling rather than clipping to it. Clipping (min) threw away the
       // noise wherever the ceiling was the lower of the two — on this design that was 78% of all land — and
       // left height as a pure function of distance-to-sea, whose contours are evenly spaced bands marching
