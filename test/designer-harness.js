@@ -99,6 +99,8 @@ function runImageToMaps(img, res, opts) {
   opts = opts || {};
   const legend = opts.legend || paletteLegend();
   const body = [grabConst('ECO_BIOME_ELEV'), grabConst('BLK'), grabConst('OPEN_WATER'), grabConst('SEA_LEVEL'), grabConst('BANK_CAP'), grabConst('SHORE_LIP'), grabFn('h2'), grabFn('vnR'), grabFn('boxBlurTor'), grabFn('settleWaterLevels'), grabFn('shelveWaterBed'), grabFn('writeExportColumns'), grabFn('capBankLip'), grabFn('restoreShoreLip'), grabFn('solveWaterSurface'),
+    grabConst('VALLEY_SHOULDER_MIN'), grabConst('VALLEY_RISE_MIN'), grabConst('BLUFF_KEEP'), grabConst('valleyAt'),
+    grabFn('bankProfileFields'), grabFn('valleyBanks'), grabFn('capShoreBand'),
     grabFn('imageToMaps'), 'return imageToMaps(RES, BPC);'].join('\n');
   const fn = new Function('document', 'importedImg', 'importMode', 'legend', 'SC', 'CN', 'RES', 'BPC', body);
   return fn(makeDocument(), img, opts.mode || 'colors', legend, SC, SCLASS, res, opts.blocksPerCell);
