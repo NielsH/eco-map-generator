@@ -82,7 +82,7 @@ onmessage = function (e) {
   if (m.type === '3d-authored') {
     try {
       const cfg = m.cfg, Gg = m.G, W = cfg.worldWidth * 10;
-      const src = m.biome, hsrc = m.height;
+      const src = m.biome, hsrc = m.height, wsrc = m.water || null;
       const CLS2RB = [RB_ID.DeepOcean, RB_ID.WarmCoast, RB_ID.Grassland, RB_ID.WarmForest, RB_ID.ColdForest, RB_ID.RainForest, RB_ID.Desert, RB_ID.Taiga, RB_ID.Tundra, RB_ID.Ice, RB_ID.Wetland];
       const biome = new Uint8Array(W * W), gray = new Uint8Array(W * W);
       const wrap = (v, n) => ((v % n) + n) % n;
@@ -96,10 +96,23 @@ onmessage = function (e) {
         const top = v00 + (v10 - v00) * tx, bot = v01 + (v11 - v01) * tx;
         gray[z * W + x] = Math.round(top + (bot - top) * tz);
       }
+      // Fresh water is a per-column surface, not a plane: the export carries it as waterValue*255 and the
+      // server fills each column up to WaterLevel + (MaxGen - WaterLevel) * value. Without this the preview
+      // can only ever show the sea, so every river and lake in the design is missing from it.
+      let wy = null;
+      if (wsrc) {
+        wy = new Int16Array(W * W);
+        const WLv = cfg.waterLevel, MHv = cfg.maxGenerationHeight;
+        for (let z = 0; z < W; z++) for (let x = 0; x < W; x++) {
+          const xc = (x * Gg / W) | 0, zc = (z * Gg / W) | 0, b = wsrc[zc * Gg + xc];
+          wy[z * W + x] = b > 0 ? WLv + Math.trunc((MHv - WLv) * (b / 255)) : 0;
+        }
+      }
       vGrid = { W: W, biome: biome, gray: gray, biomeNames: RASTER_BIOMES };
       vCtx = initTerrain(m.terrain, cfg);
       vCtx.grayAt = (x, z) => gray[z * W + x];
       vCtx.biomeAt = (x, z) => RASTER_BIOMES[biome[z * W + x]];
+      vCtx.waterYAt = wy ? (x, z) => wy[z * W + x] : null;
       computeDeposits(vCtx, vGrid, (ph, f) => postMessage({ type: 'v3d-progress', phase: ph, frac: f }));
       vChunks = new Map(); vSource = 'authored';
       const grayCopy = gray.slice(), biomeCopy = biome.slice();
@@ -756,6 +769,7 @@ const btOf = bt => (bt && bt.Type) ? bt.Type : '';
 // Ores reuse ORE_COL/ORE_NAME via oreMaterial(); everything else (soils, sediments, rock) lives here.
 const ORE_ORDER = ['iron','copper','gold','coal','sulfur','peat','limestone','clay'];
 const BLOCK_COL = {
+  Water:'#3d7fd6', WaterBlock:'#3d7fd6',      // fresh water, same blue the sea plane uses
   Dirt:'#7c5a38', RockySoil:'#8f7b52', Grass:'#6bbf59', GrassBlock:'#6bbf59',
   WetlandsSoil:'#5d6b46', FrozenSoil:'#93a7ad', Sand:'#e4d59b', DesertSand:'#e9cb8d',
   Sandstone:'#d8b573', Shale:'#69737b', Slate:'#5c666e', Gravel:'#9c958b',

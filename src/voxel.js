@@ -19,6 +19,7 @@ if (typeof require !== 'undefined') VC = require('./core.js');
 function bindVoxel(core) { VC = core; }
 
 const IMPENETRABLE = 'Eco.World.Blocks.ImpenetrableStoneBlock';   // server floor fallback
+const WATER = 'Eco.World.Blocks.WaterBlock';                       // fresh water, filled from the export's surface
 const clamp01 = v => (v < 0 ? 0 : v > 1 ? 1 : v);
 const inRangeInc = (v, lo, hi) => v >= lo && v <= hi;
 const fr = Math.fround;
@@ -287,7 +288,13 @@ function genChunkColumns(ctx, cx, cz, CHUNK) {
       const ih = heightToInt(ctx.grayAt(wx, wz), WL, MH), idx = (lz + 1) * S + (lx + 1);
       const col = generateColumn(ctx, wx, wz, ih);
       if (dep && dep.size) for (let y = 1; y <= ih; y++) { const b = dep.get(pack(wx, y, wz)); if (b) col[y] = b; }   // overlay veins
-      h[idx] = ih; cols[idx] = col;
+      // Fresh water sits ABOVE the ground, so it cannot come from the height field - it is filled from the
+      // exported water surface the way the server fills it, or the preview shows a dry channel where the
+      // finished world has a river.
+      let top = ih;
+      const wyv = ctx.waterYAt ? ctx.waterYAt(wx, wz) : 0;
+      if (wyv > ih) { for (let y = ih + 1; y <= wyv; y++) col[y] = WATER; top = wyv; }
+      h[idx] = top; cols[idx] = col;
     }
   }
   return { S, x0, z0, CHUNK, h, cols };
