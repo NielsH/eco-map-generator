@@ -29,7 +29,7 @@
 //   the coast envelope survives lake levelling      the cap is not re-applied after solveWaterSurface
 //   the ground behind the bank is brought down     valleyBanks / capShoreBand are not run
 //   one coast bound per body of open water         the envelope is re-applied cell by cell again
-//   the export path runs the whole chain            any one of the passes is dropped from buildBundleFiles
+//   the export path runs the whole chain            a pass is dropped, or a caller bypasses buildExportMaps
 //   an unseeded design is recognised as empty       designIsEmpty stops at the first cell it looks at
 //   a new map re-seeds an untouched design          shouldReseed only ever fires on an empty design
 //   an edited design is never replaced              shouldReseed ignores the edited flag
@@ -301,13 +301,19 @@ check('the coast envelope survives lake levelling', chain.overBefore > 0 && chai
 // chain above is assembled by the test rather than read out of the exporter.
 {
   const src = require('fs').readFileSync(H.SRC, 'utf8');
-  const at = src.indexOf('async function buildBundleFiles(');
+  // The chain lives in buildExportMaps; buildBundleFiles and the 3D preview both go through it, so both
+  // links are checked - the preview showing a different world from the bundle is exactly the bug this
+  // guards against now.
+  const at = src.indexOf('function buildExportMaps(');
   const exporter = at < 0 ? '' : src.slice(at, at + 6000);
+  const users = ['buildBundleFiles', 'build3DPayload']
+    .filter(fn => { const i = src.indexOf('function ' + fn + '('); return i < 0 || src.slice(i, i + 2500).indexOf('buildExportMaps(') < 0; });
   const missing = ['waterFieldsAt', 'waterTopologyAt', 'settleWaterLevels', 'solveWaterSurface',
                    'capBankLip', 'restoreShoreLip', 'shelveWaterBed', 'writeExportColumns',
                    'bankProfileFields', 'valleyBanks', 'capShoreBand']
     .filter(fn => exporter.indexOf(fn + '(') < 0);
   if (exporter.indexOf('seaCapAt') < 0) missing.push('the coast envelope (seaCapAt)');
+  for (const u of users) missing.push(u + ' does not go through buildExportMaps');
   check('the export path runs the whole chain', at >= 0 && missing.length === 0,
     missing.length ? 'buildBundleFiles never calls ' + missing.join(', ') : 'all eight water passes are called');
 }
