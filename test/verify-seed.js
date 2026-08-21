@@ -20,8 +20,14 @@
 //   detail keeps off the water                      the wetNear gate is dropped
 //   detail is quantised to whole levels             FINE_STEP is set to 0
 //   detail fades out at the waterline               the `above` fade is removed
-//   a seeded lake ends up at ONE level              levelSeededWater takes each cell's height, not the basin
-//   a seeded river still runs downhill              rivers are levelled with the lakes
+//   seeded water is marked and measured from shore  waterFieldsAt stops marking the design's water
+//   the ocean is told from an inland pool           waterTopologyAt takes any salt water as the sea
+//   a seeded lake ends up at ONE level              the level pass is skipped for the seeded path
+//   a seeded river still runs downhill              rivers are levelled the way lakes are
+//   the shore sits above the water it holds         restoreShoreLip is not run on the seeded path
+//   the bed shelves up at the shoreline             shelveWaterBed is not run on the seeded path
+//   the coast envelope survives lake levelling      the cap is not re-applied after solveWaterSurface
+//   the export path runs the whole chain            any one of the passes is dropped from buildBundleFiles
 //   an unseeded design is recognised as empty       designIsEmpty stops at the first cell it looks at
 //   a new map re-seeds an untouched design          shouldReseed only ever fires on an empty design
 //   an edited design is never replaced              shouldReseed ignores the edited flag
@@ -121,34 +127,127 @@ for (let i = 0; i < detail.low.length; i++) if (Math.abs(detail.low[i] - 0.5) > 
 check('detail fades out at the waterline', sunkMoved === 0,
   sunkMoved + ' cells moved at sea level, where detail would carve new islands or flood the coast');
 
-// ---- a seeded lake comes out at one level, and a seeded river still descends ----------------------
-const state = (function () {
+// ---- the seeded path, through the passes the image import already uses ----------------------------
+// A synthetic design: land everywhere, a square lake on a slope, and a channel running off it to the sea.
+const CH = (function () {
   const target = new Uint8Array(G * G).fill(H.SC.Grassland);
-  const water = new Uint8Array(G * G);
-  for (let y = 40; y < 52; y++) for (let x = 40; x < 52; x++) water[y * G + x] = 1;   // a lake
-  for (let x = 52; x < 70; x++) water[46 * G + x] = 2;                                // its outflow
-  return { target: target, water: water, elev: new Float32Array(G * G), elevPainted: new Uint8Array(G * G),
-           rough: new Float32Array(G * G), SC: H.SC, CN: H.SCLASS };
+  const wet = new Uint8Array(G * G);
+  for (let y = 40; y < 56; y++) for (let x = 40; x < 56; x++) wet[y * G + x] = 1;   // the lake
+  for (let x = 56; x < 100; x++) wet[47 * G + x] = 1;                               // its outflow
+  for (let y = 0; y < G; y++) for (let x = 100; x < G; x++) target[y * G + x] = H.SC.Ocean;   // the sea
+  for (let y = 14; y < 26; y++) for (let x = 14; x < 26; x++) target[y * G + x] = H.SC.Ocean;   // and an inland pool
+  return { target: target, water: wet };
 })();
-const level = H.run(
-  ['const:G', 'const:ECO_BIOME_ELEV', 'const:HEIGHT_BLUR_PASSES', 'const:OCEAN_FALLOFF', 'fn:h2', 'fn:vnW',
-   'fn:fbm', 'fn:oceanDistField', 'fn:computeHeightField', 'fn:levelSeededWater'],
-  state,
-  [
-    'levelSeededWater();',
-    'const h = computeHeightField();',
-    'const lake = [], riv = [];',
-    'for (let y = 40; y < 52; y++) for (let x = 40; x < 52; x++) lake.push(h[y * G + x]);',
-    'for (let x = 52; x < 70; x++) riv.push(h[46 * G + x]);',
-    'return { lake: lake, riv: riv };',
-  ].join('\n'));
 
-const spread = Math.max.apply(null, level.lake) - Math.min.apply(null, level.lake);
-check('a seeded lake ends up at ONE level', spread < 1e-5,
-  'the lake spans ' + (spread * 120).toFixed(2) + ' blocks of surface; a lake is one level by definition');
-const falls = level.riv.filter((v, i) => i > 0 && v < level.riv[i - 1]).length;
-check('a seeded river still runs downhill', falls >= (level.riv.length - 1) * 0.3,
-  falls + ' of ' + (level.riv.length - 1) + ' steps descend; levelling it would make an inlet, not a river');
+const chain = H.run(
+  ['const:G', 'const:SEA_LEVEL', 'const:BLK', 'const:OPEN_WATER', 'const:BANK_CAP', 'const:SHORE_LIP',
+   'const:EXPORT_BLOCKS_PER_CELL', 'const:EXPORT_RES_MAX', 'const:FINE_WAVE1', 'const:FINE_A1',
+   'const:FINE_RELIEF', 'const:FINE_STEP', 'const:ECO_BIOME_ELEV', 'const:HEIGHT_BLUR_PASSES',
+   'const:OCEAN_FALLOFF', 'fn:h2', 'fn:vnW', 'fn:vnR', 'fn:fbm', 'fn:boxBlurTor', 'fn:oceanDistField',
+   'fn:computeHeightField', 'fn:exportRes', 'fn:sampleG', 'fn:exportHeight', 'fn:nearWater',
+   'fn:waterFieldsAt', 'fn:waterTopologyAt', 'fn:settleWaterLevels', 'fn:solveWaterSurface',
+   'fn:capBankLip', 'fn:restoreShoreLip', 'fn:shelveWaterBed'],
+  { target: CH.target, water: CH.water, elev: new Float32Array(G * G), elevPainted: new Uint8Array(G * G),
+    rough: new Float32Array(G * G), SC: H.SC, CN: H.SCLASS },
+  [
+    'const WB = 720, N = exportRes(WB);',
+    'const fine = exportHeight(computeHeightField(), N, WB, nearWater());',
+    'const wf = waterFieldsAt(N, fine);',
+    'const topo = waterTopologyAt(N, wf.land);',
+    'const settled = settleWaterLevels(N, N * N, wf.land, fine, topo.distO, WB / N, topo.groups, boxBlurTor);',
+    'for (let i = 0; i < N * N; i++) if (wf.land[i] === 2) wf.wsurf[i] = Math.max(SEA_LEVEL + 0.01, settled.level[i] - 0.012);',
+    'solveWaterSurface(N, wf.land, wf.wsurf, settled.fromShore);',
+    'const overBefore = [];',
+    'for (let i = 0; i < N * N; i++) if (wf.land[i] === 2 && wf.wsurf[i] > settled.seaCapAt[i] - 0.012) overBefore.push(i);',
+    'for (let i = 0; i < N * N; i++) if (wf.land[i] === 2) wf.wsurf[i] = Math.min(wf.wsurf[i], settled.seaCapAt[i] - 0.012);',
+    'let overAfter = 0;',
+    'for (let i = 0; i < N * N; i++) if (wf.land[i] === 2 && wf.wsurf[i] > settled.seaCapAt[i] - 0.012 + 1e-9) overAfter++;',
+    'capBankLip(N, wf.land, wf.wsurf, fine);',
+    'restoreShoreLip(N, wf.land, wf.wsurf, fine);',
+    'const bed = new Float32Array(N * N);',
+    'shelveWaterBed(N, N * N, wf.land, wf.wsurf, bed, WB / N);',
+    'return { N: N, land: wf.land, wsurf: wf.wsurf, fine: fine, bed: bed, groups: topo.groups.length, fromShore: settled.fromShore, distO: topo.distO, overBefore: overBefore.length, overAfter: overAfter };',
+  ].join(String.fromCharCode(10)));
+
+const NN = chain.N, NN0 = chain.N, BLOCKS = 120;
+let wetCells = 0, deepest = 0;
+for (let i = 0; i < NN * NN; i++) if (chain.land[i] === 2) { wetCells++; if (chain.fromShore[i] > deepest) deepest = chain.fromShore[i]; }
+check('seeded water is marked and measured from shore', wetCells > 500 && deepest >= 3,
+  wetCells + ' export cells are fresh water, the furthest ' + deepest + ' cells from its own edge');
+// The inland pool is salt water too, but it is not the SEA - only the largest body is. Distance-to-ocean
+// is what bounds a water level near the coast, so counting a puddle as ocean would let inland water sit at
+// sea level wherever a dip happens to be drawn.
+const poolAt = Math.floor(20 * NN0 / G) * NN0 + Math.floor(20 * NN0 / G);
+check('the ocean is told from an inland pool', chain.distO[poolAt] > 20,
+  'the inland pool reads ' + chain.distO[poolAt].toFixed(0) + ' cells from the ocean; at 0 it would BE the ocean');
+
+// the lake: one level across it
+const lakeLv = [];
+for (let y = 42; y < 54; y++) for (let x = 42; x < 54; x++) {
+  const i = Math.floor(y * NN / G) * NN + Math.floor(x * NN / G);
+  if (chain.land[i] === 2) lakeLv.push(chain.wsurf[i]);
+}
+const spread = (Math.max.apply(null, lakeLv) - Math.min.apply(null, lakeLv)) * BLOCKS;
+check('a seeded lake ends up at ONE level', spread < 0.5,
+  'the lake spans ' + spread.toFixed(2) + ' blocks of surface; a lake is one level by definition');
+
+// the channel: still descending toward the sea
+const runLv = [];
+for (let x = 60; x < 98; x += 2) {
+  const i = Math.floor(47 * NN / G) * NN + Math.floor(x * NN / G);
+  if (chain.land[i] === 2) runLv.push(chain.wsurf[i]);
+}
+const falls = runLv.filter((v, k) => k > 0 && v < runLv[k - 1] - 1e-6).length;
+check('a seeded river still runs downhill', falls >= 1,
+  falls + ' of ' + Math.max(0, runLv.length - 1) + ' steps along the outflow descend; levelling it would make an inlet');
+
+// the shore has to be above the water it holds
+let below = 0, shorePairs = 0;
+for (let i = 0; i < NN * NN; i++) {
+  if (chain.land[i] !== 1) continue;
+  const x = i % NN, y = (i / NN) | 0;
+  let need = -Infinity;
+  for (const nb of [y * NN + (x + 1) % NN, y * NN + (x + NN - 1) % NN, ((y + 1) % NN) * NN + x, ((y + NN - 1) % NN) * NN + x])
+    if (chain.land[nb] === 2 && chain.wsurf[nb] > need) need = chain.wsurf[nb];
+  if (need === -Infinity) continue;
+  shorePairs++;
+  if (chain.fine[i] < need) below++;
+}
+check('the shore sits above the water it holds', shorePairs > 0 && below === 0,
+  below + ' of ' + shorePairs + ' shore cells sit under their own water, which reads as a lake spilling over the ground');
+
+// and the bed must not drop away from that shore fast enough for CliffExtruder to wall it in
+let steps = 0;
+for (let i = 0; i < NN * NN; i++) {
+  if (chain.land[i] !== 2) continue;
+  const x = i % NN, y = (i / NN) | 0;
+  for (const nb of [y * NN + (x + 1) % NN, y * NN + (x + NN - 1) % NN, ((y + 1) % NN) * NN + x, ((y + NN - 1) % NN) * NN + x])
+    if (chain.land[nb] === 1 && (chain.fine[nb] - chain.bed[i]) * BLOCKS >= 5) steps++;
+}
+check('the bed shelves up at the shoreline', steps === 0,
+  steps + ' bed-to-bank pairs step 5+ blocks; Eco builds a rock face at 5, so that is a wall around the water');
+
+// Levelling a lake takes the body's dominant level, which knows nothing about how near the sea it is, so it
+// can lift a coastal body back over the envelope settleWaterLevels put on it. Measured on a generated world
+// before the cap was re-applied, 53.4% of the fresh water within sight of one coast stood 3 blocks over the
+// sea; after, 0.3%.
+check('the coast envelope survives lake levelling', chain.overBefore > 0 && chain.overAfter === 0,
+  chain.overBefore + ' cells were lifted back over the envelope by the levelling, ' + chain.overAfter + ' left after the cap');
+
+// The checks above prove the passes work; this one proves the export path still RUNS them. Without it a
+// pass could be dropped from buildBundleFiles and every check here would carry on passing, because the
+// chain above is assembled by the test rather than read out of the exporter.
+{
+  const src = require('fs').readFileSync(H.SRC, 'utf8');
+  const at = src.indexOf('async function buildBundleFiles(');
+  const exporter = at < 0 ? '' : src.slice(at, at + 6000);
+  const missing = ['waterFieldsAt', 'waterTopologyAt', 'settleWaterLevels', 'solveWaterSurface',
+                   'capBankLip', 'restoreShoreLip', 'shelveWaterBed', 'writeExportColumns']
+    .filter(fn => exporter.indexOf(fn + '(') < 0);
+  if (exporter.indexOf('seaCapAt') < 0) missing.push('the coast envelope (seaCapAt)');
+  check('the export path runs the whole chain', at >= 0 && missing.length === 0,
+    missing.length ? 'buildBundleFiles never calls ' + missing.join(', ') : 'all eight water passes are called');
+}
 
 // ---- the two guards on the page ------------------------------------------------------------------
 const guards = H.run(['const:G', 'fn:designIsEmpty', 'fn:shouldReseed'], { SC: H.SC },
