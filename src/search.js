@@ -188,28 +188,53 @@ function waterGridAt(polys, rivers, worldSize, G) {
       if (hit) { mask[gy * G + gx] = 1; elev[gy * G + gx] = lowest; }   // lake
     }
   }
-  // rivers arrive as runs of cells; step along each leg finely enough that the trail never breaks
+  // Rivers arrive as runs of cells. The chain is unwrapped the SHORT way at every step, the way the game
+  // does it (VoronoiWorldGenerator's ClosestWrappedLocation): walking the raw centres instead draws the
+  // chord the long way round and lays a dead-straight line of water clean across the world.
   const g = G / worldSize;
   const at = c => (c && c.center) ? c.center : c;
   const heightOf = c => (c && c.elevation !== undefined) ? c.elevation : (c && c.e !== undefined ? c.e : 0);
-  const put = (x, y, e) => {
-    const gx = ((Math.floor(x * g) % G) + G) % G, gy = ((Math.floor(y * g) % G) + G) % G;
-    const i = gy * G + gx;
+  const near = (v, ref) => v - Math.round((v - ref) / worldSize) * worldSize;
+  const putCell = (gx, gy, e) => {
+    const i = (((gy % G) + G) % G) * G + (((gx % G) + G) % G);
     if (!mask[i] || e < elev[i]) elev[i] = e;      // where a river meets a lake, the lower surface wins
     if (!mask[i]) mask[i] = 2;                    // river, unless a lake already claimed the cell
   };
-  for (const river of rivers || []) {
-    for (let i = 1; i < river.length; i++) {
-      const a = at(river[i - 1]), b = at(river[i]);
-      if (!a || !b) continue;
-      const ea = toDesigner(heightOf(river[i - 1])), eb = toDesigner(heightOf(river[i]));
-      const steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) * g * 2));
-      for (let k = 0; k <= steps; k++) {
-        const t = k / steps;
-        put(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, ea + (eb - ea) * t);
+  let lastX = null, lastY = null;                 // previous sample, in (fractional) paint cells
+  const put = (x, y, e) => {
+    const cx = x * g, cy = y * g, gx = Math.floor(cx), gy = Math.floor(cy);
+    if (lastX !== null) {
+      const px = Math.floor(lastX), py = Math.floor(lastY);
+      // A step that moves in both axes at once leaves the trail only diagonally joined, and a diagonal join
+      // is no join: the body breaks there, and the pieces it breaks into are the short straight reaches the
+      // lake test then counts. Fill the cell the path actually crosses - whichever boundary it reaches first.
+      if (Math.abs(gx - px) === 1 && Math.abs(gy - py) === 1) {
+        const tx = (Math.max(gx, px) - lastX) / (cx - lastX), ty = (Math.max(gy, py) - lastY) / (cy - lastY);
+        if (tx < ty) putCell(gx, py, e); else putCell(px, gy, e);
       }
     }
-    if (river.length === 1) { const a = at(river[0]); if (a) put(a.x, a.y, toDesigner(heightOf(river[0]))); }
+    putCell(gx, gy, e);
+    lastX = cx; lastY = cy;
+  };
+  for (const river of rivers || []) {
+    const pts = [];
+    for (const c of river) {
+      const p = at(c);
+      if (!p) continue;
+      const q = pts.length ? { x: near(p.x, pts[pts.length - 1].x), y: near(p.y, pts[pts.length - 1].y) } : { x: p.x, y: p.y };
+      q.e = toDesigner(heightOf(c));
+      pts.push(q);
+    }
+    lastX = null;                                 // a new river starts a new trail; do not join it to the last
+    if (pts.length === 1) { put(pts[0].x, pts[0].y, pts[0].e); continue; }
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1], b = pts[i];
+      const steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) * g * 2));   // half-cell steps
+      for (let k = 0; k <= steps; k++) {
+        const t = k / steps;
+        put(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.e + (b.e - a.e) * t);
+      }
+    }
   }
   return { mask, elev };
 }

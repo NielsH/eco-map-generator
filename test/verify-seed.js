@@ -12,6 +12,8 @@
 //   the map's lakes reach the water layer           waterGridAt drops lake polygons
 //   a river reaches it too                          the river polylines are not walked
 //   a river leaves an unbroken trail                the walk steps once per leg instead of sub-cell
+//   the trail is joined, not only cornered          the diagonal step leaves the two cells corner to corner
+//   a river takes the short way round the wrap      the chain keeps the raw centres across the seam
 //   scoring still sees a lake as water              lakesAsLand leaks into the scoring path
 //   a lake keeps its own biome when seeding         lakesAsLand is ignored
 //   the export lattice is finer than the paint grid EXPORT_BLOCKS_PER_CELL is left at the paint pitch
@@ -68,6 +70,44 @@ for (let k = 0; k < 10; k++) {
   if (!mask[y * G + x]) gaps++;
 }
 check('a river leaves an unbroken trail', gaps === 0, gaps + ' gaps at the midpoint of a leg');
+
+// A trail joined only corner to corner is not joined at all: the water body breaks at every diagonal step,
+// and what it breaks into are short straight reaches that then read as compact little lakes. Measured on
+// five generated worlds, that alone accounted for 13-31 of the 15-37 narrow bodies each of them had.
+{
+  const slope = [];
+  for (let k = 0; k <= 12; k++) slope.push({ center: { x: 100 + k * 30, y: 100 + k * 12 }, elevation: 0.3 - k * 0.01 });
+  const trail = search.waterGridAt([], [slope], WORLD, G).mask;
+  const seen = new Uint8Array(G * G);
+  let parts = 0, cells = 0;
+  for (let i = 0; i < G * G; i++) {
+    if (!trail[i]) continue;
+    cells++;
+    if (seen[i]) continue;
+    parts++;
+    const st = [i]; seen[i] = 1;
+    while (st.length) {
+      const c = st.pop(), x = c % G, y = (c / G) | 0;
+      for (const n of [((x + 1) % G) + y * G, ((x + G - 1) % G) + y * G, x + ((y + 1) % G) * G, x + ((y + G - 1) % G) * G])
+        if (trail[n] && !seen[n]) { seen[n] = 1; st.push(n); }
+    }
+  }
+  check('the trail is joined, not only cornered', parts === 1,
+    cells + ' cells along a diagonal river in ' + parts + ' four-connected piece(s)');
+}
+
+// The world tiles, so a river that leaves one edge comes back at the other. Walking the raw centres instead
+// draws the chord the long way and lays a dead-straight line of water clean across the world - three of the
+// five seeds had one, up to 1200 blocks long. The game's own generator wraps the same way first.
+{
+  const seam = [];
+  for (let k = 0; k <= 6; k++) seam.push({ center: { x: (WORLD - 30 + k * 10) % WORLD, y: 360 }, elevation: 0.2 });
+  const wrapped = search.waterGridAt([], [seam], WORLD, G).mask;
+  const cols = new Set();
+  for (let i = 0; i < G * G; i++) if (wrapped[i]) cols.add(i % G);
+  check('a river takes the short way round the wrap', cols.size <= G / 4,
+    'a 60-unit river across the seam covers ' + cols.size + ' of ' + G + ' columns; the long way round covers them all');
+}
 
 // ---- a lake is water to the SEARCH and land to a SEEDED DESIGN ----------------------------------
 const cellAt = grid => grid[Math.floor(200 * G / WORLD) * G + Math.floor(200 * G / WORLD)];
