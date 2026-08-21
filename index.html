@@ -1995,16 +1995,14 @@ function classGridAt(polys, worldSize, G, opts) {
   return downsampleMajority(rasterClassR(polys, worldSize, R, opts), R, G);
 }
 
-// Where the map's FRESH water is, on the designer's paint grid, AND how high it sits. Two sources, and
+// Where the map's FRESH water is, on the designer's paint grid. Two sources, and
 // neither survives the class grid: a lake is flattened into the Ocean class there, and a river is one cell
 // wide, which majority downsampling erases outright. Lakes take ANY covered pixel rather than a majority
 // for the same reason - a lake narrower than a paint cell still has to leave water behind.
 //
-// The elevations matter as much as the mask. A water cell whose height is left to the surrounding terrain
-// takes the LOCAL land height, so a lake ends up at as many levels as the ground under it has, and a river
-// climbs whatever it crosses. The map already solved that - its lakes are flat and its rivers run downhill
-// to the sea - so its own elevations come across too, converted from the generator's [-1,1] (0 = sea) into
-// the designer's [0,1] (0.5 = sea).
+// Only the mask. How high the water stands is settled at export time against the DESIGN'S terrain, which is
+// not the map's: the design's land comes from the biome bands and the paint grid, so a level carried over
+// from the map describes ground that was never put there.
 function waterGridAt(polys, rivers, worldSize, G) {
   const mask = new Uint8Array(G * G);      // 1 = lake, 2 = river; the two are levelled differently
   const elev = new Float32Array(G * G);
@@ -7684,16 +7682,14 @@ function classGridAt(polys, worldSize, G, opts) {
   return downsampleMajority(rasterClassR(polys, worldSize, R, opts), R, G);
 }
 
-// Where the map's FRESH water is, on the designer's paint grid, AND how high it sits. Two sources, and
+// Where the map's FRESH water is, on the designer's paint grid. Two sources, and
 // neither survives the class grid: a lake is flattened into the Ocean class there, and a river is one cell
 // wide, which majority downsampling erases outright. Lakes take ANY covered pixel rather than a majority
 // for the same reason - a lake narrower than a paint cell still has to leave water behind.
 //
-// The elevations matter as much as the mask. A water cell whose height is left to the surrounding terrain
-// takes the LOCAL land height, so a lake ends up at as many levels as the ground under it has, and a river
-// climbs whatever it crosses. The map already solved that - its lakes are flat and its rivers run downhill
-// to the sea - so its own elevations come across too, converted from the generator's [-1,1] (0 = sea) into
-// the designer's [0,1] (0.5 = sea).
+// Only the mask. How high the water stands is settled at export time against the DESIGN'S terrain, which is
+// not the map's: the design's land comes from the biome bands and the paint grid, so a level carried over
+// from the map describes ground that was never put there.
 function waterGridAt(polys, rivers, worldSize, G) {
   const mask = new Uint8Array(G * G);      // 1 = lake, 2 = river; the two are levelled differently
   const elev = new Float32Array(G * G);
@@ -9431,6 +9427,586 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
   }
   function hideLegend() { legend = []; imgLegendIdx = null; lastImgData = null; importedImg = null; paintedSinceImport = false; importPreview = null; importLegendIdxHi = null; const w = $('dsnLegendWrap'); if (w) { w.style.display = 'none'; w.innerHTML = ''; } }
   // toroidal separable box blur (in place); spreads biome-edge height steps into gentle slopes
+  // ---- water surface solver -------------------------------------------------------------------
+  //
+  // Turns a per-cell first guess at the water surface into one a world can be built from. Every cell
+  // starts with a level taken from its own bank, and three things are wrong with that: a bad bank
+  // estimate leaves one cell standing metres above the water around it, a course drawn across a slope
+  // gets a high level on its uphill side and a low one on its downhill side, and a lake keeps a
+  // different level on every shore it touches. The passes below fix them in that order.
+  //
+  // `land[j] === 2` marks fresh water; `fromShore` is how many cells that water is from its own edge.
+  // Written for the image import first and shared with a design seeded from the map, which arrives at
+  // the same first guess by a different route and needs the same three things done to it.
+  const BLK = 1 / 120;      // one world block, in designer frac (Y = 60 + (2h-1)*60)
+  const OPEN_WATER = 4;     // cells from the edge before water counts as open rather than shallow
+  // ---- water levels ---------------------------------------------------------------------------
+  //
+  // Decide how high the water in each body stands, BEFORE anything tries to level or contain it. This
+  // is the part that makes water sit down in the landscape rather than on top of it: each cell is
+  // bounded by its own ring of bank, by the average ground around it, and by how far it is from the sea
+  // (a mouth is pinned to sea level the way vanilla pins one by construction), and then a priority flood
+  // from every mouth gives each cell the lowest level any outlet can justify. A basin fills to its rim
+  // and comes out dead flat; a channel keeps its own descending profile.
+  //
+  // Written for the image import and shared with a design seeded from the map, whose water arrives on
+  // terrain that has no basin under it at all - without this the seeded lakes stand ON the ground and
+  // the shore ring has to be raised to hold them, which is a kerb around every body.
+  function settleWaterLevels(res, n, land, hf, distO, BPC, groups, boxBlurTor) {
+    const nbr4 = j => { const x = j % res, y = (j / res) | 0; return [((x + 1) % res) + y * res, ((x + res - 1) % res) + y * res, x + ((y + 1) % res) * res, x + ((y + res - 1) % res) * res]; };
+    const SEA = SEA_LEVEL;
+    const surf = new Float32Array(n).fill(Infinity); const lakeSet = new Set();
+    for (const cells of groups) for (const j of cells) lakeSet.add(j);
+    // Fresh water near the sea has to arrive AT it. Vanilla routes every river downhill until it hits an
+    // ocean cell and then walks the segment back from that mouth with `endElevation = Math.Max(0f, ...)`
+    // (VoronoiWorldGenerator, "ensure the elevation changes are valid"), so a mouth is pinned to sea level
+    // by construction. A painted channel has no router: it takes its level from whatever banks it happens
+    // to have, so a course drawn along a coast carries its inland level right past the sea and ends up
+    // perched, with its own bank walling the sea out. Measured on a real authored world, one stretch sat
+    // 6 blocks over a sea 20 m away — and 230 m away from its own outlet, so nothing that follows the
+    // CHANNEL can see the problem. The bound therefore reads distance to the SEA, which distO already has.
+    //
+    // Its shape is vanilla's own envelope, measured over four seeds as the highest fresh water at a given
+    // distance from the sea: at most +1 to +3 out to 30 m, +5 to +7 by 40, +7 to +11 by 50 and flat after.
+    const COAST_FLAT = 22, COAST_GRADE = 0.4;          // blocks of sea-level shelf, then blocks gained per block inland
+    const LEVEL_DROP = 0.012;                          // the step taken off `level` when it becomes a surface, below
+    const seaCap = j => 0.5 + LEVEL_DROP + (1 + Math.max(0, distO[j] * BPC - COAST_FLAT) * COAST_GRADE) * (1 / 120);
+    const mouth = new Uint8Array(n);                   // cells the bound actually bit on — the body's outlets
+    // The average is bounded by how much containment it may build. Vanilla can use the average outright
+    // because its rims are near flat — cell noise with no local gradient — so `lakeElevation + 0.01` raises
+    // a cell or two. On a sloped authored rim the average can sit many blocks over the low side, and holding
+    // it there means walling the whole downhill arc. 4 blocks is the knee measured on a real 120-wide map:
+    // it roughly doubles how much ground beyond the rim may sit below the water (11.6% -> 21.2% at 20 m,
+    // against vanilla's 30-45%) and drops the banks ~0.9 blocks at every distance, while leaving water
+    // spilling over its bank where it already was. Past ~6 it starts spilling; past ~8 the lake drowns its
+    // own outlet and the banks become a trench.
+    const BERM = 4 * (1 / 120);
+    // The ring is the immediate bank and nothing else, so a course running along a slope takes a level its
+    // uphill side justifies, the restore raises the downhill bank to hold it, and the ground beyond falls
+    // away — water standing on an embankment, which reads in game as an aqueduct. Bound the level by the
+    // AVERAGE HEIGHT OF THE SURROUNDING GROUND as well, so the water sits down in the landscape it crosses
+    // rather than on top of it. The radius is ~19 m, the distance at which the perch is visible.
+    const around = Float32Array.from(hf);
+    boxBlurTor(around, res, Math.max(1, Math.round(res / 23)), 2);
+    // The same average over LAND ONLY. `around` blurs the height field whole, and a water column's height
+    // is its bed, so within a radius of any river the average reads several blocks below the ground
+    // actually there. Anything that bounds a BANK has to compare it against land, not against the channel.
+    const aroundLand = Float32Array.from(hf, (v, j) => land[j] === 1 ? v : 0);
+    const landWeight = Float32Array.from(hf, (_, j) => land[j] === 1 ? 1 : 0);
+    boxBlurTor(aroundLand, res, Math.max(1, Math.round(res / 23)), 2);
+    boxBlurTor(landWeight, res, Math.max(1, Math.round(res / 23)), 2);
+    for (let j = 0; j < n; j++) aroundLand[j] = landWeight[j] > 0.05 ? aroundLand[j] / landWeight[j] : around[j];
+    const SETTLE_MARGIN = 4 * (1 / 120);
+    const settle = (lvl, j) => { const v = Math.min(lvl, around[j] + SETTLE_MARGIN), c = seaCap(j); if (c >= v) return v; mouth[j] = 1; return c; };
+    for (const j of lakeSet) {
+      let sum = 0, cnt = 0, mn = Infinity;
+      for (const nb of nbr4(j)) if (land[nb] === 1) { sum += hf[nb]; cnt++; if (hf[nb] < mn) mn = hf[nb]; }
+      surf[j] = cnt ? settle(Math.min(sum / cnt, mn + BERM), j) : Infinity;
+    }
+    // A cell with no shore of its own (mid-lake) has no constraint; give it the body's ring average, bounded
+    // the same way. This is what keeps a lake uniform now that nothing is min-propagated — and dropping that
+    // propagation is the actual point: the level is now the local ring, not the lowest thing within ~54 m,
+    // so ground beyond the rim is free to sit below the water the way vanilla's does.
+    for (const cells of groups) {
+      let sum = 0, cnt = 0, mn = Infinity;
+      for (const j of cells) for (const nb of nbr4(j)) if (land[nb] === 1) { sum += hf[nb]; cnt++; if (hf[nb] < mn) mn = hf[nb]; }
+      if (!cnt) continue;
+      const ring = Math.min(sum / cnt, mn + BERM);
+      for (const j of cells) if (!isFinite(surf[j])) surf[j] = settle(ring, j);
+    }
+    // Open water gets ONE surface per patch, however wide the lake, so the flood cannot ramp across a middle
+    // it never reaches — in game that reads as a corrugated bed under otherwise flat water. This is what
+    // keeps a lake level now that nothing is min-propagated. A drawn river is only a few cells across, so it
+    // has no open water at all and is left alone, which is what keeps it descending rather than turning
+    // into a level canal.
+    const fromShore = new Int16Array(n).fill(-1);
+    { const q = [];
+      for (let j = 0; j < n; j++) if (!lakeSet.has(j)) { fromShore[j] = 0; q.push(j); }
+      for (let h = 0; h < q.length; h++) { const c = q[h]; for (const nb of nbr4(c)) if (fromShore[nb] < 0) { fromShore[nb] = fromShore[c] + 1; q.push(nb); } } }
+    {
+      const open = []; for (const j of lakeSet) if (fromShore[j] >= OPEN_WATER) open.push(j);
+      const seen = new Set();
+      for (const s0 of open) {
+        if (seen.has(s0)) continue;
+        const stack = [s0], patch = []; seen.add(s0); let sum = 0;
+        while (stack.length) {
+          const c = stack.pop(); patch.push(c); sum += surf[c];
+          for (const nb of nbr4(c)) if (fromShore[nb] >= OPEN_WATER && lakeSet.has(nb) && !seen.has(nb)) { seen.add(nb); stack.push(nb); }
+        }
+        let pmn = Infinity, pcap = Infinity;
+        for (const j of patch) { if (surf[j] < pmn) pmn = surf[j]; const c = seaCap(j); if (c < pcap) pcap = c; }
+        // Bounded by the coast the same way a shore cell is, but by the TIGHTEST bound over the patch, so
+        // open water keeps the single flat level the rest of the pass exists to give it.
+        const lv = Math.min(sum / patch.length, pmn + BERM, pcap);             // the patch's average, bounded like the rest
+        if (pcap <= lv) for (const j of patch) mouth[j] = 1;
+        for (const j of patch) surf[j] = lv;
+        // pull the surrounding shallows to it too, so the rim does not stand above the middle
+        for (const j of patch) for (const nb of nbr4(j)) if (lakeSet.has(nb) && fromShore[nb] < OPEN_WATER && surf[nb] > lv) surf[nb] = lv;
+      }
+    }
+    // Water sits in FLAT pools, in a valley it CARVES for itself.
+    //
+    // Pinning each cell's surface to its nearest bank (surf[] above) makes water follow the mountains it
+    // was drawn across: one body then spans tens of blocks and Eco, which fills every column separately,
+    // renders it as a jagged cascade. Pooling alone cannot fix that — the range is in the terrain, not in
+    // the choice of levels. So relax the surface first, then carve the land to match.
+    const MAX_WATER_STEP = 0.5 * BLK;     // biggest rise allowed between neighbouring water cells
+    const surfOf = j => (isFinite(surf[j]) ? surf[j] : 0.55);
+    // Priority flood, spreading out from each body's LOWEST cell and always expanding the lowest water
+    // next. Each cell takes
+    //     level = surf <= parent ? parent : min(surf, parent + MAX_WATER_STEP)
+    // which does both jobs at once and needs no lake-vs-river test. A dip surrounded by higher ground can
+    // never sit below the water that reached it, so a basin fills to its rim and comes out DEAD FLAT; a
+    // channel running downhill keeps its own profile, capped so it descends in small steps rather than
+    // dropping the height of the ridge it was drawn across.
+    const level = new Float32Array(n);
+    for (const cells of groups) {
+      let start = cells[0]; for (const j of cells) if (surfOf(j) < surfOf(start)) start = j;
+      const inGroup = new Set(cells), done = new Set();
+      const heap = [];                                                        // binary min-heap on assigned level
+      const push = (k, v) => { heap.push([k, v]); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
+      const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
+      // A body has as many mouths as it has places where the coast bound bites, not one. Flooding from the
+      // single lowest cell makes the level non-decreasing along the CHANNEL from that one point, which is
+      // why a course that runs back out to the coast 230 m downstream carries its inland level with it —
+      // the bound on `surf` there is simply overwritten by the parent's. Seeding every such cell and always
+      // expanding the lowest gives each cell the lowest level any mouth can justify, so the stretch beside
+      // the sea descends into it and only the water between two mouths keeps the higher of them.
+      const seed = j => { if (done.has(j)) return; done.add(j); level[j] = surfOf(j); push(level[j], j); };
+      seed(start);
+      for (const j of cells) if (mouth[j]) seed(j);
+      while (heap.length) {
+        const [, c] = pop();
+        for (const nb of nbr4(c)) {
+          if (!inGroup.has(nb) || done.has(nb)) continue;
+          done.add(nb);
+          const s = surfOf(nb), lv = level[c];
+          // Open water takes its level outright. Ramping into it at MAX_WATER_STEP a cell — correct for a
+          // channel climbing away from its outlet — would tilt the whole surface of a lake entered from
+          // below, and that tilt is exactly the ridged bed seen through flat water. A lake meeting a lower
+          // river simply falls at the outlet, which is what a real one does.
+          level[nb] = s <= lv ? lv : (fromShore[nb] >= OPEN_WATER ? s : Math.min(s, lv + MAX_WATER_STEP));
+          push(level[nb], nb);
+        }
+      }
+    }
+    // No pass is needed here to stop a pool topping its banks. The shoreline restore after the blur puts
+    // any land touching water a block above it, which contains the water by construction. An earlier
+    // clamp-each-flat-region-to-its-lowest-bank step did the same job twice and made things worse: it cut a
+    // lake into pieces and dropped each one to whatever bank was nearest, turning a level surface into a
+    // staircase — measured, it took one lake from 6 levels to 13, and removing it took corrugation in open
+    // water from 7.2% of neighbouring pairs to 0 with overflow still at 0. What remains are real waterfalls
+    // where a lake meets a lower channel, all of them at outlets and none mid-lake.
+    // `aroundLand` is the blurred height of the LAND only; the bank shaping downstream wants it too,
+    // and it is built here because this is where the radius is decided.
+    // `aroundLand` (blurred height of the LAND only) and SETTLE_MARGIN belong to the bounds decided
+    // here; the bank shaping downstream reuses both, so they come back rather than being recomputed.
+    // The distance-to-sea envelope, kept so a caller can re-apply it. Levelling a lake afterwards takes the
+    // body's DOMINANT level, which knows nothing about how near the sea it is, and that can lift a coastal
+    // body back over the bound this pass put on it.
+    const seaCapAt = new Float32Array(n);
+    for (let j = 0; j < n; j++) seaCapAt[j] = seaCap(j);
+    return { level: level, fromShore: fromShore, aroundLand: aroundLand, SETTLE_MARGIN: SETTLE_MARGIN, seaCapAt: seaCapAt };
+  }
+
+  // ---- water bed ------------------------------------------------------------------------------
+      // Shelve the fresh water at its edges, the way the sea already is. A flat bed a fixed depth below the
+      // surface puts a STEP at the shoreline: the bed is ~3.8 blocks down and the bank ~1.4 up, and Eco's
+      // CliffExtruder builds a rock face wherever two columns differ by 5 or more. Measured on a generated
+      // world, 52.9% of shoreline column pairs cleared that — a stone retaining wall around every lake and
+      // river. Ramping the bed up to one block under the surface at the shore takes the step under the
+      // threshold, and reads as a shallows rather than a tank.
+      //
+      // Away from the edges it DEEPENS, the way vanilla's does. One fixed depth makes every body the same 3.6
+      // blocks however wide it is, so a lake reads as a puddle: measured on a real map, water 20 blocks from
+      // the nearest shore was 3.6 blocks deep where vanilla's rule gives 18.4.
+      //
+      // Vanilla floods inward from the bank, adding `depthChange = 2` to the depth each ring
+      // (VoronoiWorldGenerator, "floodfill to determine depth of water features"), starting at 1 and never
+      // capping. Depth is in heightmap grays and Y = waterLevel + (gray/255*2-1)*(maxGen-waterLevel), so one
+      // gray is 2*(maxGen-waterLevel)/255 — 0.47 blocks on a 60/120 world, which is what BLK already assumes.
+      // Its rings are one block wide and ours are BPC, and its enclosure test is 8-neighbour, so the distance
+      // it deepens by is CHEBYSHEV. Walking 4-neighbour here would run deeper than vanilla, not equal to it.
+  function shelveWaterBed(res, n, land, wsurf, bed, BPC) {
+    const nbr4 = j => { const x = j % res, y = (j / res) | 0; return [((x + 1) % res) + y * res, ((x + res - 1) % res) + y * res, x + ((y + 1) % res) * res, x + ((y + res - 1) % res) * res]; };
+      const SHELF_CELLS = 3;                    // how far in the shallows reach
+      const SHORE_DEPTH = 1.2 * BLK;            // depth right at the bank; below ~1.8 a shore cell can round to no water at all
+      const GRAY = 0.4706 * BLK;                // one unit of vanilla's depth
+      // Vanilla's rule deepens without limit, which is right for vanilla's channels — 6-12 m wide, so it
+      // yields 3-6 blocks. Ours are 16-32 m wide by design, and the same rule yields 8-15: measured
+      // against a real vanilla world, depth p50 3 / p90 9 / max 15 against its 2 / 4 / 11. Cap it, so a
+      // wide river is a wide river rather than a canyon. The cap only ever binds in the middle; the shelf
+      // still owns the shore, which is what the bank is measured against.
+      //
+      // But one cap for everything makes every LAKE 8 blocks too, and a stock world's are not: over seven
+      // of them fresh water reaches 10-12 at p99 and 13-17 at worst, and their ~2,500-cell lakes run 11-14
+      // deep where ours arrived at 8. A lake is wide in every direction, so vanilla's depth reads as a bed
+      // there rather than as the gorge it would cut along a channel. Tell the two apart by SHAPE, the same
+      // way Eco/Tools/WorldGenAnalysis/metrics/lakes.js does when it measures a generated world: a body
+      // that fills a good part of its own bounding box is a lake, and a winding course never does however
+      // long or wide it is drawn. A lake DRAINING into a river shares its body with the whole system and
+      // so keeps the channel bed — the safe way to be wrong, and the same way lakes.js reads that case.
+      const MAX_DEPTH = 8 * BLK;                // a channel's bed stops here, whatever vanilla's ramp says
+      const LAKE_DEEPEN = 0.6;                  // of vanilla's remaining ramp, once a lake is past that
+      const LAKE_MAX_DEPTH = 16 * BLK;          // and never past the deepest fresh water a stock world holds
+      const LAKE_FILL = 0.35;                   // of the body's bounding box
+      const LAKE_MIN_BLOCKS = 60;               // smallest body worth calling a lake, in world blocks of area
+      const deepBed = new Uint8Array(n);
+      {
+        const seenB = new Uint8Array(n);
+        // The map wraps, so a body's box is the shortest interval that still holds every cell — what is
+        // left once the widest EMPTY run is taken out. Reading x0..x1 straight would hand a body lying
+        // over the seam the whole world as its box, and demote it to a channel.
+        const span = (cells, key) => {
+          const used = new Uint8Array(res);
+          for (const c of cells) used[key(c)] = 1;
+          let gap = 0, run = 0;
+          for (let k = 0; k < 2 * res; k++) { if (used[k % res]) run = 0; else if (++run > gap) gap = run; }
+          return res - gap;
+        };
+        for (let j = 0; j < n; j++) {
+          if (land[j] !== 2 || seenB[j]) continue;
+          const st = [j], cells = []; seenB[j] = 1;
+          while (st.length) { const c = st.pop(); cells.push(c); for (const nb of nbr4(c)) if (land[nb] === 2 && !seenB[nb]) { seenB[nb] = 1; st.push(nb); } }
+          if (cells.length * BPC * BPC < LAKE_MIN_BLOCKS) continue;
+          const box = span(cells, c => c % res) * span(cells, c => (c / res) | 0);
+          if (cells.length / box < LAKE_FILL) continue;
+          for (const c of cells) deepBed[c] = 1;
+        }
+      }
+      const dIn = new Int32Array(n).fill(-1), qs = [];
+      for (let j = 0; j < n; j++) if (land[j] !== 2) { dIn[j] = 0; qs.push(j); }
+      for (let k = 0; k < qs.length; k++) {
+        const c = qs[k], cx = c % res, cy = (c / res) | 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          if (!dx && !dy) continue;
+          const nb = ((cx + dx + res) % res) + ((cy + dy + res) % res) * res;
+          if (dIn[nb] < 0 && land[nb] === 2) { dIn[nb] = dIn[c] + 1; qs.push(nb); }
+        }
+      }
+      for (let j = 0; j < n; j++) {
+        if (land[j] !== 2) continue;
+        // The shelf still owns the first few cells — it is what holds the bed-to-bank step under
+        // CliffExtruder's threshold, and vanilla is SHALLOWER than it at the bank (0.5 blocks against 1.8).
+        // Past the point where vanilla's ramp overtakes the shelf, it takes over.
+        const t = Math.min(1, Math.max(0, (dIn[j] - 1) / SHELF_CELLS));
+        const s = t * t * (3 - 2 * t);
+        const shelf = SHORE_DEPTH + (3.6 * BLK - SHORE_DEPTH) * s;
+        const vanilla = Math.max(1, 2 * (dIn[j] - 0.5) * BPC - 1) * GRAY;
+        // A lake carries on deepening past the cap rather than stopping dead at it. Stopping gives it a
+        // flat plateau for a bed — on the real map p90 and p99 both landed exactly on the cap — where a
+        // stock lake's bed peaks: p90 8-9 blocks under a max of 13-15.
+        const want = Math.max(shelf, vanilla);
+        const depth = deepBed[j] && want > MAX_DEPTH
+          ? Math.min(LAKE_MAX_DEPTH, MAX_DEPTH + (want - MAX_DEPTH) * LAKE_DEEPEN)
+          : Math.min(MAX_DEPTH, want);
+        bed[j] = Math.max(0.03, wsurf[j] - depth);
+      }
+  }
+
+  // ---- export columns -------------------------------------------------------------------------
+  // Turn the land field, the bed and the water surface into the height byte the mod reads, with the two
+  // rules a water column has to obey: never dug deeper than the shelf intended (quantisation is what
+  // takes that depth away, not the shelf), and never left so far under its own bank that Eco's
+  // CliffExtruder builds a rock face around the body. Shared by the import and the seeded path.
+  function writeExportColumns(res, n, land, hf, bed, wsurf, water, height) {
+    const nbr4 = j => { const x = j % res, y = (j / res) | 0; return [((x + 1) % res) + y * res, ((x + res - 1) % res) + y * res, x + ((y + 1) % res) * res, x + ((y + res - 1) % res) * res]; };
+    const MIN_DEPTH = 2.1;                                     // blocks left in the shallowest column
+    const WL = 60, RELIEF = 60, MAXGEN = 120;                  // the 60/120 world BLK already assumes
+    // The shelf keeps the bed-to-bank step under CliffExtruder's 5 blocks by holding the shore shallow,
+    // but it only ever compares the bed against its own surface. Where a bank is pinned high by a SECOND
+    // body beside it — two arms of one course passing within a cell, the higher one holding the divider up
+    // — the lower arm's own shelf knows nothing about it and the step clears the threshold anyway. Bound
+    // the bed by the bank as well, keeping a block of water whatever happens.
+    const BANK_STEP = 4;                                       // blocks of bed-to-bank the shelf may leave
+    const bankAbove = new Float32Array(n).fill(-Infinity);
+    for (let j = 0; j < n; j++) if (land[j] === 2) for (const nb of nbr4(j)) if (land[nb] !== 2 && hf[nb] > bankAbove[j]) bankAbove[j] = hf[nb];
+    for (let j = 0; j < n; j++) {
+      let h = land[j] === 2 ? bed[j] : (land[j] ? Math.max(0.505, hf[j]) : Math.min(hf[j], 0.495));
+      height[j] = Math.max(0, Math.min(255, Math.round(h * 255)));
+      if (land[j] === 2) {
+        const wy = WL + Math.trunc(RELIEF * (water[j] / 255));                // what Eco will fill this column to
+        // Never deeper than the shelf meant this column to be. The shelf holds the first cells at ~1.8
+        // blocks on purpose — that is what keeps the bed-to-bank step under CliffExtruder's threshold —
+        // so a flat floor applied everywhere digs exactly the columns that must not be dug. Restoring the
+        // intended depth is enough: quantisation is what took it away, not the shelf.
+        const want = Math.min(MIN_DEPTH, (wsurf[j] - bed[j]) * MAXGEN);
+        height[j] = Math.max(0, Math.min(height[j], Math.floor(255 * (wy - want) / MAXGEN)));
+        if (bankAbove[j] > -Infinity) {
+          const floorY = Math.min(wy - 1, (2 * bankAbove[j] - 1) * 60 + 60 - BANK_STEP);
+          height[j] = Math.max(height[j], Math.min(255, Math.ceil(255 * floorY / MAXGEN)));
+        }
+      }
+    }
+  }
+
+  // ---- bank containment -----------------------------------------------------------------------
+  // Two passes that keep the ground and the water it holds in a sane relationship, shared by the import and
+  // the seeded path. Both take the land height field `hf` and the solved surface `wsurf`.
+
+  // Cap the ring that touches water. Left free it binds into a flat-topped ledge of constant height
+  // following the channel, which reads as masonry rather than ground; vanilla's first ring sits 0.3-0.45
+  // blocks over its water.
+  const BANK_CAP = 0.5 * BLK;
+  function capBankLip(res, land, wsurf, hf) {
+    const n = res * res;
+    const nbr4 = j => { const x = j % res, y = (j / res) | 0; return [((x + 1) % res) + y * res, ((x + res - 1) % res) + y * res, x + ((y + 1) % res) * res, x + ((y + res - 1) % res) * res]; };
+    for (let j = 0; j < n; j++) {
+      if (land[j] !== 1) continue;
+      let s = -Infinity;
+      for (const nb of nbr4(j)) if (land[nb] === 2 && wsurf[nb] > s) s = wsurf[nb];
+      if (s > -Infinity && hf[j] > s + BANK_CAP) hf[j] = s + BANK_CAP;
+    }
+  }
+
+  // And the lower bound: any land touching water sits above it. Averaging across a shoreline drags the bank
+  // down with the water, far enough in places to leave the bank UNDER what it is holding back, which reads
+  // in game as a lake spilling over the terrain.
+  const SHORE_LIP = 0.35 * BLK;
+  function restoreShoreLip(res, land, wsurf, hf) {
+    const n = res * res;
+    const nbr4 = j => { const x = j % res, y = (j / res) | 0; return [((x + 1) % res) + y * res, ((x + res - 1) % res) + y * res, x + ((y + 1) % res) * res, x + ((y + res - 1) % res) * res]; };
+    for (let j = 0; j < n; j++) {
+      if (land[j] !== 1) continue;
+      let need = -Infinity;
+      for (const nb of nbr4(j)) if (land[nb] === 2 && wsurf[nb] > need) need = wsurf[nb];
+      if (need > -Infinity && hf[j] < need + SHORE_LIP) hf[j] = need + SHORE_LIP;
+    }
+  }
+
+  function solveWaterSurface(res, land, wsurf, fromShore) {
+    const n = res * res;
+    const nbr4 = j => { const x = j % res, y = (j / res) | 0; return [((x + 1) % res) + y * res, ((x + res - 1) % res) + y * res, x + ((y + 1) % res) * res, x + ((y + res - 1) % res) * res]; };
+    // Knock isolated spikes out of the water surface. The priority flood lets a cell in open water take its
+    // own level outright — which is what stops a lake tilting — but where the bank estimate under one cell
+    // spikes, that cell alone ends up metres above the water on every side. In game that is a lump of bed
+    // with a puddle on top of it, standing mid-channel, and it is what "blocks poking out with more water
+    // above them" turns out to be. A cell higher than ALL of its water neighbours is never a waterfall —
+    // those are higher than some and lower than others — so it can be dropped to its highest neighbour
+    // without flattening a real descent. Measured on a generated world this cleared all 5 such cells (worst
+    // 7.1 blocks proud) while water pairs stepping a block or more only went 0.73% -> 0.59%.
+    {
+      const SPIKE = 2 * BLK;
+      for (let pass = 0; pass < 4; pass++) {
+        const next = Float32Array.from(wsurf);
+        for (let j = 0; j < n; j++) {
+          if (land[j] !== 2) continue;
+          let mx = -Infinity;
+          for (const nb of nbr4(j)) if (land[nb] === 2 && wsurf[nb] > mx) mx = wsurf[nb];
+          if (mx > -Infinity && wsurf[j] - mx >= SPIKE) next[j] = mx;
+        }
+        wsurf.set(next);
+      }
+      // Level the surface ACROSS the channel.
+      //
+      // Every cell takes its level from its own bank, so a course drawn across a hillside gets one from the
+      // uphill side and a lower one from the downhill side, and the difference survives everything above:
+      // the flood only stops a cell sitting BELOW the water that reached it, and a 4-neighbour average
+      // shrinks a cross-channel slope and a descent alike. Measured on a real world, the surface still
+      // carried ~0.6 blocks of slope across a 6-cell channel, which rounds to one bank of the river sitting
+      // a block over the other for 30 m at a time — 7.6% of all fresh water touched such a split, against
+      // vanilla's 0.7-3.0, while steps down the flow were already in band at 0.4% (vanilla 0.2-0.6).
+      //
+      // Water has no cross-stream slope, so take it out directionally: weight each neighbour by how far it
+      // lies ACROSS the flow and average. The axis is the structure tensor of the water mask — its major
+      // eigenvector is the across-channel normal — and the weight is (direction . normal)^2, which is 1 for
+      // a neighbour straight across and 0 for one straight along. Repeated, that levels every cross-section
+      // and leaves the profile down the channel alone. Eight neighbours, not four: a channel drawn at 45
+      // degrees has its across direction on a diagonal, and a 4-neighbour stencil can only offer it two
+      // axes that are equally across and equally along, so it would smooth the descent as hard as the slope.
+      {
+        const mask = new Float32Array(n);
+        for (let j = 0; j < n; j++) mask[j] = land[j] === 2 ? 1 : 0;
+        boxBlurTor(mask, res, 2, 1);
+        const gx = new Float32Array(n), gy = new Float32Array(n);
+        for (let y = 0; y < res; y++) for (let x = 0; x < res; x++) {
+          const j = y * res + x;
+          gx[j] = (mask[((x + 1) % res) + y * res] - mask[((x + res - 1) % res) + y * res]) / 2;
+          gy[j] = (mask[x + ((y + 1) % res) * res] - mask[x + ((y + res - 1) % res) * res]) / 2;
+        }
+        const Jxx = Float32Array.from(gx, v => v * v), Jyy = Float32Array.from(gy, v => v * v);
+        const Jxy = Float32Array.from(gx, (v, j) => v * gy[j]);
+        boxBlurTor(Jxx, res, 4, 1); boxBlurTor(Jyy, res, 4, 1); boxBlurTor(Jxy, res, 4, 1);
+        const DIR = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]];
+        const idx = new Int32Array(n * 8), wt = new Float32Array(n * 8);
+        const ACROSS_POW = 6;         // exponent on (direction . normal)^2 — 6 gives a twelfth power of the cosine
+        const CLEAN_AXIS = 0.4;       // coherence below this is a junction or open water, and has no axis to use
+        for (let y = 0; y < res; y++) for (let x = 0; x < res; x++) {
+          const j = y * res + x;
+          for (let k = 0; k < 8; k++) idx[j * 8 + k] = ((x + DIR[k][0] + res) % res) + ((y + DIR[k][1] + res) % res) * res;
+          if (land[j] !== 2) continue;
+          const a = Jxx[j], b = Jxy[j], c = Jyy[j], tr = a + c;
+          const l1 = tr / 2 + Math.sqrt(Math.max(0, tr * tr / 4 - (a * c - b * b)));
+          let nx = b, ny = l1 - a; const nn = Math.hypot(nx, ny);
+          const coh = tr > 1e-12 ? (2 * l1 - tr) / tr : 0;      // 1 = a clean channel, 0 = open water or a junction
+          // No axis — a junction, or water wide enough to have no channel direction at all. There is no
+          // cross-section to level here, and the isotropic average this used to fall back on is exactly the
+          // thing that flattens a descent, so leave the cell alone and let its neighbours pull it.
+          if (nn < 1e-12 || coh < CLEAN_AXIS) continue;
+          nx /= nn; ny /= nn;
+          // The weight has to fall away FAST. A squared cosine still passes half of a neighbour lying at 45
+          // degrees to the flow, and half the displacement of that neighbour is along the channel, so over
+          // enough passes the profile down the river is smoothed as well as the slope across it. Measured on
+          // a real world, the squared form took the descent from 52 blocks of fall over all bodies to 19 and
+          // the share of water on a step down the flow from 0.52% to 0.07% — the waterfalls went with the
+          // defect. A twelfth power leaves 0.02% of a 45-degree neighbour's weight, and at the SAME
+          // cross-channel result it keeps 43 blocks of fall and 0.39%, which is where vanilla sits.
+          let s = 0;
+          for (let k = 0; k < 8; k++) {
+            const L = Math.hypot(DIR[k][0], DIR[k][1]), d = (DIR[k][0] * nx + DIR[k][1] * ny) / L;
+            wt[j * 8 + k] = Math.pow(d * d, ACROSS_POW) / L; s += wt[j * 8 + k];
+          }
+          for (let k = 0; k < 8; k++) wt[j * 8 + k] /= s;       // one block of transport per pass, whatever the axis
+        }
+        // Diffusion proper, u += TAU * sum_k w_k (u_nb - u), with each pair weighted by the MEAN of the two
+        // cells' weights. That makes the operator symmetric, so a cross-section keeps its own mean level
+        // instead of drifting toward whichever of its cells has the most water neighbours; TAU 0.5 damps the
+        // checkerboard mode the plain replace-by-weighted-mean form leaves untouched.
+        //
+        // 60 passes takes the cross-channel slope out of a channel up to ~8 cells wide. Measured on a real
+        // world, water sitting on a lengthwise split went 7.5% -> 2.1% (vanilla 0.70-3.03 over seven seeds).
+        //
+        // Levelling lifts the low side of a section as much as it drops the high side, and on ground steep
+        // enough for the two banks to differ by several blocks that means walking the water up the hill.
+        // Cap the lift: past ~2.5 blocks the section is not a channel across a slope any more, and the
+        // levelling has nothing useful to say about it.
+        const CROSS_PASSES = 60, TAU = 0.5, RAISE_CAP = 2.5 * BLK;
+        const was = Float32Array.from(wsurf);
+        for (let pass = 0; pass < CROSS_PASSES; pass++) {
+          const next = Float32Array.from(wsurf);
+          for (let j = 0; j < n; j++) {
+            // Open water is one level per patch already; averaging across its edge would tilt it.
+            if (land[j] !== 2 || fromShore[j] >= OPEN_WATER) continue;
+            let acc = 0;
+            for (let k = 0; k < 8; k++) {
+              const nb = idx[j * 8 + k]; if (land[nb] !== 2) continue;
+              acc += (wt[j * 8 + k] + wt[nb * 8 + k]) / 2 * (wsurf[nb] - wsurf[j]);
+            }
+            next[j] = wsurf[j] + TAU * acc;
+          }
+          wsurf.set(next);
+        }
+        for (let j = 0; j < n; j++) if (land[j] === 2 && wsurf[j] > was[j] + RAISE_CAP) wsurf[j] = was[j] + RAISE_CAP;
+      }
+      // Neighbouring water columns that disagree by a FRACTION of a block still render as a step, because
+      // Eco fills each column separately and rounds. Taking each cell's level from its own four neighbours
+      // leaves exactly that disagreement across a channel, and a channel is only a few cells wide, so the
+      // step runs ALONG the bank instead of down the river — a waterfall the length of the shoreline, which
+      // is what the level-from-the-ring change introduced. Average the surface along the water to take it
+      // out. Measured on a real map, the bank ring went from 6.4% of its pairs stepping a block, to 41.5%
+      // with the ring average, to 6.1% here; over the whole surface it is 11.9%, against vanilla's 11-13.5%.
+      {
+        for (let pass = 0; pass < 3; pass++) {
+          const next = Float32Array.from(wsurf);
+          for (let j = 0; j < n; j++) {
+            // Open water is already one level per patch and must stay exactly that — averaging across its
+            // edge tilts the whole surface, which is the ridged bed under flat water all over again. It
+            // still feeds the average of the shore cells beside it, as a fixed value.
+            if (land[j] !== 2 || fromShore[j] >= OPEN_WATER) continue;
+            let sum = wsurf[j], cnt = 1;
+            for (const nb of nbr4(j)) if (land[nb] === 2) { sum += wsurf[nb]; cnt++; }
+            next[j] = sum / cnt;
+          }
+          wsurf.set(next);
+        }
+      }
+      // One level per LAKE.
+      //
+      // A lake has no flow direction, so it has no reason to hold more than one surface level, and
+      // vanilla's never does: VoronoiWorldGenerator gives every cell of a lake polygon a single elevation.
+      // Everything above works cell by cell instead, so a lake drawn across a slope keeps a low shore on
+      // its downhill side — measured on a generated world one 894-column lake arrived over four levels,
+      // with the water running over the step between them. The cross-channel levelling cannot reach it:
+      // the middle of a lake has no edge in the water mask, so its structure tensor has no coherence and
+      // every cell of it is skipped, which leaves the shallow ring taking its level from its own bank.
+      //
+      // A lake is a piece of water no LONGER than it is wide: the longest way across it, in cells, against
+      // its own width. That is a ratio, so it does not care how big the body is or which way it lies, and
+      // it is what keeps a wide slow river out — widening a channel raises both terms, lengthening it only
+      // the first. The area of a bounding box, the obvious alternative, cannot tell a lake from a straight
+      // reach of a wide river at all. Measured on the shipping map its lakes read 1.2-2.8, a drawn stream
+      // 5-6 and its two river systems 36.
+      {
+        const LAKE_SLIM = 4;
+        const lake = new Uint8Array(n);
+        const slimOf = inS => {                       // longest way across a set of cells / its width
+          let wide = 0, seed = -1;
+          for (const c of inS) { if (fromShore[c] > wide) wide = fromShore[c]; if (seed < 0) seed = c; }
+          const far = s => { const d = new Map([[s, 0]]); const q = [s]; let best = s;
+            for (let h = 0; h < q.length; h++) for (const nb of nbr4(q[h])) if (inS.has(nb) && !d.has(nb)) { d.set(nb, d.get(q[h]) + 1); q.push(nb); best = nb; }
+            return [best, d.get(best)]; };
+          const [a] = far(seed); const [, diam] = far(a);
+          return [diam, wide];
+        };
+        // A whole body first, which is what a lake usually is.
+        const seenB = new Uint8Array(n), bodies = [];
+        for (let j = 0; j < n; j++) {
+          if (land[j] !== 2 || seenB[j]) continue;
+          const st = [j]; seenB[j] = 1; const inB = new Set([j]);
+          while (st.length) { const c = st.pop(); for (const nb of nbr4(c)) if (land[nb] === 2 && !seenB[nb]) { seenB[nb] = 1; inB.add(nb); st.push(nb); } }
+          const [diam, wide] = slimOf(inB);
+          if (diam <= LAKE_SLIM * Math.max(1, 2 * wide - 1)) { for (const c of inB) lake[c] = 1; } else bodies.push(inB);
+        }
+        // A lake drawn ONTO a river system shares its body with the whole system, and both test designs do
+        // exactly that, so the body test alone would never see one. In a body that is not itself a lake,
+        // look for a compact patch of OPEN water instead and take the shallow ring around it with it — the
+        // ring is the part that carries the low shore.
+        const core = j => land[j] === 2 && fromShore[j] >= OPEN_WATER;
+        for (const inB of bodies) {
+          const seenC = new Set();
+          for (const j of inB) {
+            if (!core(j) || seenC.has(j)) continue;
+            const st = [j]; seenC.add(j); const inP = new Set([j]);
+            while (st.length) { const c = st.pop(); for (const nb of nbr4(c)) if (core(nb) && !seenC.has(nb)) { seenC.add(nb); inP.add(nb); st.push(nb); } }
+            const [diam, wide] = slimOf(inP);
+            if (wide <= OPEN_WATER) continue;                        // one cell thick: a pinch in a channel, not a lake
+            if (diam > LAKE_SLIM * (2 * (wide - OPEN_WATER) + 1)) continue;    // a reach, and it descends
+            for (const c of inP) lake[c] = 1;
+          }
+        }
+        // The ring goes with it. A ring cell is one that lies on the way from the open water out to the
+        // bank, so its steps from the core plus its own distance to the shore still come to OPEN_WATER; a
+        // channel leaving the lake fails that within a cell of the mouth however shallow it is, and so
+        // keeps its own descent. Without the test the ring simply grew four cells down the outflow and
+        // turned a five-block taper into a waterfall.
+        { const q = [], d = new Int32Array(n).fill(-1);
+          for (let j = 0; j < n; j++) if (lake[j]) { d[j] = 0; q.push(j); }
+          for (let h = 0; h < q.length; h++) { const c = q[h];
+            for (const nb of nbr4(c)) if (land[nb] === 2 && d[nb] < 0 && d[c] + 1 + fromShore[nb] <= OPEN_WATER) { d[nb] = d[c] + 1; lake[nb] = 1; q.push(nb); } } }
+        // And the mouth is not the lake. Lifting the last cell before an outflow lifts the bank beside it,
+        // while the outflow's bed a cell away is already lower, so the pair clears Eco's 5-block cliff
+        // threshold and a rock wall is built across the outlet — measured on verify-water's design, a
+        // 9-block one. Stand the ring off from any water the lake has not claimed, by the width of the
+        // ring itself. Where a lake is its own body there is no such water and this does nothing.
+        for (let p = 0; p < OPEN_WATER - 1; p++) {
+          const drop = [];
+          for (let j = 0; j < n; j++) if (lake[j] && fromShore[j] < OPEN_WATER)
+            for (const nb of nbr4(j)) if (land[nb] === 2 && !lake[nb]) { drop.push(j); break; }
+          if (!drop.length) break;
+          for (const j of drop) lake[j] = 0;
+        }
+        const seenL = new Uint8Array(n);
+        for (let j = 0; j < n; j++) {
+          if (!lake[j] || seenL[j]) continue;
+          const st = [j]; seenL[j] = 1; const cells = [];
+          while (st.length) { const c = st.pop(); cells.push(c); for (const nb of nbr4(c)) if (lake[nb] && !seenL[nb]) { seenL[nb] = 1; st.push(nb); } }
+          // Which level: the lake's DOMINANT one — the mean over the cells of whichever block level already
+          // holds most of its area. Raising a lake lifts the bank beside it and lowering it drains the
+          // shallow ring, so the level that moves the fewest cells costs least of either. Measured on a
+          // generated world against the alternatives: the dominant level took banks standing proud from
+          // 1.01% to 0.51% and the water from 23,446 columns to 23,466, the MEAN left the banks where they
+          // were (1.02%), and the MINIMUM cost 3,639 columns — 15.5% of the fresh water — for 1.14%.
+          let lv = 0, bn = -1;
+          const bucket = new Map();
+          for (const c of cells) { const k = Math.trunc(120 * wsurf[c] - 60); const b = bucket.get(k) || [0, 0]; b[0]++; b[1] += wsurf[c]; bucket.set(k, b); }
+          for (const [, b] of bucket) if (b[0] > bn) { bn = b[0]; lv = b[1] / b[0]; }
+          for (const c of cells) wsurf[c] = lv;
+        }
+      }
+    }
+    return wsurf;
+  }
+
   function boxBlurTor(a, res, r, passes) {
     const tmp = new Float32Array(res * res), inv = 1 / (2 * r + 1), wrap = (v) => ((v % res) + res) % res;
     for (let p = 0; p < passes; p++) {
@@ -9749,150 +10325,10 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     // fresh water is BELOW the water line — its water threads through terrain that is as often lower as
     // higher — against 11.6% here. Containment is not what the level is for: vanilla holds a lake with its
     // immediate ring alone (raising just that ring), and lets the ground beyond do as it likes.
-    const surf = new Float32Array(n).fill(Infinity); const lakeSet = new Set();
-    for (const cells of groups) for (const j of cells) lakeSet.add(j);
-    // Fresh water near the sea has to arrive AT it. Vanilla routes every river downhill until it hits an
-    // ocean cell and then walks the segment back from that mouth with `endElevation = Math.Max(0f, ...)`
-    // (VoronoiWorldGenerator, "ensure the elevation changes are valid"), so a mouth is pinned to sea level
-    // by construction. A painted channel has no router: it takes its level from whatever banks it happens
-    // to have, so a course drawn along a coast carries its inland level right past the sea and ends up
-    // perched, with its own bank walling the sea out. Measured on a real authored world, one stretch sat
-    // 6 blocks over a sea 20 m away — and 230 m away from its own outlet, so nothing that follows the
-    // CHANNEL can see the problem. The bound therefore reads distance to the SEA, which distO already has.
-    //
-    // Its shape is vanilla's own envelope, measured over four seeds as the highest fresh water at a given
-    // distance from the sea: at most +1 to +3 out to 30 m, +5 to +7 by 40, +7 to +11 by 50 and flat after.
-    const COAST_FLAT = 22, COAST_GRADE = 0.4;          // blocks of sea-level shelf, then blocks gained per block inland
-    const LEVEL_DROP = 0.012;                          // the step taken off `level` when it becomes a surface, below
-    const seaCap = j => 0.5 + LEVEL_DROP + (1 + Math.max(0, distO[j] * BPC - COAST_FLAT) * COAST_GRADE) * (1 / 120);
-    const mouth = new Uint8Array(n);                   // cells the bound actually bit on — the body's outlets
-    // The average is bounded by how much containment it may build. Vanilla can use the average outright
-    // because its rims are near flat — cell noise with no local gradient — so `lakeElevation + 0.01` raises
-    // a cell or two. On a sloped authored rim the average can sit many blocks over the low side, and holding
-    // it there means walling the whole downhill arc. 4 blocks is the knee measured on a real 120-wide map:
-    // it roughly doubles how much ground beyond the rim may sit below the water (11.6% -> 21.2% at 20 m,
-    // against vanilla's 30-45%) and drops the banks ~0.9 blocks at every distance, while leaving water
-    // spilling over its bank where it already was. Past ~6 it starts spilling; past ~8 the lake drowns its
-    // own outlet and the banks become a trench.
-    const BERM = 4 * (1 / 120);
-    // The ring is the immediate bank and nothing else, so a course running along a slope takes a level its
-    // uphill side justifies, the restore raises the downhill bank to hold it, and the ground beyond falls
-    // away — water standing on an embankment, which reads in game as an aqueduct. Bound the level by the
-    // AVERAGE HEIGHT OF THE SURROUNDING GROUND as well, so the water sits down in the landscape it crosses
-    // rather than on top of it. The radius is ~19 m, the distance at which the perch is visible.
-    const around = Float32Array.from(hf);
-    boxBlurTor(around, res, Math.max(1, Math.round(res / 23)), 2);
-    // The same average over LAND ONLY. `around` blurs the height field whole, and a water column's height
-    // is its bed, so within a radius of any river the average reads several blocks below the ground
-    // actually there. Anything that bounds a BANK has to compare it against land, not against the channel.
-    const aroundLand = Float32Array.from(hf, (v, j) => land[j] === 1 ? v : 0);
-    const landWeight = Float32Array.from(hf, (_, j) => land[j] === 1 ? 1 : 0);
-    boxBlurTor(aroundLand, res, Math.max(1, Math.round(res / 23)), 2);
-    boxBlurTor(landWeight, res, Math.max(1, Math.round(res / 23)), 2);
-    for (let j = 0; j < n; j++) aroundLand[j] = landWeight[j] > 0.05 ? aroundLand[j] / landWeight[j] : around[j];
-    const SETTLE_MARGIN = 4 * (1 / 120);
-    const settle = (lvl, j) => { const v = Math.min(lvl, around[j] + SETTLE_MARGIN), c = seaCap(j); if (c >= v) return v; mouth[j] = 1; return c; };
-    for (const j of lakeSet) {
-      let sum = 0, cnt = 0, mn = Infinity;
-      for (const nb of nbr4(j)) if (land[nb] === 1) { sum += hf[nb]; cnt++; if (hf[nb] < mn) mn = hf[nb]; }
-      surf[j] = cnt ? settle(Math.min(sum / cnt, mn + BERM), j) : Infinity;
-    }
-    // A cell with no shore of its own (mid-lake) has no constraint; give it the body's ring average, bounded
-    // the same way. This is what keeps a lake uniform now that nothing is min-propagated — and dropping that
-    // propagation is the actual point: the level is now the local ring, not the lowest thing within ~54 m,
-    // so ground beyond the rim is free to sit below the water the way vanilla's does.
-    for (const cells of groups) {
-      let sum = 0, cnt = 0, mn = Infinity;
-      for (const j of cells) for (const nb of nbr4(j)) if (land[nb] === 1) { sum += hf[nb]; cnt++; if (hf[nb] < mn) mn = hf[nb]; }
-      if (!cnt) continue;
-      const ring = Math.min(sum / cnt, mn + BERM);
-      for (const j of cells) if (!isFinite(surf[j])) surf[j] = settle(ring, j);
-    }
-    // Open water gets ONE surface per patch, however wide the lake, so the flood cannot ramp across a middle
-    // it never reaches — in game that reads as a corrugated bed under otherwise flat water. This is what
-    // keeps a lake level now that nothing is min-propagated. A drawn river is only a few cells across, so it
-    // has no open water at all and is left alone, which is what keeps it descending rather than turning
-    // into a level canal.
-    const OPEN_WATER = 4;
-    const fromShore = new Int16Array(n).fill(-1);
-    { const q = [];
-      for (let j = 0; j < n; j++) if (!lakeSet.has(j)) { fromShore[j] = 0; q.push(j); }
-      for (let h = 0; h < q.length; h++) { const c = q[h]; for (const nb of nbr4(c)) if (fromShore[nb] < 0) { fromShore[nb] = fromShore[c] + 1; q.push(nb); } } }
-    {
-      const open = []; for (const j of lakeSet) if (fromShore[j] >= OPEN_WATER) open.push(j);
-      const seen = new Set();
-      for (const s0 of open) {
-        if (seen.has(s0)) continue;
-        const stack = [s0], patch = []; seen.add(s0); let sum = 0;
-        while (stack.length) {
-          const c = stack.pop(); patch.push(c); sum += surf[c];
-          for (const nb of nbr4(c)) if (fromShore[nb] >= OPEN_WATER && lakeSet.has(nb) && !seen.has(nb)) { seen.add(nb); stack.push(nb); }
-        }
-        let pmn = Infinity, pcap = Infinity;
-        for (const j of patch) { if (surf[j] < pmn) pmn = surf[j]; const c = seaCap(j); if (c < pcap) pcap = c; }
-        // Bounded by the coast the same way a shore cell is, but by the TIGHTEST bound over the patch, so
-        // open water keeps the single flat level the rest of the pass exists to give it.
-        const lv = Math.min(sum / patch.length, pmn + BERM, pcap);             // the patch's average, bounded like the rest
-        if (pcap <= lv) for (const j of patch) mouth[j] = 1;
-        for (const j of patch) surf[j] = lv;
-        // pull the surrounding shallows to it too, so the rim does not stand above the middle
-        for (const j of patch) for (const nb of nbr4(j)) if (lakeSet.has(nb) && fromShore[nb] < OPEN_WATER && surf[nb] > lv) surf[nb] = lv;
-      }
-    }
-    // Water sits in FLAT pools, in a valley it CARVES for itself.
-    //
-    // Pinning each cell's surface to its nearest bank (surf[] above) makes water follow the mountains it
-    // was drawn across: one body then spans tens of blocks and Eco, which fills every column separately,
-    // renders it as a jagged cascade. Pooling alone cannot fix that — the range is in the terrain, not in
-    // the choice of levels. So relax the surface first, then carve the land to match.
-    const BLK = 1 / 120;                  // one world block, in designer frac (Y = 60 + (2h-1)*60)
-    const MAX_WATER_STEP = 0.5 * BLK;     // biggest rise allowed between neighbouring water cells
-    const surfOf = j => (isFinite(surf[j]) ? surf[j] : 0.55);
-    // Priority flood, spreading out from each body's LOWEST cell and always expanding the lowest water
-    // next. Each cell takes
-    //     level = surf <= parent ? parent : min(surf, parent + MAX_WATER_STEP)
-    // which does both jobs at once and needs no lake-vs-river test. A dip surrounded by higher ground can
-    // never sit below the water that reached it, so a basin fills to its rim and comes out DEAD FLAT; a
-    // channel running downhill keeps its own profile, capped so it descends in small steps rather than
-    // dropping the height of the ridge it was drawn across.
-    const level = new Float32Array(n);
-    for (const cells of groups) {
-      let start = cells[0]; for (const j of cells) if (surfOf(j) < surfOf(start)) start = j;
-      const inGroup = new Set(cells), done = new Set();
-      const heap = [];                                                        // binary min-heap on assigned level
-      const push = (k, v) => { heap.push([k, v]); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
-      const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
-      // A body has as many mouths as it has places where the coast bound bites, not one. Flooding from the
-      // single lowest cell makes the level non-decreasing along the CHANNEL from that one point, which is
-      // why a course that runs back out to the coast 230 m downstream carries its inland level with it —
-      // the bound on `surf` there is simply overwritten by the parent's. Seeding every such cell and always
-      // expanding the lowest gives each cell the lowest level any mouth can justify, so the stretch beside
-      // the sea descends into it and only the water between two mouths keeps the higher of them.
-      const seed = j => { if (done.has(j)) return; done.add(j); level[j] = surfOf(j); push(level[j], j); };
-      seed(start);
-      for (const j of cells) if (mouth[j]) seed(j);
-      while (heap.length) {
-        const [, c] = pop();
-        for (const nb of nbr4(c)) {
-          if (!inGroup.has(nb) || done.has(nb)) continue;
-          done.add(nb);
-          const s = surfOf(nb), lv = level[c];
-          // Open water takes its level outright. Ramping into it at MAX_WATER_STEP a cell — correct for a
-          // channel climbing away from its outlet — would tilt the whole surface of a lake entered from
-          // below, and that tilt is exactly the ridged bed seen through flat water. A lake meeting a lower
-          // river simply falls at the outlet, which is what a real one does.
-          level[nb] = s <= lv ? lv : (fromShore[nb] >= OPEN_WATER ? s : Math.min(s, lv + MAX_WATER_STEP));
-          push(level[nb], nb);
-        }
-      }
-    }
-    // No pass is needed here to stop a pool topping its banks. The shoreline restore after the blur puts
-    // any land touching water a block above it, which contains the water by construction. An earlier
-    // clamp-each-flat-region-to-its-lowest-bank step did the same job twice and made things worse: it cut a
-    // lake into pieces and dropped each one to whatever bank was nearest, turning a level surface into a
-    // staircase — measured, it took one lake from 6 levels to 13, and removing it took corrugation in open
-    // water from 7.2% of neighbouring pairs to 0 with overflow still at 0. What remains are real waterfalls
-    // where a lake meets a lower channel, all of them at outlets and none mid-lake.
+    // How high the water stands, and how far each cell is from its own edge - see settleWaterLevels.
+    const settled = settleWaterLevels(res, n, land, hf, distO, BPC, groups, boxBlurTor);
+    const level = settled.level, fromShore = settled.fromShore, aroundLand = settled.aroundLand;
+    const SETTLE_MARGIN = settled.SETTLE_MARGIN;
     for (const cells of groups) {
       const tally = {}; for (const j of cells) for (const nb of nbr4(j)) if (land[nb] === 1) tally[biome[nb]] = (tally[biome[nb]] || 0) + 1;
       let lb = SC.Grassland, bc = -1; for (const k in tally) if (tally[k] > bc) { bc = tally[k]; lb = +k; }   // majority shore biome
@@ -9902,231 +10338,10 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
         biome[j] = lb; land[j] = 2; wsurf[j] = Math.max(SEA + 0.01, level[j] - 0.012);   // just under the surrounding bank
       }
     }
-    // Knock isolated spikes out of the water surface. The priority flood lets a cell in open water take its
-    // own level outright — which is what stops a lake tilting — but where the bank estimate under one cell
-    // spikes, that cell alone ends up metres above the water on every side. In game that is a lump of bed
-    // with a puddle on top of it, standing mid-channel, and it is what "blocks poking out with more water
-    // above them" turns out to be. A cell higher than ALL of its water neighbours is never a waterfall —
-    // those are higher than some and lower than others — so it can be dropped to its highest neighbour
-    // without flattening a real descent. Measured on a generated world this cleared all 5 such cells (worst
-    // 7.1 blocks proud) while water pairs stepping a block or more only went 0.73% -> 0.59%.
+    // Settle the water surface: spikes, cross-channel levelling, then one level per lake. Shared with
+    // the seeded path, which needs exactly the same treatment - see solveWaterSurface.
+    solveWaterSurface(res, land, wsurf, fromShore);
     {
-      const SPIKE = 2 * BLK;
-      for (let pass = 0; pass < 4; pass++) {
-        const next = Float32Array.from(wsurf);
-        for (let j = 0; j < n; j++) {
-          if (land[j] !== 2) continue;
-          let mx = -Infinity;
-          for (const nb of nbr4(j)) if (land[nb] === 2 && wsurf[nb] > mx) mx = wsurf[nb];
-          if (mx > -Infinity && wsurf[j] - mx >= SPIKE) next[j] = mx;
-        }
-        wsurf.set(next);
-      }
-      // Level the surface ACROSS the channel.
-      //
-      // Every cell takes its level from its own bank, so a course drawn across a hillside gets one from the
-      // uphill side and a lower one from the downhill side, and the difference survives everything above:
-      // the flood only stops a cell sitting BELOW the water that reached it, and a 4-neighbour average
-      // shrinks a cross-channel slope and a descent alike. Measured on a real world, the surface still
-      // carried ~0.6 blocks of slope across a 6-cell channel, which rounds to one bank of the river sitting
-      // a block over the other for 30 m at a time — 7.6% of all fresh water touched such a split, against
-      // vanilla's 0.7-3.0, while steps down the flow were already in band at 0.4% (vanilla 0.2-0.6).
-      //
-      // Water has no cross-stream slope, so take it out directionally: weight each neighbour by how far it
-      // lies ACROSS the flow and average. The axis is the structure tensor of the water mask — its major
-      // eigenvector is the across-channel normal — and the weight is (direction . normal)^2, which is 1 for
-      // a neighbour straight across and 0 for one straight along. Repeated, that levels every cross-section
-      // and leaves the profile down the channel alone. Eight neighbours, not four: a channel drawn at 45
-      // degrees has its across direction on a diagonal, and a 4-neighbour stencil can only offer it two
-      // axes that are equally across and equally along, so it would smooth the descent as hard as the slope.
-      {
-        const mask = Float32Array.from(hf, (_, j) => land[j] === 2 ? 1 : 0);
-        boxBlurTor(mask, res, 2, 1);
-        const gx = new Float32Array(n), gy = new Float32Array(n);
-        for (let y = 0; y < res; y++) for (let x = 0; x < res; x++) {
-          const j = y * res + x;
-          gx[j] = (mask[((x + 1) % res) + y * res] - mask[((x + res - 1) % res) + y * res]) / 2;
-          gy[j] = (mask[x + ((y + 1) % res) * res] - mask[x + ((y + res - 1) % res) * res]) / 2;
-        }
-        const Jxx = Float32Array.from(gx, v => v * v), Jyy = Float32Array.from(gy, v => v * v);
-        const Jxy = Float32Array.from(gx, (v, j) => v * gy[j]);
-        boxBlurTor(Jxx, res, 4, 1); boxBlurTor(Jyy, res, 4, 1); boxBlurTor(Jxy, res, 4, 1);
-        const DIR = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]];
-        const idx = new Int32Array(n * 8), wt = new Float32Array(n * 8);
-        const ACROSS_POW = 6;         // exponent on (direction . normal)^2 — 6 gives a twelfth power of the cosine
-        const CLEAN_AXIS = 0.4;       // coherence below this is a junction or open water, and has no axis to use
-        for (let y = 0; y < res; y++) for (let x = 0; x < res; x++) {
-          const j = y * res + x;
-          for (let k = 0; k < 8; k++) idx[j * 8 + k] = ((x + DIR[k][0] + res) % res) + ((y + DIR[k][1] + res) % res) * res;
-          if (land[j] !== 2) continue;
-          const a = Jxx[j], b = Jxy[j], c = Jyy[j], tr = a + c;
-          const l1 = tr / 2 + Math.sqrt(Math.max(0, tr * tr / 4 - (a * c - b * b)));
-          let nx = b, ny = l1 - a; const nn = Math.hypot(nx, ny);
-          const coh = tr > 1e-12 ? (2 * l1 - tr) / tr : 0;      // 1 = a clean channel, 0 = open water or a junction
-          // No axis — a junction, or water wide enough to have no channel direction at all. There is no
-          // cross-section to level here, and the isotropic average this used to fall back on is exactly the
-          // thing that flattens a descent, so leave the cell alone and let its neighbours pull it.
-          if (nn < 1e-12 || coh < CLEAN_AXIS) continue;
-          nx /= nn; ny /= nn;
-          // The weight has to fall away FAST. A squared cosine still passes half of a neighbour lying at 45
-          // degrees to the flow, and half the displacement of that neighbour is along the channel, so over
-          // enough passes the profile down the river is smoothed as well as the slope across it. Measured on
-          // a real world, the squared form took the descent from 52 blocks of fall over all bodies to 19 and
-          // the share of water on a step down the flow from 0.52% to 0.07% — the waterfalls went with the
-          // defect. A twelfth power leaves 0.02% of a 45-degree neighbour's weight, and at the SAME
-          // cross-channel result it keeps 43 blocks of fall and 0.39%, which is where vanilla sits.
-          let s = 0;
-          for (let k = 0; k < 8; k++) {
-            const L = Math.hypot(DIR[k][0], DIR[k][1]), d = (DIR[k][0] * nx + DIR[k][1] * ny) / L;
-            wt[j * 8 + k] = Math.pow(d * d, ACROSS_POW) / L; s += wt[j * 8 + k];
-          }
-          for (let k = 0; k < 8; k++) wt[j * 8 + k] /= s;       // one block of transport per pass, whatever the axis
-        }
-        // Diffusion proper, u += TAU * sum_k w_k (u_nb - u), with each pair weighted by the MEAN of the two
-        // cells' weights. That makes the operator symmetric, so a cross-section keeps its own mean level
-        // instead of drifting toward whichever of its cells has the most water neighbours; TAU 0.5 damps the
-        // checkerboard mode the plain replace-by-weighted-mean form leaves untouched.
-        //
-        // 60 passes takes the cross-channel slope out of a channel up to ~8 cells wide. Measured on a real
-        // world, water sitting on a lengthwise split went 7.5% -> 2.1% (vanilla 0.70-3.03 over seven seeds).
-        //
-        // Levelling lifts the low side of a section as much as it drops the high side, and on ground steep
-        // enough for the two banks to differ by several blocks that means walking the water up the hill.
-        // Cap the lift: past ~2.5 blocks the section is not a channel across a slope any more, and the
-        // levelling has nothing useful to say about it.
-        const CROSS_PASSES = 60, TAU = 0.5, RAISE_CAP = 2.5 * BLK;
-        const was = Float32Array.from(wsurf);
-        for (let pass = 0; pass < CROSS_PASSES; pass++) {
-          const next = Float32Array.from(wsurf);
-          for (let j = 0; j < n; j++) {
-            // Open water is one level per patch already; averaging across its edge would tilt it.
-            if (land[j] !== 2 || fromShore[j] >= OPEN_WATER) continue;
-            let acc = 0;
-            for (let k = 0; k < 8; k++) {
-              const nb = idx[j * 8 + k]; if (land[nb] !== 2) continue;
-              acc += (wt[j * 8 + k] + wt[nb * 8 + k]) / 2 * (wsurf[nb] - wsurf[j]);
-            }
-            next[j] = wsurf[j] + TAU * acc;
-          }
-          wsurf.set(next);
-        }
-        for (let j = 0; j < n; j++) if (land[j] === 2 && wsurf[j] > was[j] + RAISE_CAP) wsurf[j] = was[j] + RAISE_CAP;
-      }
-      // Neighbouring water columns that disagree by a FRACTION of a block still render as a step, because
-      // Eco fills each column separately and rounds. Taking each cell's level from its own four neighbours
-      // leaves exactly that disagreement across a channel, and a channel is only a few cells wide, so the
-      // step runs ALONG the bank instead of down the river — a waterfall the length of the shoreline, which
-      // is what the level-from-the-ring change introduced. Average the surface along the water to take it
-      // out. Measured on a real map, the bank ring went from 6.4% of its pairs stepping a block, to 41.5%
-      // with the ring average, to 6.1% here; over the whole surface it is 11.9%, against vanilla's 11-13.5%.
-      {
-        for (let pass = 0; pass < 3; pass++) {
-          const next = Float32Array.from(wsurf);
-          for (let j = 0; j < n; j++) {
-            // Open water is already one level per patch and must stay exactly that — averaging across its
-            // edge tilts the whole surface, which is the ridged bed under flat water all over again. It
-            // still feeds the average of the shore cells beside it, as a fixed value.
-            if (land[j] !== 2 || fromShore[j] >= OPEN_WATER) continue;
-            let sum = wsurf[j], cnt = 1;
-            for (const nb of nbr4(j)) if (land[nb] === 2) { sum += wsurf[nb]; cnt++; }
-            next[j] = sum / cnt;
-          }
-          wsurf.set(next);
-        }
-      }
-      // One level per LAKE.
-      //
-      // A lake has no flow direction, so it has no reason to hold more than one surface level, and
-      // vanilla's never does: VoronoiWorldGenerator gives every cell of a lake polygon a single elevation.
-      // Everything above works cell by cell instead, so a lake drawn across a slope keeps a low shore on
-      // its downhill side — measured on a generated world one 894-column lake arrived over four levels,
-      // with the water running over the step between them. The cross-channel levelling cannot reach it:
-      // the middle of a lake has no edge in the water mask, so its structure tensor has no coherence and
-      // every cell of it is skipped, which leaves the shallow ring taking its level from its own bank.
-      //
-      // A lake is a piece of water no LONGER than it is wide: the longest way across it, in cells, against
-      // its own width. That is a ratio, so it does not care how big the body is or which way it lies, and
-      // it is what keeps a wide slow river out — widening a channel raises both terms, lengthening it only
-      // the first. The area of a bounding box, the obvious alternative, cannot tell a lake from a straight
-      // reach of a wide river at all. Measured on the shipping map its lakes read 1.2-2.8, a drawn stream
-      // 5-6 and its two river systems 36.
-      {
-        const LAKE_SLIM = 4;
-        const lake = new Uint8Array(n);
-        const slimOf = inS => {                       // longest way across a set of cells / its width
-          let wide = 0, seed = -1;
-          for (const c of inS) { if (fromShore[c] > wide) wide = fromShore[c]; if (seed < 0) seed = c; }
-          const far = s => { const d = new Map([[s, 0]]); const q = [s]; let best = s;
-            for (let h = 0; h < q.length; h++) for (const nb of nbr4(q[h])) if (inS.has(nb) && !d.has(nb)) { d.set(nb, d.get(q[h]) + 1); q.push(nb); best = nb; }
-            return [best, d.get(best)]; };
-          const [a] = far(seed); const [, diam] = far(a);
-          return [diam, wide];
-        };
-        // A whole body first, which is what a lake usually is.
-        const seenB = new Uint8Array(n), bodies = [];
-        for (let j = 0; j < n; j++) {
-          if (land[j] !== 2 || seenB[j]) continue;
-          const st = [j]; seenB[j] = 1; const inB = new Set([j]);
-          while (st.length) { const c = st.pop(); for (const nb of nbr4(c)) if (land[nb] === 2 && !seenB[nb]) { seenB[nb] = 1; inB.add(nb); st.push(nb); } }
-          const [diam, wide] = slimOf(inB);
-          if (diam <= LAKE_SLIM * Math.max(1, 2 * wide - 1)) { for (const c of inB) lake[c] = 1; } else bodies.push(inB);
-        }
-        // A lake drawn ONTO a river system shares its body with the whole system, and both test designs do
-        // exactly that, so the body test alone would never see one. In a body that is not itself a lake,
-        // look for a compact patch of OPEN water instead and take the shallow ring around it with it — the
-        // ring is the part that carries the low shore.
-        const core = j => land[j] === 2 && fromShore[j] >= OPEN_WATER;
-        for (const inB of bodies) {
-          const seenC = new Set();
-          for (const j of inB) {
-            if (!core(j) || seenC.has(j)) continue;
-            const st = [j]; seenC.add(j); const inP = new Set([j]);
-            while (st.length) { const c = st.pop(); for (const nb of nbr4(c)) if (core(nb) && !seenC.has(nb)) { seenC.add(nb); inP.add(nb); st.push(nb); } }
-            const [diam, wide] = slimOf(inP);
-            if (wide <= OPEN_WATER) continue;                        // one cell thick: a pinch in a channel, not a lake
-            if (diam > LAKE_SLIM * (2 * (wide - OPEN_WATER) + 1)) continue;    // a reach, and it descends
-            for (const c of inP) lake[c] = 1;
-          }
-        }
-        // The ring goes with it. A ring cell is one that lies on the way from the open water out to the
-        // bank, so its steps from the core plus its own distance to the shore still come to OPEN_WATER; a
-        // channel leaving the lake fails that within a cell of the mouth however shallow it is, and so
-        // keeps its own descent. Without the test the ring simply grew four cells down the outflow and
-        // turned a five-block taper into a waterfall.
-        { const q = [], d = new Int32Array(n).fill(-1);
-          for (let j = 0; j < n; j++) if (lake[j]) { d[j] = 0; q.push(j); }
-          for (let h = 0; h < q.length; h++) { const c = q[h];
-            for (const nb of nbr4(c)) if (land[nb] === 2 && d[nb] < 0 && d[c] + 1 + fromShore[nb] <= OPEN_WATER) { d[nb] = d[c] + 1; lake[nb] = 1; q.push(nb); } } }
-        // And the mouth is not the lake. Lifting the last cell before an outflow lifts the bank beside it,
-        // while the outflow's bed a cell away is already lower, so the pair clears Eco's 5-block cliff
-        // threshold and a rock wall is built across the outlet — measured on verify-water's design, a
-        // 9-block one. Stand the ring off from any water the lake has not claimed, by the width of the
-        // ring itself. Where a lake is its own body there is no such water and this does nothing.
-        for (let p = 0; p < OPEN_WATER - 1; p++) {
-          const drop = [];
-          for (let j = 0; j < n; j++) if (lake[j] && fromShore[j] < OPEN_WATER)
-            for (const nb of nbr4(j)) if (land[nb] === 2 && !lake[nb]) { drop.push(j); break; }
-          if (!drop.length) break;
-          for (const j of drop) lake[j] = 0;
-        }
-        const seenL = new Uint8Array(n);
-        for (let j = 0; j < n; j++) {
-          if (!lake[j] || seenL[j]) continue;
-          const st = [j]; seenL[j] = 1; const cells = [];
-          while (st.length) { const c = st.pop(); cells.push(c); for (const nb of nbr4(c)) if (lake[nb] && !seenL[nb]) { seenL[nb] = 1; st.push(nb); } }
-          // Which level: the lake's DOMINANT one — the mean over the cells of whichever block level already
-          // holds most of its area. Raising a lake lifts the bank beside it and lowering it drains the
-          // shallow ring, so the level that moves the fewest cells costs least of either. Measured on a
-          // generated world against the alternatives: the dominant level took banks standing proud from
-          // 1.01% to 0.51% and the water from 23,446 columns to 23,466, the MEAN left the banks where they
-          // were (1.02%), and the MINIMUM cost 3,639 columns — 15.5% of the fresh water — for 1.14%.
-          let lv = 0, bn = -1;
-          const bucket = new Map();
-          for (const c of cells) { const k = Math.trunc(120 * wsurf[c] - 60); const b = bucket.get(k) || [0, 0]; b[0]++; b[1] += wsurf[c]; bucket.set(k, b); }
-          for (const [, b] of bucket) if (b[0] > bn) { bn = b[0]; lv = b[1] / b[0]; }
-          for (const c of cells) wsurf[c] = lv;
-        }
-      }
       // the surface as it will be exported
       for (let j = 0; j < n; j++) {
         if (land[j] !== 2) continue;
@@ -10135,98 +10350,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
         water[j] = Math.max(1, Math.min(255, Math.round((2 * surface - 1) * 255)));
       }
     }
-    // Shelve the fresh water at its edges, the way the sea already is. A flat bed a fixed depth below the
-    // surface puts a STEP at the shoreline: the bed is ~3.8 blocks down and the bank ~1.4 up, and Eco's
-    // CliffExtruder builds a rock face wherever two columns differ by 5 or more. Measured on a generated
-    // world, 52.9% of shoreline column pairs cleared that — a stone retaining wall around every lake and
-    // river. Ramping the bed up to one block under the surface at the shore takes the step under the
-    // threshold, and reads as a shallows rather than a tank.
-    //
-    // Away from the edges it DEEPENS, the way vanilla's does. One fixed depth makes every body the same 3.6
-    // blocks however wide it is, so a lake reads as a puddle: measured on a real map, water 20 blocks from
-    // the nearest shore was 3.6 blocks deep where vanilla's rule gives 18.4.
-    //
-    // Vanilla floods inward from the bank, adding `depthChange = 2` to the depth each ring
-    // (VoronoiWorldGenerator, "floodfill to determine depth of water features"), starting at 1 and never
-    // capping. Depth is in heightmap grays and Y = waterLevel + (gray/255*2-1)*(maxGen-waterLevel), so one
-    // gray is 2*(maxGen-waterLevel)/255 — 0.47 blocks on a 60/120 world, which is what BLK already assumes.
-    // Its rings are one block wide and ours are BPC, and its enclosure test is 8-neighbour, so the distance
-    // it deepens by is CHEBYSHEV. Walking 4-neighbour here would run deeper than vanilla, not equal to it.
-    {
-      const SHELF_CELLS = 3;                    // how far in the shallows reach
-      const SHORE_DEPTH = 1.2 * BLK;            // depth right at the bank; below ~1.8 a shore cell can round to no water at all
-      const GRAY = 0.4706 * BLK;                // one unit of vanilla's depth
-      // Vanilla's rule deepens without limit, which is right for vanilla's channels — 6-12 m wide, so it
-      // yields 3-6 blocks. Ours are 16-32 m wide by design, and the same rule yields 8-15: measured
-      // against a real vanilla world, depth p50 3 / p90 9 / max 15 against its 2 / 4 / 11. Cap it, so a
-      // wide river is a wide river rather than a canyon. The cap only ever binds in the middle; the shelf
-      // still owns the shore, which is what the bank is measured against.
-      //
-      // But one cap for everything makes every LAKE 8 blocks too, and a stock world's are not: over seven
-      // of them fresh water reaches 10-12 at p99 and 13-17 at worst, and their ~2,500-cell lakes run 11-14
-      // deep where ours arrived at 8. A lake is wide in every direction, so vanilla's depth reads as a bed
-      // there rather than as the gorge it would cut along a channel. Tell the two apart by SHAPE, the same
-      // way Eco/Tools/WorldGenAnalysis/metrics/lakes.js does when it measures a generated world: a body
-      // that fills a good part of its own bounding box is a lake, and a winding course never does however
-      // long or wide it is drawn. A lake DRAINING into a river shares its body with the whole system and
-      // so keeps the channel bed — the safe way to be wrong, and the same way lakes.js reads that case.
-      const MAX_DEPTH = 8 * BLK;                // a channel's bed stops here, whatever vanilla's ramp says
-      const LAKE_DEEPEN = 0.6;                  // of vanilla's remaining ramp, once a lake is past that
-      const LAKE_MAX_DEPTH = 16 * BLK;          // and never past the deepest fresh water a stock world holds
-      const LAKE_FILL = 0.35;                   // of the body's bounding box
-      const LAKE_MIN_BLOCKS = 60;               // smallest body worth calling a lake, in world blocks of area
-      const deepBed = new Uint8Array(n);
-      {
-        const seenB = new Uint8Array(n);
-        // The map wraps, so a body's box is the shortest interval that still holds every cell — what is
-        // left once the widest EMPTY run is taken out. Reading x0..x1 straight would hand a body lying
-        // over the seam the whole world as its box, and demote it to a channel.
-        const span = (cells, key) => {
-          const used = new Uint8Array(res);
-          for (const c of cells) used[key(c)] = 1;
-          let gap = 0, run = 0;
-          for (let k = 0; k < 2 * res; k++) { if (used[k % res]) run = 0; else if (++run > gap) gap = run; }
-          return res - gap;
-        };
-        for (let j = 0; j < n; j++) {
-          if (land[j] !== 2 || seenB[j]) continue;
-          const st = [j], cells = []; seenB[j] = 1;
-          while (st.length) { const c = st.pop(); cells.push(c); for (const nb of nbr4(c)) if (land[nb] === 2 && !seenB[nb]) { seenB[nb] = 1; st.push(nb); } }
-          if (cells.length * BPC * BPC < LAKE_MIN_BLOCKS) continue;
-          const box = span(cells, c => c % res) * span(cells, c => (c / res) | 0);
-          if (cells.length / box < LAKE_FILL) continue;
-          for (const c of cells) deepBed[c] = 1;
-        }
-      }
-      const dIn = new Int32Array(n).fill(-1), qs = [];
-      for (let j = 0; j < n; j++) if (land[j] !== 2) { dIn[j] = 0; qs.push(j); }
-      for (let k = 0; k < qs.length; k++) {
-        const c = qs[k], cx = c % res, cy = (c / res) | 0;
-        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-          if (!dx && !dy) continue;
-          const nb = ((cx + dx + res) % res) + ((cy + dy + res) % res) * res;
-          if (dIn[nb] < 0 && land[nb] === 2) { dIn[nb] = dIn[c] + 1; qs.push(nb); }
-        }
-      }
-      for (let j = 0; j < n; j++) {
-        if (land[j] !== 2) continue;
-        // The shelf still owns the first few cells — it is what holds the bed-to-bank step under
-        // CliffExtruder's threshold, and vanilla is SHALLOWER than it at the bank (0.5 blocks against 1.8).
-        // Past the point where vanilla's ramp overtakes the shelf, it takes over.
-        const t = Math.min(1, Math.max(0, (dIn[j] - 1) / SHELF_CELLS));
-        const s = t * t * (3 - 2 * t);
-        const shelf = SHORE_DEPTH + (3.6 * BLK - SHORE_DEPTH) * s;
-        const vanilla = Math.max(1, 2 * (dIn[j] - 0.5) * BPC - 1) * GRAY;
-        // A lake carries on deepening past the cap rather than stopping dead at it. Stopping gives it a
-        // flat plateau for a bed — on the real map p90 and p99 both landed exactly on the cap — where a
-        // stock lake's bed peaks: p90 8-9 blocks under a max of 13-15.
-        const want = Math.max(shelf, vanilla);
-        const depth = deepBed[j] && want > MAX_DEPTH
-          ? Math.min(LAKE_MAX_DEPTH, MAX_DEPTH + (want - MAX_DEPTH) * LAKE_DEEPEN)
-          : Math.min(MAX_DEPTH, want);
-        bed[j] = Math.max(0.03, wsurf[j] - depth);
-      }
-    }
+    shelveWaterBed(res, n, land, wsurf, bed, BPC);
     // minimal smoothing — keep the ridged relief steep (just knock off single-pixel noise + shoreline step)
     boxBlurTor(hf, res, Math.max(1, Math.round(res / 140)), 1);
     // Break the land into cells and give each ONE height, the way the real generator does.
@@ -10415,28 +10539,14 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
       // following the channel — masonry rather than ground. At one it mostly stops binding and the height
       // comes from the restore below instead, which is a lip rather than a terrace. Vanilla's first ring
       // sits 0.3-0.45 blocks over its water; this takes 1.37 to 0.93.
-      const BANK_CAP = 0.5 * BLK;
-      for (let j = 0; j < n; j++) {
-        if (land[j] !== 1) continue;
-        let s = -Infinity;
-        for (const nb of nbr4(j)) if (land[nb] === 2 && wsurf[nb] > s) s = wsurf[nb];
-        if (s > -Infinity && hf[j] > s + BANK_CAP) hf[j] = s + BANK_CAP;
-      }
+      capBankLip(res, land, wsurf, hf);
     }
     // The blur averages across the shoreline, and water cells sit low, so it drags the banks down with them
     // — far enough, in places, to leave the bank UNDER the water it is holding back, which reads in game as
     // a lake spilling over the terrain. Put the shore back: any land touching water sits a block above it.
-    const SHORE_LIP = 0.35 * BLK;
     // Runs again after the corridor is snapped back onto its cells, since that move can drop the ring below
     // the water a second time; it is the lower bound on the shore, so nothing may leave it unenforced.
-    const restoreShore = () => {
-      for (let j = 0; j < n; j++) {
-        if (land[j] !== 1) continue;
-        let need = -Infinity;
-        for (const nb of nbr4(j)) if (land[nb] === 2 && wsurf[nb] > need) need = wsurf[nb];
-        if (need > -Infinity && hf[j] < need + SHORE_LIP) hf[j] = need + SHORE_LIP;
-      }
-    };
+    const restoreShore = () => restoreShoreLip(res, land, wsurf, hf);
     restoreShore();
     // The first few metres of LAND have to stay near the water too. Capping only the ring that touches it
     // leaves the ground behind free to climb, and read out of a real save that is what the bank actually is:
@@ -10537,33 +10647,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     //
     // So set the bed from the QUANTISED surface, in the same arithmetic Eco will use, rather than trusting
     // the sub-block value to survive the trip.
-    const MIN_DEPTH = 2.1;                                     // blocks left in the shallowest column
-    const WL = 60, RELIEF = 60, MAXGEN = 120;                  // the 60/120 world BLK already assumes
-    // The shelf keeps the bed-to-bank step under CliffExtruder's 5 blocks by holding the shore shallow,
-    // but it only ever compares the bed against its own surface. Where a bank is pinned high by a SECOND
-    // body beside it — two arms of one course passing within a cell, the higher one holding the divider up
-    // — the lower arm's own shelf knows nothing about it and the step clears the threshold anyway. Bound
-    // the bed by the bank as well, keeping a block of water whatever happens.
-    const BANK_STEP = 4;                                       // blocks of bed-to-bank the shelf may leave
-    const bankAbove = new Float32Array(n).fill(-Infinity);
-    for (let j = 0; j < n; j++) if (land[j] === 2) for (const nb of nbr4(j)) if (land[nb] !== 2 && hf[nb] > bankAbove[j]) bankAbove[j] = hf[nb];
-    for (let j = 0; j < n; j++) {
-      let h = land[j] === 2 ? bed[j] : (land[j] ? Math.max(0.505, hf[j]) : Math.min(hf[j], 0.495));
-      height[j] = Math.max(0, Math.min(255, Math.round(h * 255)));
-      if (land[j] === 2) {
-        const wy = WL + Math.trunc(RELIEF * (water[j] / 255));                // what Eco will fill this column to
-        // Never deeper than the shelf meant this column to be. The shelf holds the first cells at ~1.8
-        // blocks on purpose — that is what keeps the bed-to-bank step under CliffExtruder's threshold —
-        // so a flat floor applied everywhere digs exactly the columns that must not be dug. Restoring the
-        // intended depth is enough: quantisation is what took it away, not the shelf.
-        const want = Math.min(MIN_DEPTH, (wsurf[j] - bed[j]) * MAXGEN);
-        height[j] = Math.max(0, Math.min(height[j], Math.floor(255 * (wy - want) / MAXGEN)));
-        if (bankAbove[j] > -Infinity) {
-          const floorY = Math.min(wy - 1, (2 * bankAbove[j] - 1) * 60 + 60 - BANK_STEP);
-          height[j] = Math.max(height[j], Math.min(255, Math.ceil(255 * floorY / MAXGEN)));
-        }
-      }
-    }
+    writeExportColumns(res, n, land, hf, bed, wsurf, water, height);
     return { res, biome, height, water };
   }
   // Decode the source image onto the G x G paint grid. Colour maps must NOT be smoothed, for the same
@@ -10857,51 +10941,17 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
         if (!(ev.data && ev.data.type === 'classgrid' && ev.data.grid)) return;
         target = new Uint8Array(ev.data.grid);
         // The map's lakes and rivers come across too. Without them the design exports no water at all and
-        // the generated world has none - no rivers, no lakes, and no river sand along either. Their heights
-        // come with them and are pinned as painted elevation: left to the surrounding terrain a lake takes
-        // the local land height cell by cell and ends up at as many levels as the ground it covers.
-        if (ev.data.water) {
-          water = new Uint8Array(ev.data.water);
-          levelSeededWater();
-        }
+        // the generated world has none - no rivers, no lakes, and no river sand along either. Only WHERE
+        // the water is: how high it stands is settled at export time against the design's own terrain, by
+        // the same passes the image import uses. The map's own heights belong to the map's landscape, not
+        // to this one, and carrying them over put water 17 blocks above the sea within sight of the coast.
+        if (ev.data.water) water = new Uint8Array(ev.data.water);
         seededFrom = result; designEdited = false;
         hideLegend(); renderPaint(); flashAnalysis('Seeded from the current map. Edit it, then analyze.');
       });
       classgridBound = true;
     }
     worker.postMessage({ type: 'classgrid', G: G });
-  }
-  /**
-   * Give the seeded water a surface that belongs to THIS terrain. The map's own elevations cannot be used
-   * directly: the design's land comes from the biome bands and the paint grid, not from the map's heights,
-   * so a lake carrying its map elevation ends up standing over ground that was never put there - measured,
-   * water 17 blocks above the sea within sight of the coast, where stock never exceeds +1.
-   *
-   * So the level is read off the terrain the design actually has. A lake is one level by definition and
-   * takes the lowest ground it covers; a river follows the ground down, which is what makes it descend.
-   * Both are pinned as painted elevation so the blur cannot tilt them afterwards.
-   */
-  function levelSeededWater() {
-    const natural = computeHeightField();          // before any water is pinned: the bare terrain
-    const seen = new Uint8Array(G * G);
-    for (let i = 0; i < G * G; i++) {
-      if (water[i] !== 2) continue;                // rivers follow the ground they cross
-      elev[i] = natural[i]; elevPainted[i] = 1; rough[i] = 0;
-    }
-    for (let i = 0; i < G * G; i++) {
-      if (seen[i] || water[i] !== 1) continue;
-      const cells = [i]; seen[i] = 1;
-      let low = natural[i];
-      for (let h = 0; h < cells.length; h++) {
-        const c = cells[h], x = c % G, y = (c / G) | 0;
-        if (natural[c] < low) low = natural[c];
-        for (const n of [y * G + (x + 1) % G, y * G + (x + G - 1) % G,
-                         ((y + 1) % G) * G + x, ((y + G - 1) % G) * G + x])
-          if (!seen[n] && water[n] === 1) { seen[n] = 1; cells.push(n); }
-      }
-      for (const c of cells) { elev[c] = low; elevPainted[c] = 1; rough[c] = 0; }
-    }
-    for (let i = 0; i < G * G; i++) if (water[i]) water[i] = 1;   // downstream only cares that it is wet
   }
 
   function flashAnalysis(msg) { $('dsnAnalysis').innerHTML = '<b>' + msg + '</b>'; }
@@ -11319,6 +11369,74 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     return out;
   }
 
+  /**
+   * The sea and the water bodies on the export lattice, the way settleWaterLevels wants them: a chamfer
+   * distance from the OCEAN (the largest salt-water component, so an inland dip does not count as sea) and
+   * the connected components of fresh water.
+   */
+  function waterTopologyAt(N, land) {
+    const n = N * N;
+    const nbr4 = j => { const x = j % N, y = (j / N) | 0; return [((x + 1) % N) + y * N, ((x + N - 1) % N) + y * N, x + ((y + 1) % N) * N, x + ((y + N - 1) % N) * N]; };
+    const sc = new Int32Array(n).fill(-1), size = [];
+    let id = 0;
+    for (let s0 = 0; s0 < n; s0++) {
+      if (land[s0] !== 0 || sc[s0] >= 0) continue;
+      const st = [s0]; sc[s0] = id; let sz = 0;
+      while (st.length) { const c = st.pop(); sz++; for (const q of nbr4(c)) if (land[q] === 0 && sc[q] < 0) { sc[q] = id; st.push(q); } }
+      size.push(sz); id++;
+    }
+    let seaId = -1, seaSz = -1;
+    for (let i = 0; i < size.length; i++) if (size[i] > seaSz) { seaSz = size[i]; seaId = i; }
+    const distO = new Float32Array(n).fill(Infinity);
+    const D = Math.SQRT2, wrap = v => ((v % N) + N) % N;
+    for (let i = 0; i < n; i++) if (sc[i] === seaId) distO[i] = 0;
+    const at = (x, y) => distO[wrap(y) * N + wrap(x)];
+    for (let pass = 0; pass < 4; pass++) {
+      for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+        const i = y * N + x;
+        const m = Math.min(distO[i], at(x - 1, y) + 1, at(x, y - 1) + 1, at(x - 1, y - 1) + D, at(x + 1, y - 1) + D);
+        if (m < distO[i]) distO[i] = m;
+      }
+      for (let y = N - 1; y >= 0; y--) for (let x = N - 1; x >= 0; x--) {
+        const i = y * N + x;
+        const m = Math.min(distO[i], at(x + 1, y) + 1, at(x, y + 1) + 1, at(x + 1, y + 1) + D, at(x - 1, y + 1) + D);
+        if (m < distO[i]) distO[i] = m;
+      }
+    }
+    const seen = new Uint8Array(n), groups = [];
+    for (let j = 0; j < n; j++) {
+      if (land[j] !== 2 || seen[j]) continue;
+      const st = [j]; seen[j] = 1; const cells = [];
+      while (st.length) { const c = st.pop(); cells.push(c); for (const q of nbr4(c)) if (land[q] === 2 && !seen[q]) { seen[q] = 1; st.push(q); } }
+      groups.push(cells);
+    }
+    return { distO: distO, groups: groups };
+  }
+
+  /**
+   * The three things solveWaterSurface reads, built on the export lattice: which cells are fresh water,
+   * a first guess at each one's surface, and how far that water is from its own edge. The guess is simply
+   * the ground the cell sits on - the same starting point the import path has, and the same one the solver
+   * is written to correct.
+   */
+  function waterFieldsAt(N, fine) {
+    const n = N * N;
+    const land = new Uint8Array(n), wsurf = new Float32Array(n), fromShore = new Int16Array(n).fill(-1);
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      const i = y * N + x;
+      wsurf[i] = fine[i];
+      land[i] = sampleG(water, N, x, y) ? 2 : (fine[i] >= SEA_LEVEL + 0.005 ? 1 : 0);
+    }
+    const q = [];
+    for (let i = 0; i < n; i++) if (land[i] !== 2) { fromShore[i] = 0; q.push(i); }
+    for (let h = 0; h < q.length; h++) {
+      const c = q[h], x = c % N, y = (c / N) | 0;
+      for (const nb of [y * N + (x + 1) % N, y * N + (x + N - 1) % N, ((y + 1) % N) * N + x, ((y + N - 1) % N) * N + x])
+        if (fromShore[nb] < 0) { fromShore[nb] = fromShore[c] + 1; q.push(nb); }
+    }
+    return { land: land, wsurf: wsurf, fromShore: fromShore };
+  }
+
   /** Water cells and their immediate neighbours, so added detail never breaks a channel or a bank. */
   function nearWater() {
     const out = new Uint8Array(G * G);
@@ -11333,25 +11451,45 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
   async function buildBundleFiles() {
     const cfg = buildExportJson();              // the WorldGenerator.eco (main-thread), current form values
     // Raw maps (what the mod actually reads — unambiguous, no PNG decode). Generation orientation, row-major.
-    const terrain = computeTerrain();           // carved height + water-surface per cell
     const worldBlocks = ((typeof readForm === 'function' ? (readForm().worldWidth | 0) : 0) || 72) * 10;
     const N = exportRes(worldBlocks);
-    // Height gets the export lattice; the water surface stays on the paint grid and is read nearest. Both
-    // alternatives were generated and measured: carving on the export lattice tilts every lake edge (25% of
-    // lake water off its own level), and interpolating a spread-out surface field trades that back against
-    // rivers arriving high. Nearest off computeTerrain is the best of the three, and the residual is
-    // recorded in the report rather than papered over.
-    const fine = exportHeight(terrain.height, N, worldBlocks, nearWater());
+    // The water surface is SOLVED on the export lattice, by the same passes the image import uses. Every
+    // cell starts with the level of the ground it sits on, which is wrong in the three ways
+    // solveWaterSurface exists to fix - a spike stands proud, a course drawn across a slope keeps a
+    // different level on each bank, and a lake holds one level per shore. Doing it here rather than on the
+    // paint grid also settles it at the export's own pitch instead of 5.6 world blocks at a time.
+    const base = computeHeightField();          // uncarved: the water passes decide what the channel does
+    const fine = exportHeight(base, N, worldBlocks, nearWater());
+    const wf = waterFieldsAt(N, fine);
+    const topo = waterTopologyAt(N, wf.land);
+    const settled = settleWaterLevels(N, N * N, wf.land, fine, topo.distO, worldBlocks / N, topo.groups, boxBlurTor);
+    for (let i = 0; i < N * N; i++)
+      if (wf.land[i] === 2) wf.wsurf[i] = Math.max(SEA_LEVEL + 0.01, settled.level[i] - 0.012);   // just under the bank
+    solveWaterSurface(N, wf.land, wf.wsurf, settled.fromShore);
+    // Levelling a lake takes its dominant level, which does not know how near the sea it is - so put the
+    // coast envelope back on afterwards, or a body beside the shore keeps an inland level.
+    for (let i = 0; i < N * N; i++)
+      if (wf.land[i] === 2) wf.wsurf[i] = Math.min(wf.wsurf[i], settled.seaCapAt[i] - 0.012);
     const biomeBin = new Uint8Array(N * N);     // per-cell score-class index (matches the mod's BIOME_BY_INDEX)
     const heightBin = new Uint8Array(N * N);    // per-cell height byte 0..255 (mod maps to [-1,1], then bilinear-upscales)
     const waterBin = new Uint8Array(N * N);     // per-cell water surface as waterValue*255 (0 = sea level; mod fills to it)
-    let anyWater = false;
-    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
-      const i = y * N + x;
-      biomeBin[i] = sampleG(target, N, x, y);
-      heightBin[i] = Math.max(0, Math.min(255, Math.round(fine[i] * 255)));
-      waterBin[i] = Math.max(0, Math.min(255, Math.round(sampleG(terrain.waterVal, N, x, y) * 255)));
+    for (let i = 0; i < N * N; i++) {
+      if (wf.land[i] !== 2) continue;
+      const surface = Math.max(SEA_LEVEL + 0.01, wf.wsurf[i]);
+      wf.wsurf[i] = surface;
+      waterBin[i] = Math.max(1, Math.min(255, Math.round((2 * surface - 1) * 255)));
     }
+    // The ground either side: cap the ring so it is not a ledge, then put the shore back above the water.
+    capBankLip(N, wf.land, wf.wsurf, fine);
+    restoreShoreLip(N, wf.land, wf.wsurf, fine);
+    // The bed shelves up at the edges and deepens away from them. A flat bed a fixed depth down puts a step
+    // at every shoreline that Eco's CliffExtruder turns into a rock face - measured on a seeded world
+    // without this, 41-44% of shoreline pairs cleared that threshold where a stock world has none.
+    const bedN = new Float32Array(N * N);
+    shelveWaterBed(N, N * N, wf.land, wf.wsurf, bedN, worldBlocks / N);
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) biomeBin[y * N + x] = sampleG(target, N, x, y);
+    writeExportColumns(N, N * N, wf.land, fine, bedN, wf.wsurf, waterBin, heightBin);
+    let anyWater = false;
     for (let i = 0; i < G * G; i++) if (water[i]) { anyWater = true; break; }
     // A pure image import exports hi-res biome + height straight from the source image (the G² paint
     // grid would spread several world blocks over every pixel). Hand-painting over the import opts back out.

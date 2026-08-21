@@ -148,16 +148,14 @@ function classGridAt(polys, worldSize, G, opts) {
   return downsampleMajority(rasterClassR(polys, worldSize, R, opts), R, G);
 }
 
-// Where the map's FRESH water is, on the designer's paint grid, AND how high it sits. Two sources, and
+// Where the map's FRESH water is, on the designer's paint grid. Two sources, and
 // neither survives the class grid: a lake is flattened into the Ocean class there, and a river is one cell
 // wide, which majority downsampling erases outright. Lakes take ANY covered pixel rather than a majority
 // for the same reason - a lake narrower than a paint cell still has to leave water behind.
 //
-// The elevations matter as much as the mask. A water cell whose height is left to the surrounding terrain
-// takes the LOCAL land height, so a lake ends up at as many levels as the ground under it has, and a river
-// climbs whatever it crosses. The map already solved that - its lakes are flat and its rivers run downhill
-// to the sea - so its own elevations come across too, converted from the generator's [-1,1] (0 = sea) into
-// the designer's [0,1] (0.5 = sea).
+// Only the mask. How high the water stands is settled at export time against the DESIGN'S terrain, which is
+// not the map's: the design's land comes from the biome bands and the paint grid, so a level carried over
+// from the map describes ground that was never put there.
 function waterGridAt(polys, rivers, worldSize, G) {
   const mask = new Uint8Array(G * G);      // 1 = lake, 2 = river; the two are levelled differently
   const elev = new Float32Array(G * G);
