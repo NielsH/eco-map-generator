@@ -123,8 +123,10 @@ onmessage = function (e) {
   if (m.type === 'classgrid') {   // coarse class-grid signature of the current map (for "seed from current map")
     try {
       if (!lastRes) { postMessage({ type: 'classgrid', grid: null }); return; }
-      const grid = classGridAt(lastRes.polys, lastRes.worldSize, m.G);
-      postMessage({ type: 'classgrid', G: m.G, grid }, [grid.buffer]);
+      const grid = classGridAt(lastRes.polys, lastRes.worldSize, m.G, { lakesAsLand: true });
+      const w = waterGridAt(lastRes.polys, lastRes.rivers, lastRes.worldSize, m.G);
+      postMessage({ type: 'classgrid', G: m.G, grid, water: w.mask, waterElev: w.elev },
+                  [grid.buffer, w.mask.buffer, w.elev.buffer]);
     } catch (err) { postMessage({ type: 'search-error', message: String(err && err.stack || err) }); }
   }
   if (m.type === 'search-init') { sTarget = m.target; sG = m.G; sW = m.layoutWeight; postMessage({ type: 'search-ready' }); }
