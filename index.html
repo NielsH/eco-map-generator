@@ -11626,8 +11626,10 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
       hi = imageToMaps(IMPORT_RES, wwCells / IMPORT_RES); biomeOut = hi.biome; heightOut = hi.height;
       waterOut = hi.water; anyWater = hi.water.some(v => v > 0);   // enclosed water in the image -> lakes
     }
-    return { res: hi ? hi.res : N, biome: biomeOut, height: heightOut, water: waterOut,
-             anyWater: anyWater, paintHeight: heightBin };
+    // `hiRes` is 0 unless this came from a pure image import - the bundle reports it, and it is the only
+    // thing left in buildBundleFiles that depended on `hi`, which lives here now.
+    return { res: hi ? hi.res : N, hiRes: hi ? hi.res : 0, biome: biomeOut, height: heightOut,
+             water: waterOut, anyWater: anyWater, paintHeight: heightBin };
   }
 
   async function buildBundleFiles() {
@@ -11651,7 +11653,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     const design = { v: 1, G: G, importMode: importMode, paintRoughness: paintRoughness, elevValue: elevValue, layoutWeight: layoutWeight,
       target: abToB64(target.buffer), elev: abToB64(elev.buffer), elevPainted: abToB64(elevPainted.buffer), rough: abToB64(rough.buffer), water: abToB64(water.buffer) };
     files.push({ name: 'design.json', data: strBytes(JSON.stringify(design)) });
-    return { size: (cfg && findWorldWidth(cfg)) || 72, files: files, hiRes: hi ? hi.res : 0 };
+    return { size: (cfg && findWorldWidth(cfg)) || 72, files: files, hiRes: m.hiRes };
   }
 
   // ---- hosted generation: POST the bundle to eco-worldgen-service, then poll status inline ----

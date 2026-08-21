@@ -32,6 +32,7 @@
 //   the ground behind the bank is brought down     valleyBanks / capShoreBand are not run
 //   one coast bound per body of open water         the envelope is re-applied cell by cell again
 //   the export path runs the whole chain            a pass is dropped, or a caller bypasses buildExportMaps
+//   the export functions declare what they use      a refactor moves a local out and leaves it referenced
 //   an unseeded design is recognised as empty       designIsEmpty stops at the first cell it looks at
 //   a new map re-seeds an untouched design          shouldReseed only ever fires on an empty design
 //   an edited design is never replaced              shouldReseed ignores the edited flag
@@ -356,6 +357,15 @@ check('the coast envelope survives lake levelling', chain.overBefore > 0 && chai
   for (const u of users) missing.push(u + ' does not go through buildExportMaps');
   check('the export path runs the whole chain', at >= 0 && missing.length === 0,
     missing.length ? 'buildBundleFiles never calls ' + missing.join(', ') : 'all eight water passes are called');
+}
+
+// Nothing here can RUN buildBundleFiles - it wants a canvas, a form and a config - so a name left behind by
+// a refactor is invisible to every other check and shows up only as a broken Generate button.
+{
+  const src = require('fs').readFileSync(H.SRC, 'utf8');
+  const free = require('./free-identifiers.js').freeIdentifiers(src, ['buildExportMaps', 'buildBundleFiles', 'build3DPayload']);
+  check('the export functions declare what they use', free.length === 0,
+    free.length ? free.join('; ') : 'buildExportMaps, buildBundleFiles and build3DPayload reference nothing undeclared');
 }
 
 // ---- the two guards on the page ------------------------------------------------------------------
