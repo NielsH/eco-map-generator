@@ -27,6 +27,8 @@
 //   the shore sits above the water it holds         restoreShoreLip is not run on the seeded path
 //   the bed shelves up at the shoreline             shelveWaterBed is not run on the seeded path
 //   the coast envelope survives lake levelling      the cap is not re-applied after solveWaterSurface
+//   the ground behind the bank is brought down     valleyBanks / capShoreBand are not run
+//   one coast bound per body of open water         the envelope is re-applied cell by cell again
 //   the export path runs the whole chain            any one of the passes is dropped from buildBundleFiles
 //   an unseeded design is recognised as empty       designIsEmpty stops at the first cell it looks at
 //   a new map re-seeds an untouched design          shouldReseed only ever fires on an empty design
@@ -136,6 +138,8 @@ const CH = (function () {
   for (let x = 56; x < 100; x++) wet[47 * G + x] = 1;                               // its outflow
   for (let y = 0; y < G; y++) for (let x = 100; x < G; x++) target[y * G + x] = H.SC.Ocean;   // the sea
   for (let y = 14; y < 26; y++) for (let x = 14; x < 26; x++) target[y * G + x] = H.SC.Ocean;   // and an inland pool
+  for (let y = 70; y < 88; y++) for (let x = 78; x < 96; x++) wet[y * G + x] = 1;   // a lake against the coast,
+  // where the sea envelope still has a gradient across the body - which is what the per-cell clamp cut into
   return { target: target, water: wet };
 })();
 
@@ -146,7 +150,9 @@ const chain = H.run(
    'const:OCEAN_FALLOFF', 'fn:h2', 'fn:vnW', 'fn:vnR', 'fn:fbm', 'fn:boxBlurTor', 'fn:oceanDistField',
    'fn:computeHeightField', 'fn:exportRes', 'fn:sampleG', 'fn:exportHeight', 'fn:nearWater',
    'fn:waterFieldsAt', 'fn:waterTopologyAt', 'fn:settleWaterLevels', 'fn:solveWaterSurface',
-   'fn:capBankLip', 'fn:restoreShoreLip', 'fn:shelveWaterBed'],
+   'fn:capBankLip', 'fn:restoreShoreLip', 'fn:shelveWaterBed', 'fn:vnR',
+   'const:VALLEY_SHOULDER_MIN', 'const:VALLEY_RISE_MIN', 'const:BLUFF_KEEP', 'const:valleyAt',
+   'fn:bankProfileFields', 'fn:valleyBanks', 'fn:capShoreBand'],
   { target: CH.target, water: CH.water, elev: new Float32Array(G * G), elevPainted: new Uint8Array(G * G),
     rough: new Float32Array(G * G), SC: H.SC, CN: H.SCLASS },
   [
@@ -162,11 +168,16 @@ const chain = H.run(
     'for (let i = 0; i < N * N; i++) if (wf.land[i] === 2) wf.wsurf[i] = Math.min(wf.wsurf[i], settled.seaCapAt[i] - 0.012);',
     'let overAfter = 0;',
     'for (let i = 0; i < N * N; i++) if (wf.land[i] === 2 && wf.wsurf[i] > settled.seaCapAt[i] - 0.012 + 1e-9) overAfter++;',
+    'const before = Float32Array.from(fine);',
+    'const prof = bankProfileFields(N, N * N, wf.wsurf, settled.aroundLand);',
+    'valleyBanks(N, N * N, wf.land, wf.wsurf, fine, prof);',
     'capBankLip(N, wf.land, wf.wsurf, fine);',
+    'restoreShoreLip(N, wf.land, wf.wsurf, fine);',
+    'capShoreBand(N, N * N, wf.land, wf.wsurf, fine, prof, settled.aroundLand, settled.SETTLE_MARGIN);',
     'restoreShoreLip(N, wf.land, wf.wsurf, fine);',
     'const bed = new Float32Array(N * N);',
     'shelveWaterBed(N, N * N, wf.land, wf.wsurf, bed, WB / N);',
-    'return { N: N, land: wf.land, wsurf: wf.wsurf, fine: fine, bed: bed, groups: topo.groups.length, fromShore: settled.fromShore, distO: topo.distO, overBefore: overBefore.length, overAfter: overAfter };',
+    'return { N: N, land: wf.land, wsurf: wf.wsurf, fine: fine, before: before, bed: bed, groups: topo.groups.length, fromShore: settled.fromShore, distO: topo.distO, overBefore: overBefore.length, overAfter: overAfter, seaCapAt: settled.seaCapAt };',
   ].join(String.fromCharCode(10)));
 
 const NN = chain.N, NN0 = chain.N, BLOCKS = 120;
@@ -227,6 +238,57 @@ for (let i = 0; i < NN * NN; i++) {
 check('the bed shelves up at the shoreline', steps === 0,
   steps + ' bed-to-bank pairs step 5+ blocks; Eco builds a rock face at 5, so that is a wall around the water');
 
+// The bank may not be the high point of its own surroundings. `capBankLip` only holds the ring that TOUCHES
+// the water; the ground a few metres back is free to be whatever the height field says, so a course cut
+// through high ground keeps a wall along it. Measured on generated worlds, 63-85% of proud shore rays came
+// from banks climbing 8+ blocks within 4 m, a class stock has none of - so this looks BEHIND the ring.
+{
+  const dist = new Int32Array(NN * NN).fill(-1), q = [];
+  for (let i = 0; i < NN * NN; i++) if (chain.land[i] === 2) { dist[i] = 0; q.push(i); }
+  const surfNear = new Float32Array(NN * NN);
+  for (const i of q) surfNear[i] = chain.wsurf[i];
+  for (let h = 0; h < q.length; h++) {
+    const c = q[h], x = c % NN, y = (c / NN) | 0;
+    if (dist[c] >= 5) continue;
+    for (const nb of [y * NN + (x + 1) % NN, y * NN + (x + NN - 1) % NN, ((y + 1) % NN) * NN + x, ((y + NN - 1) % NN) * NN + x])
+      if (dist[nb] < 0 && chain.land[nb] === 1) { dist[nb] = dist[c] + 1; surfNear[nb] = surfNear[c]; q.push(nb); }
+  }
+  let wallsBefore = 0, wallsAfter = 0, band = 0;
+  for (let i = 0; i < NN * NN; i++) {
+    if (chain.land[i] !== 1 || dist[i] < 2 || dist[i] > 5) continue;   // the ground BEHIND the ring
+    band++;
+    if ((chain.before[i] - surfNear[i]) * BLOCKS >= 5) wallsBefore++;
+    if ((chain.fine[i]   - surfNear[i]) * BLOCKS >= 5) wallsAfter++;
+  }
+  check('the ground behind the bank is brought down', wallsBefore > 0 && wallsAfter < wallsBefore * 0.6,
+    wallsBefore + ' of ' + band + ' cells 2-5 back from the water stood 5+ blocks over it before the valley passes, ' + wallsAfter + ' after');
+}
+
+// The envelope tightens toward the sea, so re-applying it CELL BY CELL cuts a wedge off the seaward side of
+// a body that was just levelled - which is the very defect the levelling exists to remove. The contract is
+// that water levelled as one body carries ONE bound.
+{
+  const seen = new Uint8Array(NN * NN);
+  let bodies = 0, split = 0;
+  for (let i = 0; i < NN * NN; i++) {
+    if (seen[i] || chain.land[i] !== 2) continue;
+    const st = [i]; seen[i] = 1; const cells = [];
+    while (st.length) {
+      const c = st.pop(); cells.push(c);
+      const x = c % NN, y = (c / NN) | 0;
+      for (const nb of [y * NN + (x + 1) % NN, y * NN + (x + NN - 1) % NN, ((y + 1) % NN) * NN + x, ((y + NN - 1) % NN) * NN + x])
+        if (!seen[nb] && chain.land[nb] === 2) { seen[nb] = 1; st.push(nb); }
+    }
+    const open = cells.filter(c => chain.fromShore[c] >= 4);
+    if (open.length < 20) continue;
+    bodies++;
+    const caps = new Set(open.map(c => Math.round(chain.seaCapAt[c] * 1e6)));
+    if (caps.size > 1) split++;
+  }
+  check('one coast bound per body of open water', bodies > 0 && split === 0,
+    bodies + ' bodies of open water, ' + split + ' of them carrying more than one bound - a step cut into a level lake');
+}
+
 // Levelling a lake takes the body's dominant level, which knows nothing about how near the sea it is, so it
 // can lift a coastal body back over the envelope settleWaterLevels put on it. Measured on a generated world
 // before the cap was re-applied, 53.4% of the fresh water within sight of one coast stood 3 blocks over the
@@ -242,7 +304,8 @@ check('the coast envelope survives lake levelling', chain.overBefore > 0 && chai
   const at = src.indexOf('async function buildBundleFiles(');
   const exporter = at < 0 ? '' : src.slice(at, at + 6000);
   const missing = ['waterFieldsAt', 'waterTopologyAt', 'settleWaterLevels', 'solveWaterSurface',
-                   'capBankLip', 'restoreShoreLip', 'shelveWaterBed', 'writeExportColumns']
+                   'capBankLip', 'restoreShoreLip', 'shelveWaterBed', 'writeExportColumns',
+                   'bankProfileFields', 'valleyBanks', 'capShoreBand']
     .filter(fn => exporter.indexOf(fn + '(') < 0);
   if (exporter.indexOf('seaCapAt') < 0) missing.push('the coast envelope (seaCapAt)');
   check('the export path runs the whole chain', at >= 0 && missing.length === 0,
