@@ -11426,12 +11426,18 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
   const EXPORT_RES_MAX = 512;               // keeps the bundle inside the service's size limit
   const FINE_WAVE1 = 32, FINE_WAVE2 = 14;   // world blocks per cycle of the two added octaves
   const FINE_A1 = 0.12, FINE_A2 = 0.07;     // weights, against the three shipped octaves which sum to 1
-  const FINE_RELIEF = 0.65;                 // height range the added detail spans, as RELIEF_AMP does
+  const FINE_RELIEF = 0.45;                 // height range the added detail spans, as RELIEF_AMP does
   // Smooth noise spreads its relief evenly, which is the wrong shape: stock is mostly FLAT with the height
   // gathered into a few sharp risers, and adding a smooth field instead ruffles every tread - measured, it
   // buys the missing relief at the cost of two thirds of the flat building land. Snapping the added detail
   // to whole 3-block levels first keeps the treads flat and puts the height into steps you can see.
-  const FINE_STEP = 3 / 120;                // 3 blocks, in the [0,1] the height byte encodes (0 = off)
+  // 4 blocks, in the [0,1] the height byte encodes (0 = off). Bigger than the mod's own terrace level on
+  // purpose: what stock has and smooth detail does not is relief GATHERED - mostly flat ground with the
+  // height in a few sharp risers. Snapping to a coarser level leaves wider flat treads and puts the
+  // height into fewer, larger steps. Measured at the export's real pitch, going 3 -> 4 blocks took flat
+  // 5x5 building pads from 33-35% to 35-38% against stock's 37-40%, and the one-block share of the step
+  // mix from 77-81% to 75-78% against stock's 73-75%.
+  const FINE_STEP = 4 / 120;
 
   /** Export lattice for a world this many blocks across: a whole multiple of G, so the upsample is exact. */
   function exportRes(worldBlocks) {

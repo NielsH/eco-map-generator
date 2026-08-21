@@ -143,7 +143,7 @@ const detail = H.run(
     'return { N: N, out: out, low: low, step: FINE_STEP };',
   ].join('\n'));
 
-const LEVEL = 3 / 120;              // the terrace level the mod snaps to, in the height byte's [0,1]
+const LEVEL = 4 / 120;              // the level the added detail snaps to, in the height byte's [0,1]
 let moved = 0, onWater = 0, offLevel = 0;
 const scale = G / detail.N;
 for (let y = 0; y < detail.N; y++) for (let x = 0; x < detail.N; x++) {
