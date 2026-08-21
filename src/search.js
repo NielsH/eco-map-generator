@@ -28,8 +28,12 @@ const NAME_TO_CLASS = {
   Desert: SC.Desert, HighDesert: SC.Desert,
   Taiga: SC.Taiga, Tundra: SC.Tundra, Ice: SC.Ice, Wetland: SC.Wetland,
 };
-function classOfName(name, hasLake) {
-  if (hasLake) return SC.Ocean;                 // lakes render as water
+// `lakesAsLand` is for SEEDING A DESIGN rather than scoring one. Scoring wants a lake to read as water,
+// because that is how the painted target has it. A design wants the lake's own biome, with the lake itself
+// going into the water layer instead - left as Ocean the height field sinks it to sea level and it comes
+// back as a hole in the coast rather than a lake.
+function classOfName(name, hasLake, lakesAsLand) {
+  if (hasLake && !lakesAsLand) return SC.Ocean;   // lakes render as water
   const c = NAME_TO_CLASS[name];
   return c === undefined ? SC.Ocean : c;
 }
@@ -100,13 +104,13 @@ function fillPolyR(pts, R, cid, grid) {
   }
 }
 
-function rasterClassR(polys, worldSize, R) {
+function rasterClassR(polys, worldSize, R, opts) {
   const grid = new Uint8Array(R * R);   // 0 == Ocean, matching the server clearing biome map to ocean
   const sc = R / worldSize;
   const sp = [];
   for (let pi = 0; pi < polys.length; pi++) {
     const p = polys[pi];
-    const cid = classOfName(p.biome.name, p.hasLake);
+    const cid = classOfName(p.biome.name, p.hasLake, opts && opts.lakesAsLand);
     const pts = p.points, n = pts.length;
     const cx = p.center.x * sc, cy = p.center.y * sc;
     sp.length = n;
@@ -139,9 +143,77 @@ function downsampleMajority(grid, R, G) {
 }
 
 // Turn generated polygons into the G x G class-grid "signature" used for scoring & previews.
-function classGridAt(polys, worldSize, G) {
+function classGridAt(polys, worldSize, G, opts) {
   const R = Math.min(worldSize, Math.max(4 * G, 256));   // a few intermediate px per coarse cell
-  return downsampleMajority(rasterClassR(polys, worldSize, R), R, G);
+  return downsampleMajority(rasterClassR(polys, worldSize, R, opts), R, G);
+}
+
+// Where the map's FRESH water is, on the designer's paint grid, AND how high it sits. Two sources, and
+// neither survives the class grid: a lake is flattened into the Ocean class there, and a river is one cell
+// wide, which majority downsampling erases outright. Lakes take ANY covered pixel rather than a majority
+// for the same reason - a lake narrower than a paint cell still has to leave water behind.
+//
+// The elevations matter as much as the mask. A water cell whose height is left to the surrounding terrain
+// takes the LOCAL land height, so a lake ends up at as many levels as the ground under it has, and a river
+// climbs whatever it crosses. The map already solved that - its lakes are flat and its rivers run downhill
+// to the sea - so its own elevations come across too, converted from the generator's [-1,1] (0 = sea) into
+// the designer's [0,1] (0.5 = sea).
+function waterGridAt(polys, rivers, worldSize, G) {
+  const mask = new Uint8Array(G * G);      // 1 = lake, 2 = river; the two are levelled differently
+  const elev = new Float32Array(G * G);
+  const toDesigner = e => 0.5 + Math.max(-1, Math.min(1, e)) * 0.5;
+  const R = Math.min(worldSize, Math.max(4 * G, 256));
+  const lake = new Uint8Array(R * R), lakeE = new Float32Array(R * R);
+  const s = R / worldSize;
+  for (let pi = 0; pi < polys.length; pi++) {
+    const p = polys[pi];
+    if (!p.hasLake) continue;
+    const pts = p.points, n = pts.length, sp = new Array(n);
+    const cx = p.center.x * s, cy = p.center.y * s;
+    for (let i = 0; i < n; i++) {
+      const x = pts[i].x * s, y = pts[i].y * s;
+      const dx = x - cx, dy = y - cy, len = Math.hypot(dx, dy) || 1;
+      sp[i] = { x: x + dx / len * 0.9, y: y + dy / len * 0.9 };
+    }
+    const before = lake.slice();
+    fillPolyR(sp, R, 1, lake);
+    const e = toDesigner(p.elevation);
+    for (let i = 0; i < lake.length; i++) if (lake[i] && !before[i]) lakeE[i] = e;
+  }
+  const bs = R / G;
+  for (let gy = 0; gy < G; gy++) {
+    const y0 = Math.floor(gy * bs), y1 = Math.max(y0 + 1, Math.min(R, Math.floor((gy + 1) * bs)));
+    for (let gx = 0; gx < G; gx++) {
+      const x0 = Math.floor(gx * bs), x1 = Math.max(x0 + 1, Math.min(R, Math.floor((gx + 1) * bs)));
+      let hit = 0, lowest = Infinity;
+      for (let y = y0; y < y1; y++) { const row = y * R; for (let x = x0; x < x1; x++) if (lake[row + x]) { hit = 1; if (lakeE[row + x] < lowest) lowest = lakeE[row + x]; } }
+      if (hit) { mask[gy * G + gx] = 1; elev[gy * G + gx] = lowest; }   // lake
+    }
+  }
+  // rivers arrive as runs of cells; step along each leg finely enough that the trail never breaks
+  const g = G / worldSize;
+  const at = c => (c && c.center) ? c.center : c;
+  const heightOf = c => (c && c.elevation !== undefined) ? c.elevation : (c && c.e !== undefined ? c.e : 0);
+  const put = (x, y, e) => {
+    const gx = ((Math.floor(x * g) % G) + G) % G, gy = ((Math.floor(y * g) % G) + G) % G;
+    const i = gy * G + gx;
+    if (!mask[i] || e < elev[i]) elev[i] = e;      // where a river meets a lake, the lower surface wins
+    if (!mask[i]) mask[i] = 2;                    // river, unless a lake already claimed the cell
+  };
+  for (const river of rivers || []) {
+    for (let i = 1; i < river.length; i++) {
+      const a = at(river[i - 1]), b = at(river[i]);
+      if (!a || !b) continue;
+      const ea = toDesigner(heightOf(river[i - 1])), eb = toDesigner(heightOf(river[i]));
+      const steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) * g * 2));
+      for (let k = 0; k <= steps; k++) {
+        const t = k / steps;
+        put(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, ea + (eb - ea) * t);
+      }
+    }
+    if (river.length === 1) { const a = at(river[0]); if (a) put(a.x, a.y, toDesigner(heightOf(river[0]))); }
+  }
+  return { mask, elev };
 }
 
 // ---- similarity scoring ------------------------------------------------------------------------
@@ -229,4 +301,4 @@ function scoreGrids(target, cand, G, opts) {
   return { score: b.score, prop, soft, exact: exactFrac, iou, layout: b.layout, shift: [bestSx, bestSy] };
 }
 
-if (typeof module !== 'undefined') module.exports = { SCLASS, NUM_CLASSES, SC, DIST, classOfName, classGridAt, scoreGrids, proportionScore, rasterClassR, downsampleMajority, histogram, bestShift, blendScore };
+if (typeof module !== 'undefined') module.exports = { SCLASS, NUM_CLASSES, SC, DIST, classOfName, classGridAt, waterGridAt, scoreGrids, proportionScore, rasterClassR, downsampleMajority, histogram, bestShift, blendScore };

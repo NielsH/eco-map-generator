@@ -70,6 +70,8 @@
   let galShow = 12, gallerySort = 'score', galleryMin = 0;   // gallery view state (Find mode)
   let workers = [], running = false, evaluated = 0, tStart = 0, seedSet = new Set(), lastUiPaint = 0;
   let classgridBound = false, painting = false, built = false, cfgBySeed = {}, poolTargetSig = null;
+  let seededFrom = null;        // the map result this design was seeded from, so a new map can re-seed it
+  let designEdited = false;     // set by any paint or import; an edited design is never re-seeded under the user
   let undoStack = [], lastGX = -1, lastGY = -1;
   let lastTerrain = null;                       // last computed {height,waterVal} — for the elevation hover readout
   // image-import color legend: dominant source colors + their (user-overridable) biome assignment
@@ -1673,7 +1675,8 @@
     for (let y = 0; y < W; y++) { const gy = G - 1 - y; for (let x = 0; x < W; x++) { if (water[gy * G + x]) { const o = (y * W + x) * 4; d[o] = 30; d[o + 1] = 110; d[o + 2] = 230; } } }
     ctx.putImageData(img, 0, 0);
   }
-  function pushUndo() { undoStack.push({ t: target.slice(), e: elev.slice(), p: elevPainted.slice(), w: water.slice(), r: rough.slice() }); if (undoStack.length > 40) undoStack.shift(); }
+  // Every mutation goes through here, so it is also where the design stops being a straight copy of the map.
+  function pushUndo() { designEdited = true; undoStack.push({ t: target.slice(), e: elev.slice(), p: elevPainted.slice(), w: water.slice(), r: rough.slice() }); if (undoStack.length > 40) undoStack.shift(); }
   function undo() { if (!undoStack.length) return; const s = undoStack.pop(); target = s.t; elev = s.e; elevPainted = s.p; water = s.w; rough = s.r; renderPaint(); }
   function onPointer(e) {
     const cv = $('dsnCanvas'), r = cv.getBoundingClientRect();
@@ -1774,6 +1777,11 @@
     // where it was drawn. imageToMaps applies the same floor at its finalize step, after all of ITS
     // smoothing, for the same reason; this keeps the painted path's promise identical to the imported one.
     for (let i = 0; i < G * G; i++) if (dryLand[i] && a[i] < 0.505) a[i] = 0.505;
+    // A water surface has to hold after the blur too, and for a sharper reason than the floor: a lake is
+    // one level by definition, and averaging its cells against the banks around it tilts that level cell by
+    // cell. Measured on a design seeded from a map, leaving the blur to it put 42% of the lake water off
+    // its own lake's level, where a stock world has none.
+    for (let i = 0; i < G * G; i++) if (water[i] && elevPainted[i]) a[i] = elev[i];
     return a;
   }
   // Final terrain for export + height preview: the base field, with painted rivers/lakes carved into a
@@ -1853,12 +1861,72 @@
       st.push(x + ((y + G - 1) % G) * G); st.push(x + ((y + 1) % G) * G);
     }
   }
+  /** A design that is still blank ocean everywhere - it has not been seeded, or it was just cleared. */
+  function designIsEmpty(t) {
+    for (let i = 0; i < t.length; i++) if (t[i] !== SC.Ocean) return false;
+    return true;
+  }
+
+  // Re-seed for a map the design has not seen. Without this, rolling a new map and reopening the designer
+  // silently regenerates the PREVIOUS design with only the config seed changed - two worlds generated that
+  // way from different seeds came out 97.6% identical. An edited design is never replaced under the user.
+  function shouldReseed(empty, edited, mapChanged) { return empty || (!edited && mapChanged); }
+
   function seedFromMap() {
     if (typeof result === 'undefined' || !result) { $('dsnAnalysis').textContent = 'Generate a map first, then seed from it.'; return; }
     pushUndo();
-    if (!classgridBound) { worker.addEventListener('message', ev => { if (ev.data && ev.data.type === 'classgrid' && ev.data.grid) { target = new Uint8Array(ev.data.grid); hideLegend(); renderPaint(); flashAnalysis('Seeded from the current map. Edit it, then analyze.'); } }); classgridBound = true; }
+    if (!classgridBound) {
+      worker.addEventListener('message', ev => {
+        if (!(ev.data && ev.data.type === 'classgrid' && ev.data.grid)) return;
+        target = new Uint8Array(ev.data.grid);
+        // The map's lakes and rivers come across too. Without them the design exports no water at all and
+        // the generated world has none - no rivers, no lakes, and no river sand along either. Their heights
+        // come with them and are pinned as painted elevation: left to the surrounding terrain a lake takes
+        // the local land height cell by cell and ends up at as many levels as the ground it covers.
+        if (ev.data.water) {
+          water = new Uint8Array(ev.data.water);
+          levelSeededWater();
+        }
+        seededFrom = result; designEdited = false;
+        hideLegend(); renderPaint(); flashAnalysis('Seeded from the current map. Edit it, then analyze.');
+      });
+      classgridBound = true;
+    }
     worker.postMessage({ type: 'classgrid', G: G });
   }
+  /**
+   * Give the seeded water a surface that belongs to THIS terrain. The map's own elevations cannot be used
+   * directly: the design's land comes from the biome bands and the paint grid, not from the map's heights,
+   * so a lake carrying its map elevation ends up standing over ground that was never put there - measured,
+   * water 17 blocks above the sea within sight of the coast, where stock never exceeds +1.
+   *
+   * So the level is read off the terrain the design actually has. A lake is one level by definition and
+   * takes the lowest ground it covers; a river follows the ground down, which is what makes it descend.
+   * Both are pinned as painted elevation so the blur cannot tilt them afterwards.
+   */
+  function levelSeededWater() {
+    const natural = computeHeightField();          // before any water is pinned: the bare terrain
+    const seen = new Uint8Array(G * G);
+    for (let i = 0; i < G * G; i++) {
+      if (water[i] !== 2) continue;                // rivers follow the ground they cross
+      elev[i] = natural[i]; elevPainted[i] = 1; rough[i] = 0;
+    }
+    for (let i = 0; i < G * G; i++) {
+      if (seen[i] || water[i] !== 1) continue;
+      const cells = [i]; seen[i] = 1;
+      let low = natural[i];
+      for (let h = 0; h < cells.length; h++) {
+        const c = cells[h], x = c % G, y = (c / G) | 0;
+        if (natural[c] < low) low = natural[c];
+        for (const n of [y * G + (x + 1) % G, y * G + (x + G - 1) % G,
+                         ((y + 1) % G) * G + x, ((y + G - 1) % G) * G + x])
+          if (!seen[n] && water[n] === 1) { seen[n] = 1; cells.push(n); }
+      }
+      for (const c of cells) { elev[c] = low; elevPainted[c] = 1; rough[c] = 0; }
+    }
+    for (let i = 0; i < G * G; i++) if (water[i]) water[i] = 1;   // downstream only cares that it is wet
+  }
+
   function flashAnalysis(msg) { $('dsnAnalysis').innerHTML = '<b>' + msg + '</b>'; }
 
   // ================================================================= inversion
@@ -2141,8 +2209,9 @@
     if (cfp) { cfp._dsnPrev = cfp.style.display; cfp.style.display = 'none'; }
     $('designWrap').style.display = 'block';   // Underground (#chartsPanel) stays visible below, usable while designing
     // first time in: seed the canvas from the current map so there's something to edit (not blank ocean)
-    let empty = true; for (let i = 0; i < target.length; i++) if (target[i] !== SC.Ocean) { empty = false; break; }
-    if (empty && typeof result !== 'undefined' && result) seedFromMap();
+    const haveMap = typeof result !== 'undefined' && result;
+    if (haveMap && shouldReseed(designIsEmpty(target), designEdited, seededFrom !== result)) seedFromMap();
+    else if (haveMap && designEdited && seededFrom !== result) flashAnalysis('The map changed. This design is still the one you edited — "Seed from current map" replaces it.');
     updateSpeedHint();
     const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target);
     renderPaint();
@@ -2211,20 +2280,102 @@
     out.set(end, p);
     return out;
   }
+  // ---- export detail -------------------------------------------------------------------------------
+  // The paint grid is 128 cells whatever the world size, so a designed 720-block world is upscaled from
+  // 5.6 world blocks per cell and the export simply contains nothing finer than that. Two things have to
+  // change together, and measuring them apart is what shows why: a finer export lattice alone buys almost
+  // nothing (there is no detail to carry) and finer octaves alone buy almost nothing (there is no lattice
+  // to put them on) - together they roughly double the relief the finished world has over 4 and 8 blocks.
+  // Frequencies are cycles across the whole map, so they are derived from world size; left fixed, a big
+  // world is always smoother than a small one.
+  const EXPORT_BLOCKS_PER_CELL = 2;         // the image-import path exports at ~2.7 and lands in stock's band
+  const EXPORT_RES_MAX = 512;               // keeps the bundle inside the service's size limit
+  const FINE_WAVE1 = 32, FINE_WAVE2 = 14;   // world blocks per cycle of the two added octaves
+  const FINE_A1 = 0.12, FINE_A2 = 0.07;     // weights, against the three shipped octaves which sum to 1
+  const FINE_RELIEF = 0.65;                 // height range the added detail spans, as RELIEF_AMP does
+  // Smooth noise spreads its relief evenly, which is the wrong shape: stock is mostly FLAT with the height
+  // gathered into a few sharp risers, and adding a smooth field instead ruffles every tread - measured, it
+  // buys the missing relief at the cost of two thirds of the flat building land. Snapping the added detail
+  // to whole 3-block levels first keeps the treads flat and puts the height into steps you can see.
+  const FINE_STEP = 3 / 120;                // 3 blocks, in the [0,1] the height byte encodes (0 = off)
+
+  /** Export lattice for a world this many blocks across: a whole multiple of G, so the upsample is exact. */
+  function exportRes(worldBlocks) {
+    if (!worldBlocks) return G;
+    const n = Math.round(worldBlocks / EXPORT_BLOCKS_PER_CELL / G) * G;
+    return Math.max(G, Math.min(EXPORT_RES_MAX, n));
+  }
+
+  /** Nearest-cell lookup from a paint-grid layer, for the categorical ones. */
+  function sampleG(layer, N, x, y) {
+    const gx = Math.min(G - 1, Math.floor(x * G / N)), gy = Math.min(G - 1, Math.floor(y * G / N));
+    return layer[gy * G + gx];
+  }
+
+  /**
+   * The carved height field on the export lattice: bilinear from the paint grid, plus the fine octaves it
+   * could never carry. Detail is held off the waterline and off the channels - the coastline and the rivers
+   * are the design's, and nothing here may move them.
+   */
+  function exportHeight(base, N, worldBlocks, wetNear) {
+    const out = new Float32Array(N * N);
+    const p1 = Math.max(2, Math.round(worldBlocks / FINE_WAVE1));
+    const p2 = Math.max(2, Math.round(worldBlocks / FINE_WAVE2));
+    const s = G / N;
+    for (let y = 0; y < N; y++) {
+      for (let x = 0; x < N; x++) {
+        const fx = x * s, fy = y * s;
+        const x0 = Math.floor(fx), y0 = Math.floor(fy), tx = fx - x0, ty = fy - y0;
+        const x1 = (x0 + 1) % G, y1 = (y0 + 1) % G;
+        const v = (base[y0 * G + x0] * (1 - tx) + base[y0 * G + x1] * tx) * (1 - ty)
+                + (base[y1 * G + x0] * (1 - tx) + base[y1 * G + x1] * tx) * ty;
+        const u = x / N, w = y / N;
+        const d = FINE_A1 * (vnW(u * p1 + 13, w * p1 + 29, p1) - 0.5)
+                + FINE_A2 * (vnW(u * p2 + 7,  w * p2 + 3,  p2) - 0.5);
+        const above = Math.min(1, Math.max(0, (v - 0.505) / 0.03));    // fade in just above sea level
+        const dry = sampleG(wetNear, N, x, y) ? 0 : 1;
+        let off = d * FINE_RELIEF;
+        if (FINE_STEP > 0) off = Math.round(off / FINE_STEP) * FINE_STEP;
+        out[y * N + x] = v + off * above * dry;
+      }
+    }
+    return out;
+  }
+
+  /** Water cells and their immediate neighbours, so added detail never breaks a channel or a bank. */
+  function nearWater() {
+    const out = new Uint8Array(G * G);
+    for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) {
+      if (!water[y * G + x]) continue;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++)
+        out[(((y + dy) % G + G) % G) * G + (((x + dx) % G + G) % G)] = 1;
+    }
+    return out;
+  }
+
   async function buildBundleFiles() {
     const cfg = buildExportJson();              // the WorldGenerator.eco (main-thread), current form values
     // Raw maps (what the mod actually reads — unambiguous, no PNG decode). Generation orientation, row-major.
     const terrain = computeTerrain();           // carved height + water-surface per cell
-    const biomeBin = new Uint8Array(G * G);     // per-cell score-class index (matches the mod's BIOME_BY_INDEX)
-    const heightBin = new Uint8Array(G * G);    // per-cell height byte 0..255 (mod maps to [-1,1], then bilinear-upscales)
-    const waterBin = new Uint8Array(G * G);     // per-cell water surface as waterValue*255 (0 = sea level; mod fills to it)
+    const worldBlocks = ((typeof readForm === 'function' ? (readForm().worldWidth | 0) : 0) || 72) * 10;
+    const N = exportRes(worldBlocks);
+    // Height gets the export lattice; the water surface stays on the paint grid and is read nearest. Both
+    // alternatives were generated and measured: carving on the export lattice tilts every lake edge (25% of
+    // lake water off its own level), and interpolating a spread-out surface field trades that back against
+    // rivers arriving high. Nearest off computeTerrain is the best of the three, and the residual is
+    // recorded in the report rather than papered over.
+    const fine = exportHeight(terrain.height, N, worldBlocks, nearWater());
+    const biomeBin = new Uint8Array(N * N);     // per-cell score-class index (matches the mod's BIOME_BY_INDEX)
+    const heightBin = new Uint8Array(N * N);    // per-cell height byte 0..255 (mod maps to [-1,1], then bilinear-upscales)
+    const waterBin = new Uint8Array(N * N);     // per-cell water surface as waterValue*255 (0 = sea level; mod fills to it)
     let anyWater = false;
-    for (let i = 0; i < G * G; i++) {
-      biomeBin[i] = target[i];
-      heightBin[i] = Math.max(0, Math.min(255, Math.round(terrain.height[i] * 255)));
-      waterBin[i] = Math.max(0, Math.min(255, Math.round(terrain.waterVal[i] * 255)));
-      if (water[i]) anyWater = true;
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      const i = y * N + x;
+      biomeBin[i] = sampleG(target, N, x, y);
+      heightBin[i] = Math.max(0, Math.min(255, Math.round(fine[i] * 255)));
+      waterBin[i] = Math.max(0, Math.min(255, Math.round(sampleG(terrain.waterVal, N, x, y) * 255)));
     }
+    for (let i = 0; i < G * G; i++) if (water[i]) { anyWater = true; break; }
     // A pure image import exports hi-res biome + height straight from the source image (the G² paint
     // grid would spread several world blocks over every pixel). Hand-painting over the import opts back out.
     let biomeOut = biomeBin, heightOut = heightBin, waterOut = waterBin, hi = null;
@@ -2235,7 +2386,7 @@
       hi = imageToMaps(IMPORT_RES, wwCells / IMPORT_RES); biomeOut = hi.biome; heightOut = hi.height;
       waterOut = hi.water; anyWater = hi.water.some(v => v > 0);   // enclosed water in the image -> lakes
     }
-    // PNGs kept for human inspection only (not read by the mod).
+    // PNGs kept for human inspection only (not read by the mod), so they stay at paint resolution.
     const biomePng = await gridToPng((x, y) => water[y * G + x] ? [40, 90, 200] : (ECO_BIOME_COLOR[CN[target[y * G + x]]] || ECO_BIOME_COLOR.Ocean));
     const heightPng = await gridToPng((x, y) => { const b = heightBin[y * G + x]; return [b, b, b]; });
     const files = [
@@ -2294,6 +2445,13 @@
     const ww = (typeof readForm === 'function') ? (readForm().worldWidth | 0) : 0;
     if (ww && (ww < 12 || ww > WORLDGEN_MAX_SIZE || ww % 4 !== 0)) {
       setGenLine('World size must be a multiple of 4 between 12 and ' + WORLDGEN_MAX_SIZE + ' (currently ' + ww + '). Adjust it in World settings.', true);
+      return;
+    }
+    // Seeding from the map is asynchronous, so the design can still be blank ocean a moment after the
+    // designer opens. Generating that produces a world with no land anywhere, and it takes minutes to find
+    // out. Check before spending them.
+    if (designIsEmpty(target)) {
+      setGenLine('This design is all ocean — wait a moment for it to seed from the map, or paint some land first.', true);
       return;
     }
     if (btn) btn.disabled = true;

@@ -51,6 +51,7 @@ jobs:
       - run: node test/verify-paint.js
       - run: node test/verify-export.js
       - run: node test/verify-search.js
+      - run: node test/verify-seed.js
 
       - name: index.html is in sync with src/
         run: |
