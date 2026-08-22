@@ -115,20 +115,71 @@ const canSpawnLake = b => isGrassland(b) || b === B.ColdForest || b === B.WarmFo
 
 // ---- polygon adjacency helpers ----
 function adjacentPolygons(polys, start, range) {
-  // memoized per (range, start); topology is constant within one generate()
+  // Memoized per (range, start); topology is constant within one generate(). The placement passes ask for
+  // the same neighbourhoods thousands of times, so the cache earns its keep - but it is also the single
+  // largest thing generate() builds, and it used to hold Sets. A Set of a few hundred small integers costs
+  // an order of magnitude more than the integers do: on a 120-chunk world this cache alone was 223 MB of
+  // the 297 MB a finished candidate held, and "Find a map" runs one candidate per worker across eight
+  // workers, which is what was putting the browser tab over its limit.
+  //
+  // Int32Array instead, in the same BFS discovery order the Set iterated in, so every caller sees exactly
+  // the same sequence. `_adjStamp` replaces the per-call visited Set with an epoch stamp, which costs one
+  // buffer per generate() instead of one Set per call and never needs clearing.
   const cache = polys._adjCache || (polys._adjCache = {});
   const byStart = cache[range] || (cache[range] = new Array(polys.length));
   if (byStart[start] !== undefined) return byStart[start];
-  const all = new Set([start]);
+  let st = polys._adjStamp;
+  if (!st || st.buf.length !== polys.length || st.epoch >= 2147483646) st = polys._adjStamp = { buf: new Int32Array(polys.length), epoch: 0 };
+  const seen = st.buf, ep = ++st.epoch;
+  seen[start] = ep;
+  const out = [];
   let pending = [start], next = [];
   for (let r = 1; r <= range; r++) {
-    for (const pi of pending) for (const q of polys[pi].adjacent) if (!all.has(q)) { all.add(q); next.push(q); }
+    for (const pi of pending) for (const q of polys[pi].adjacent) if (seen[q] !== ep) { seen[q] = ep; out.push(q); next.push(q); }
     pending = next; next = [];
   }
-  all.delete(start);
-  byStart[start] = all;
-  return all;
+  const res = Int32Array.from(out);
+  byStart[start] = res;
+  return res;
 }
+/**
+ * Reverse adjacency as a flat CSR index, built once per generate().
+ * `adjacent` is NOT guaranteed symmetric: it is read off the Voronoi edge list, and an edge belonging to a
+ * wrapped ghost site is only ever pushed to the in-range site's list, so i can name j without j naming i.
+ * Anything that turns "what can p reach" into "what can reach p" has to walk the reversed graph or it is
+ * quietly answering a different question.
+ */
+function reverseAdjacency(polys) {
+  if (polys._radj) return polys._radj;
+  const n = polys.length, start = new Int32Array(n + 1);
+  for (let i = 0; i < n; i++) for (const a of polys[i].adjacent) start[a + 1]++;
+  for (let i = 0; i < n; i++) start[i + 1] += start[i];
+  const flat = new Int32Array(start[n]), fill = start.slice(0, n);
+  for (let i = 0; i < n; i++) for (const a of polys[i].adjacent) flat[fill[a]++] = i;
+  return (polys._radj = { start, flat });
+}
+
+/**
+ * Flags every polygon that can reach one satisfying `pred` within `range` hops of its OWN adjacency -
+ * the same question `adjacentPolygons(polys, i, range)` answers per polygon, asked once for all of them.
+ * A source counts as reaching itself, which is what the placement passes want: they only ask it of ocean
+ * cells, and an ocean cell is never the land they are avoiding.
+ */
+function canReachWithin(polys, range, pred) {
+  const n = polys.length, flag = new Uint8Array(n), { start, flat } = reverseAdjacency(polys);
+  let frontier = [];
+  for (let i = 0; i < n; i++) if (pred(polys[i])) { flag[i] = 1; frontier.push(i); }
+  for (let r = 0; r < range && frontier.length; r++) {
+    const next = [];
+    for (const i of frontier) for (let k = start[i]; k < start[i + 1]; k++) { const q = flat[k]; if (!flag[q]) { flag[q] = 1; next.push(q); } }
+    frontier = next;
+  }
+  return flag;
+}
+
+/** Drop the neighbourhood cache. Safe once the placement passes are done; it is pure scratch. */
+function releaseAdjCache(polys) { delete polys._adjCache; delete polys._adjStamp; delete polys._radj; }
+
 // multi-source BFS: hop distance from every cell to the nearest cell failing `pred`
 function distanceFieldTo(polys, pred) {
   const dist = new Int32Array(polys.length).fill(-1);
@@ -275,12 +326,19 @@ function generate(cfg, opts = {}) {
     } else {
       priorityLookup = new Float64Array(polys.length);
       let highest = -Infinity;
-      for (const p of valid) { const pr = prioritizer(p); priorityLookup[p.index] = prioritizer(p); if (pr > highest) { source = p; highest = pr; } }
+      // One call each: this used to evaluate `prioritizer` twice per polygon and keep the second
+      // result. None of the prioritizers draws from `rand` - they are terraced noise or a hop
+      // count - so the value and the RNG stream are both unchanged.
+      for (const p of valid) { const pr = prioritizer(p); priorityLookup[p.index] = pr; if (pr > highest) { source = p; highest = pr; } }
     }
     if (source == null) return false;
     let fill = [];
-    const visited = new Set([source]);
-    if (!contiguous) { fill = valid.slice(); netSort(fill, (a, b) => cmpNum(priorityLookup[b.index], priorityLookup[a.index])); }
+    // Membership by index rather than a Set of polygon objects: same test, no hashing, and it is the
+    // hottest lookup in the generator.
+    const visited = new Uint8Array(polys.length);
+    visited[source.index] = 1;
+    const byPriority = (a, b) => cmpNum(priorityLookup[b.index], priorityLookup[a.index]);
+    if (!contiguous) { fill = valid.slice(); netSort(fill, byPriority); }
     else fill.push(source);
     let cur = 0;
     while (cur < desiredPct && fill.length > 0) {
@@ -289,18 +347,29 @@ function generate(cfg, opts = {}) {
       else { selected = fill[0]; fill.shift(); }
       selected.biome = targetBiome;
       cur += 1 / polys.length;
-      const adj = selected.adjacent.map(i => polys[i]).filter(p => !visited.has(p) && selector(p));
-      if (adj.length) { for (const a of adj) { fill.push(a); visited.add(a); } if (prioritizer != null) netSort(fill, (a, b) => cmpNum(priorityLookup[b.index], priorityLookup[a.index])); }
+      // Walk `adjacent` in place. The map+filter pair built two throwaway arrays for every polygon
+      // placed, which was most of what the collector was doing during a search.
+      let added = 0;
+      for (const i of selected.adjacent) {
+        const q = polys[i];
+        if (visited[i] || !selector(q)) continue;
+        visited[i] = 1; fill.push(q); added++;
+      }
+      if (added && prioritizer != null) netSort(fill, byPriority);
     }
     return true;
   }
 
   function getValidPositions(biome) {
     const s = new Set();
+    // Hoisted out of the inner loop: this ran `biome.bad &&` and a linear `includes` once per neighbour
+    // per polygon, and the neighbourhood grows with the square of badRange.
+    const bad = biome.bad && biome.bad.length ? new Set(biome.bad) : null;
+    if (!bad) { for (const p of polys) s.add(p); return s; }
     for (const p of polys) {
       const nearby = adjacentPolygons(polys, p.index, biome.badRange);
       let ok = true;
-      for (const id of nearby) if (biome.bad && biome.bad.includes(polys[id].biome)) { ok = false; break; }
+      for (const id of nearby) if (bad.has(polys[id].biome)) { ok = false; break; }
       if (ok) s.add(p);
     }
     return s;
@@ -316,12 +385,11 @@ function generate(cfg, opts = {}) {
       let landSize = Math.min(remaining, ((rand.nextDouble() * 1.5) + 0.5) * approx);
       if (numContinents === 1) landSize = remaining;
       const avoid = csRound(cfg.continentAvoidRange.min + rand.nextDouble() * (cfg.continentAvoidRange.max - cfg.continentAvoidRange.min));
-      const validSet = new Set(polys.filter(p => {
-        if (p.biome !== B.DeepOcean) return false;
-        const nearby = adjacentPolygons(polys, p.index, avoid);
-        let landCount = 0; for (const a of nearby) if (polys[a].biome === B.Grassland) landCount++;
-        return landCount === 0;
-      }));
+      // "no land within `avoid` hops", asked of every ocean cell at once. Per-polygon this walked a
+      // neighbourhood that grows with the square of the range, and `avoid` is redrawn every pass so the
+      // memo never hit twice - together the top cost in the whole generator.
+      const nearLand = canReachWithin(polys, avoid, q => q.biome === B.Grassland);
+      const validSet = new Set(polys.filter(p => p.biome === B.DeepOcean && !nearLand[p.index]));
       balanced = balanceBiome(landSize, null, p => validSet.has(p), landPri);
       for (const p of polys) if (p.biome == null) p.biome = B.Grassland;
       remaining -= landSize;
@@ -337,12 +405,11 @@ function generate(cfg, opts = {}) {
       let landSize = Math.min(remaining, ((rand.nextDouble() * 1.5) + 0.5) * approx);
       if (numSmallIslands === 1) landSize = remaining;
       const avoid = csRound(cfg.islandAvoidRange.min + rand.nextDouble() * (cfg.islandAvoidRange.max - cfg.islandAvoidRange.min));
-      const validSet = new Set(polys.filter(p => {
-        if (p.biome !== B.DeepOcean) return false;
-        const nearby = adjacentPolygons(polys, p.index, avoid);
-        let landCount = 0; for (const a of nearby) if (polys[a].biome === B.Grassland) landCount++;
-        return landCount === 0;
-      }));
+      // "no land within `avoid` hops", asked of every ocean cell at once. Per-polygon this walked a
+      // neighbourhood that grows with the square of the range, and `avoid` is redrawn every pass so the
+      // memo never hit twice - together the top cost in the whole generator.
+      const nearLand = canReachWithin(polys, avoid, q => q.biome === B.Grassland);
+      const validSet = new Set(polys.filter(p => p.biome === B.DeepOcean && !nearLand[p.index]));
       balanced = balanceBiome(landSize, null, p => validSet.has(p), islandPri);
       for (const p of polys) if (p.biome == null) p.biome = B.Grassland;
       remaining -= landSize;
@@ -420,6 +487,10 @@ function generate(cfg, opts = {}) {
   // (expensive) elevation/temperature/moisture, lakes and rivers passes. Polys carry no elevation
   // in this mode; the search only reads p.biome + geometry. Coasts are not yet split warm/cold
   // (that happens after rivers) — the search collapses all coasts to one class anyway.
+  // The neighbourhood cache is scratch for the placement passes above and nothing outside generate()
+  // reads it - but it hangs off `polys`, so without this it stays alive for as long as the caller
+  // holds the result, which for the search is the whole time a candidate is being scored.
+  releaseAdjCache(polys);
   if (opts.biomesOnly) return { polys, rivers: [], worldSize, numContinents, numSmallIslands, numLakes: 0, numRivers: 0, landPercent };
 
   progress('elevation');
@@ -491,6 +562,7 @@ function generate(cfg, opts = {}) {
   // ---- coast warm/cold ----
   for (const p of polys) if (p.biome === B.Coast) { p.biome = p.temperature > 0.5 ? B.WarmCoast : B.ColdCoast; p.elevation = 0.01; }
 
+  releaseAdjCache(polys);
   return { polys, rivers, worldSize, numContinents, numSmallIslands, numLakes, numRivers, landPercent };
 }
 

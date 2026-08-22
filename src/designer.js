@@ -2173,9 +2173,12 @@
   function onWorkerMsg(w, m) {
     if (m.type === 'ready') return;                       // init ack
     if (m.type === 'search-ready') { if (w._readyCb) { w._readyCb(); w._readyCb = null; } return; }
-    if (m.type === 'search-error') { w._busy = false; if (running) dispatch(w); return; }
+    // A failed candidate still has a cfg parked in cfgBySeed, and the worker's reply carries no seed -
+    // so without remembering what this worker was sent, every error leaks one config for the life of
+    // the page.
+    if (m.type === 'search-error') { if (w._seed != null) { delete cfgBySeed[w._seed]; w._seed = null; } w._busy = false; if (running) dispatch(w); return; }
     if (m.type === 'search-result') {
-      w._busy = false; evaluated++;
+      w._busy = false; w._seed = null; evaluated++;
       recordCandidate(m);
       if (running) dispatch(w);
       throttledUi();
@@ -2187,7 +2190,7 @@
     const cfg = JSON.parse(JSON.stringify(invBase)); cfg.seed = seed;
     if ($('dsnJitter').checked) jitter(cfg);
     cfgBySeed[seed] = cfg;               // remember the exact cfg so Apply reproduces this candidate (esp. with jitter)
-    w._busy = true;
+    w._busy = true; w._seed = seed;
     w.postMessage({ type: 'search-eval', cfg: cfg });
   }
   function jitter(cfg) {
