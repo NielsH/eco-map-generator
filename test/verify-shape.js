@@ -325,6 +325,32 @@ const rays = (() => {
     + ' — a fall of ' + (ys[ys.length - 1] - ys[0]) + ' blocks');
 }
 
+// The coast has to CLIMB away from the sea. With EPOW at 1.8 the ramp was so convex that the first 40 m
+// inland sat one block over the water - against three stock worlds, which are 3-4 blocks up by then - and
+// that shelf is what a block of pollution sea-rise takes. It also does not survive the trip to world
+// blocks: the mod interpolates the export, so a cell one block up drops under the sea wherever anything
+// lower is beside it, and a third of the drawn land never arrived.
+//
+// Measured here: EPOW 1.8 with a flat 0.02 floor gives a median of 1 block; EPOW 1.4 with the undulating
+// floor gives 4. (The share of land sitting on any ONE level looks like the obvious companion check and is
+// not: it reads 6.1% before and 5.1% after, because the pile is spread across the export's byte values
+// rather than gathered on one. The world-block histogram is where it shows.)
+{
+  const d = new Int32Array(g * g).fill(-1), q = [];
+  for (let i = 0; i < g * g; i++) if (isSea(i)) { d[i] = 0; q.push(i); }
+  for (let k = 0; k < q.length; k++) { const c = q[k]; for (const nb of nbr(c)) if (d[nb] < 0) { d[nb] = d[c] + 1; q.push(nb); } }
+  const band = [];
+  for (let i = 0; i < g * g; i++) {
+    if (isSea(i) || water[i]) continue;
+    const y = landY(height[i]);
+    if (y > WL && d[i] * BPC <= 40) band.push(y - WL);
+  }
+  band.sort((a, b) => a - b);
+  const med = band.length ? band[band.length >> 1] : 0;
+  check('the first 40 m inland climbs clear of the sea', med >= 3,
+    'median land within 40 m of the sea is ' + med + ' blocks up (' + band.length + ' cells)');
+}
+
 // A biome in BIOME_FLATTEN has to come out FLATTER than the ground around it, and it has to do that
 // without turning its own border into a step. Stock derives the biome from the terrain, so a wetland can
 // only ever land on low flat ground - a 3-4 block band, the flattest biome in the world. Here the biome is
@@ -333,9 +359,9 @@ const rays = (() => {
 //
 // The pass levels toward the LOCAL land mean rather than a fixed height, which is what keeps it off the
 // borders - the region keeps the height it had and only loses its wrinkles. Emptying BIOME_FLATTEN on this
-// design takes the wetland from 1.24 to 2.83 (grassland 2.99 and coldforest 3.07 do not move, so it is the
-// biome that is being flattened and not the map), and the worst step across the border goes the RIGHT way,
-// 11 blocks with the pass against 15 without it.
+// design takes the wetland from 1.20 to 2.78 (grassland 2.89 and coldforest 3.01 do not move, so it is the
+// biome that is being flattened and not the map), and the border goes the RIGHT way: 6.9% of the pairs
+// across it step 5 blocks or more with the pass, against 15.2% without it.
 {
   const LAG = 3;
   const relief = cls => {
@@ -353,17 +379,23 @@ const rays = (() => {
   check('a flattened biome comes out flatter than the ground around it', wet <= 0.6 * grass,
     'wetland rises ' + wet.toFixed(2) + ' blocks over 3 cells against grassland ' + grass.toFixed(2));
 
-  let worst = 0, pairs = 0;
-  for (let y = 0; y < g; y++) for (let x = 0; x + 1 < g; x++) {
-    const i = y * g + x, j = i + 1;
-    if (water[i] || water[j]) continue;
-    if ((biome[i] === SC.Wetland) === (biome[j] === SC.Wetland)) continue;
-    const a = landY(height[i]), b = landY(height[j]);
-    if (a <= WL || b <= WL) continue;
-    pairs++; worst = Math.max(worst, Math.abs(a - b));
+  // Eco carves a rock face wherever neighbouring columns differ by 5 or more, so that is the step that
+  // actually shows as a wall. Counting the share of border pairs that reach it is far steadier than the
+  // single worst pair, which moves a block at a time and separated the two cases by exactly one.
+  const steps = [];
+  for (let y = 0; y < g; y++) for (let x = 0; x < g; x++) {
+    const i = y * g + x;
+    for (const j of [y * g + ((x + 1) % g), ((y + 1) % g) * g + x]) {
+      if (water[i] || water[j]) continue;
+      if ((biome[i] === SC.Wetland) === (biome[j] === SC.Wetland)) continue;
+      const a = landY(height[i]), b = landY(height[j]);
+      if (a <= WL || b <= WL) continue;
+      steps.push(Math.abs(a - b));
+    }
   }
-  check('flattening a biome does not cut a step at its border', worst <= 12,
-    'worst step across the wetland border is ' + worst + ' blocks (' + pairs + ' border pairs)');
+  const walls = 100 * steps.filter(v => v >= 5).length / steps.length;
+  check('flattening a biome does not cut a step at its border', walls <= 10,
+    walls.toFixed(1) + '% of the ' + steps.length + ' border pairs step 5 blocks or more');
 }
 
 console.log(fails ? '\n' + fails + ' FAILED' : '\nALL PASS ✓');
