@@ -325,5 +325,31 @@ const rays = (() => {
     + ' — a fall of ' + (ys[ys.length - 1] - ys[0]) + ' blocks');
 }
 
+// The coast has to CLIMB away from the sea. With EPOW at 1.8 the ramp was so convex that the first 40 m
+// inland sat one block over the water - against three stock worlds, which are 3-4 blocks up by then - and
+// that shelf is what a block of pollution sea-rise takes. It also does not survive the trip to world
+// blocks: the mod interpolates the export, so a cell one block up drops under the sea wherever anything
+// lower is beside it, and a third of the drawn land never arrived.
+//
+// Measured here: EPOW 1.8 with a flat 0.02 floor gives a median of 1 block; EPOW 1.4 with the undulating
+// floor gives 4. (The share of land sitting on any ONE level looks like the obvious companion check and is
+// not: it reads 6.1% before and 5.1% after, because the pile is spread across the export's byte values
+// rather than gathered on one. The world-block histogram is where it shows.)
+{
+  const d = new Int32Array(g * g).fill(-1), q = [];
+  for (let i = 0; i < g * g; i++) if (isSea(i)) { d[i] = 0; q.push(i); }
+  for (let k = 0; k < q.length; k++) { const c = q[k]; for (const nb of nbr(c)) if (d[nb] < 0) { d[nb] = d[c] + 1; q.push(nb); } }
+  const band = [];
+  for (let i = 0; i < g * g; i++) {
+    if (isSea(i) || water[i]) continue;
+    const y = landY(height[i]);
+    if (y > WL && d[i] * BPC <= 40) band.push(y - WL);
+  }
+  band.sort((a, b) => a - b);
+  const med = band.length ? band[band.length >> 1] : 0;
+  check('the first 40 m inland climbs clear of the sea', med >= 3,
+    'median land within 40 m of the sea is ' + med + ' blocks up (' + band.length + ' cells)');
+}
+
 console.log(fails ? '\n' + fails + ' FAILED' : '\nALL PASS ✓');
 process.exit(fails ? 1 : 0);
