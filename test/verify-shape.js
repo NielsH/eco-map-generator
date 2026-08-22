@@ -351,5 +351,52 @@ const rays = (() => {
     'median land within 40 m of the sea is ' + med + ' blocks up (' + band.length + ' cells)');
 }
 
+// A biome in BIOME_FLATTEN has to come out FLATTER than the ground around it, and it has to do that
+// without turning its own border into a step. Stock derives the biome from the terrain, so a wetland can
+// only ever land on low flat ground - a 3-4 block band, the flattest biome in the world. Here the biome is
+// drawn independently of the height, so without this pass a wetland sits on whatever relief was there:
+// measured on the owner's map it spanned 12 blocks and rose three times as fast over 8 m as a stock one.
+//
+// The pass levels toward the LOCAL land mean rather than a fixed height, which is what keeps it off the
+// borders - the region keeps the height it had and only loses its wrinkles. Emptying BIOME_FLATTEN on this
+// design takes the wetland from 1.20 to 2.78 (grassland 2.89 and coldforest 3.01 do not move, so it is the
+// biome that is being flattened and not the map), and the border goes the RIGHT way: 6.9% of the pairs
+// across it step 5 blocks or more with the pass, against 15.2% without it.
+{
+  const LAG = 3;
+  const relief = cls => {
+    let sum = 0, n = 0;
+    for (let y = 0; y < g; y++) for (let x = 0; x + LAG < g; x++) {
+      const i = y * g + x, j = i + LAG;
+      if (water[i] || water[j] || biome[i] !== cls || biome[j] !== cls) continue;
+      const a = landY(height[i]), b = landY(height[j]);
+      if (a <= WL || b <= WL) continue;
+      sum += Math.abs(a - b); n++;
+    }
+    return n ? sum / n : 0;
+  };
+  const wet = relief(SC.Wetland), grass = relief(SC.Grassland);
+  check('a flattened biome comes out flatter than the ground around it', wet <= 0.6 * grass,
+    'wetland rises ' + wet.toFixed(2) + ' blocks over 3 cells against grassland ' + grass.toFixed(2));
+
+  // Eco carves a rock face wherever neighbouring columns differ by 5 or more, so that is the step that
+  // actually shows as a wall. Counting the share of border pairs that reach it is far steadier than the
+  // single worst pair, which moves a block at a time and separated the two cases by exactly one.
+  const steps = [];
+  for (let y = 0; y < g; y++) for (let x = 0; x < g; x++) {
+    const i = y * g + x;
+    for (const j of [y * g + ((x + 1) % g), ((y + 1) % g) * g + x]) {
+      if (water[i] || water[j]) continue;
+      if ((biome[i] === SC.Wetland) === (biome[j] === SC.Wetland)) continue;
+      const a = landY(height[i]), b = landY(height[j]);
+      if (a <= WL || b <= WL) continue;
+      steps.push(Math.abs(a - b));
+    }
+  }
+  const walls = 100 * steps.filter(v => v >= 5).length / steps.length;
+  check('flattening a biome does not cut a step at its border', walls <= 10,
+    walls.toFixed(1) + '% of the ' + steps.length + ' border pairs step 5 blocks or more');
+}
+
 console.log(fails ? '\n' + fails + ' FAILED' : '\nALL PASS ✓');
 process.exit(fails ? 1 : 0);

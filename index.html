@@ -9101,6 +9101,9 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
   // elevation ranges. Unpainted land is placed within its band by distance-to-ocean (coast=low,
   // interior=high) + noise, mirroring a regular server: coastal lowlands rising to interior hills, with
   // cold/mountain biomes taller. Blurred so biome edges are slopes.
+  // How strongly a biome levels itself against the ground around it: 0 leaves the relief alone, 1
+  // replaces it with the local mean. Only biomes stock builds on flat ground belong here.
+  const BIOME_FLATTEN = { Wetland: 1.00 };
   const ECO_BIOME_ELEV = {
     Ocean: [0.18, 0.44], Coast: [0.50, 0.54], Grassland: [0.52, 0.66], WarmForest: [0.54, 0.70],
     ColdForest: [0.54, 0.74], RainForest: [0.53, 0.68], Desert: [0.51, 0.60], Wetland: [0.51, 0.60],
@@ -10543,6 +10546,38 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
         const hl = Math.min(1, (tgt[wj] - 0.25) / HL_SPAN);
         if (hl <= 0) continue;
         hf[j] += HL_RELIEF * hl * Math.pow(ridged(x, y), 1.3) * ceil[j] * 0.5;
+      }
+    }
+
+    // Some biomes are FLAT ground, not just ground at a particular height. A stock wetland sits inside a
+    // 3-4 block band and is the flattest biome in the world, because stock derives the biome FROM the
+    // terrain and can only ever put one on low flat ground. Here the biome is drawn independently, so a
+    // wetland lands on whatever relief happens to be there - measured, ours spanned 12 blocks and rose
+    // three times as fast over 8 blocks as a stock one.
+    //
+    // Flattening toward the LOCAL land mean rather than toward a fixed height is what keeps this off the
+    // biome borders: the pass removes the wrinkles inside the region and leaves the region sitting where
+    // it already sat, so there is no step to walk down at the edge. The mask is blurred over the same
+    // radius as the biome elevation nudge for the same reason - a drawn border is usually a clean line,
+    // and anything read straight off it gets printed into the terrain.
+    {
+      const FLAT_BLOCKS = 40;                                    // window the ground is levelled over
+      const cells = Math.max(3, Math.round(FLAT_BLOCKS / (1200 / res)));
+      // Tighter than the biome nudge blurs. At res/27 the blur ate the mask inside a region as small as
+      // a wetland - the middle of one kept less than half its value and barely flattened. This still
+      // ramps the effect out over ~19 blocks, which is a walk, not a step.
+      const maskR = Math.max(3, Math.round(res / 60));
+      const num = new Float32Array(n), den = new Float32Array(n);
+      for (let j = 0; j < n; j++) { const m = land[j] === 1 ? 1 : 0; num[j] = m * hf[j]; den[j] = m; }
+      boxBlurTor(num, res, cells, 2);
+      boxBlurTor(den, res, cells, 2);
+      const mask = new Float32Array(n);
+      for (let j = 0; j < n; j++) mask[j] = land[j] === 1 ? (BIOME_FLATTEN[CN[biome[j]]] || 0) : 0;
+      boxBlurTor(mask, res, maskR, 2);
+      for (let j = 0; j < n; j++) {
+        if (land[j] !== 1 || mask[j] <= 0.001 || den[j] <= 1e-4) continue;
+        const localMean = num[j] / den[j];
+        hf[j] = Math.max(0.505, hf[j] + (localMean - hf[j]) * mask[j]);
       }
     }
 
