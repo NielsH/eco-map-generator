@@ -9981,7 +9981,10 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
         // for the whole 16 m — the water was perched and the bank was what held it in.
         else if (hf[j] < aim) {
           const t = hf[j] + (aim - hf[j]) * VALLEY_PULL * ease;
-          hf[j] = Math.min(t, aim);
+          // Never leave it UNDER the water, the same bound the downward pull already carries. The pull
+          // tapers with distance, so a cell far enough out only closes part of the gap - and ground that
+          // stops below the surface beside it is not ground, it is the ledge this pass exists to remove.
+          hf[j] = Math.max(Math.min(t, aim), near[j] + BLK);
         }
       }
     }
@@ -10376,7 +10379,11 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
       }
       for (let i = 0; i < n; i++) if (!isFinite(distO[i])) distO[i] = res;        // land with no sea at all
     }
-    const OCEAN_DIST = 0.13 * res, EPOW = 1.8;                                    // reach full height ~13% inland -> steeper coasts
+    // EPOW shapes the whole coastal climb. At 1.8 it is so convex that the first 40 blocks inland stay
+    // essentially at sea level: measured against three stock worlds, ours sat 1 block over the sea where
+    // stock is already 3-4, and only reached stock's 40-block height somewhere past 80. That shelf is
+    // what makes a block of pollution sea-rise take a tenth of the map.
+    const OCEAN_DIST = 0.13 * res, EPOW = 1.4;                                    // reach full height ~13% inland -> steeper coasts
     const aboveMid = cls => { const b = ECO_BIOME_ELEV[CN[cls]] || [0.52, 0.62]; return Math.max(0, ((b[0] + b[1]) / 2 - 0.5) * 2); };   // biome target elevation above sea, [0,1]
     const tgt = new Float32Array(n); for (let j = 0; j < n; j++) tgt[j] = land[j] === 1 ? aboveMid(biome[j]) : 0;
     boxBlurTor(tgt, res, Math.max(3, Math.round(res / 27)), 2);                   // smooth the biome nudge so borders ramp, not step
@@ -10388,6 +10395,9 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     const RIDGE_OCTAVES = 5;
     const RIDGE_FALLOFF = 0.55;
     const FINE_AMP = 0.06;
+    const LOW_FLOOR = 0.035;   // lowest land, in relief units: about two blocks over the sea
+    const LOW_SWELL = 0.045;   // how far the floor swells above that, so low ground spreads over a few blocks
+    const LOW_FREQ = 26;       // coarse: broad low plains, not a rash of pimples along the shore
     // Domain warp before sampling. vnR is value noise on an axis-aligned lattice, so its contours like to
     // line up with the grid and come out as long ruled edges once terraced — vanilla's gradient noise does
     // not do that. Displacing the sample point by a slow noise field bends those contours off the lattice.
@@ -10424,7 +10434,15 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
       // left height as a pure function of distance-to-sea, whose contours are evenly spaced bands marching
       // up the slope. That is the machine-made staircase. Multiplying keeps the ridged detail everywhere
       // and still holds the coast down, because the ceiling is 1 inland and only bites near the shore.
-      const above = Math.max(0.02, (relief + nudge + (vnR(x, y, 24, res) - 0.5) * FINE_AMP) * maxE);
+      // The floor UNDULATES, and sits a couple of blocks higher than it did. A constant floor is where
+      // the low ground piles up - a sixth of all land came out on it, every cell at the same single byte
+      // over the sea - and that has two costs. The mod upscales the export by interpolating, so a cell
+      // one byte over the sea drops under it wherever anything lower is next door: a third of the drawn
+      // land never reached the world. And what survived was a plain at exactly one block, which the
+      // first block of sea-rise takes. Stock's lowest band peaks a block above its minimum, because
+      // nothing there is clamped to anything.
+      const swell = vnR(x, y, LOW_FREQ, res) * 0.65 + vnR(x + 53.1, y + 17.7, LOW_FREQ * 2, res) * 0.35;
+      const above = Math.max(LOW_FLOOR + LOW_SWELL * swell, (relief + nudge + (vnR(x, y, 24, res) - 0.5) * FINE_AMP) * maxE);
       hf[j] = 0.5 + above * 0.5;                                                  // designer frac (0.5 = sea)
     }
     // Vanilla's relief stops growing with distance past about 64 blocks: measured inland on seven stock
