@@ -325,5 +325,46 @@ const rays = (() => {
     + ' — a fall of ' + (ys[ys.length - 1] - ys[0]) + ' blocks');
 }
 
+// A biome in BIOME_FLATTEN has to come out FLATTER than the ground around it, and it has to do that
+// without turning its own border into a step. Stock derives the biome from the terrain, so a wetland can
+// only ever land on low flat ground - a 3-4 block band, the flattest biome in the world. Here the biome is
+// drawn independently of the height, so without this pass a wetland sits on whatever relief was there:
+// measured on the owner's map it spanned 12 blocks and rose three times as fast over 8 m as a stock one.
+//
+// The pass levels toward the LOCAL land mean rather than a fixed height, which is what keeps it off the
+// borders - the region keeps the height it had and only loses its wrinkles. Emptying BIOME_FLATTEN on this
+// design takes the wetland from 1.24 to 2.83 (grassland 2.99 and coldforest 3.07 do not move, so it is the
+// biome that is being flattened and not the map), and the worst step across the border goes the RIGHT way,
+// 11 blocks with the pass against 15 without it.
+{
+  const LAG = 3;
+  const relief = cls => {
+    let sum = 0, n = 0;
+    for (let y = 0; y < g; y++) for (let x = 0; x + LAG < g; x++) {
+      const i = y * g + x, j = i + LAG;
+      if (water[i] || water[j] || biome[i] !== cls || biome[j] !== cls) continue;
+      const a = landY(height[i]), b = landY(height[j]);
+      if (a <= WL || b <= WL) continue;
+      sum += Math.abs(a - b); n++;
+    }
+    return n ? sum / n : 0;
+  };
+  const wet = relief(SC.Wetland), grass = relief(SC.Grassland);
+  check('a flattened biome comes out flatter than the ground around it', wet <= 0.6 * grass,
+    'wetland rises ' + wet.toFixed(2) + ' blocks over 3 cells against grassland ' + grass.toFixed(2));
+
+  let worst = 0, pairs = 0;
+  for (let y = 0; y < g; y++) for (let x = 0; x + 1 < g; x++) {
+    const i = y * g + x, j = i + 1;
+    if (water[i] || water[j]) continue;
+    if ((biome[i] === SC.Wetland) === (biome[j] === SC.Wetland)) continue;
+    const a = landY(height[i]), b = landY(height[j]);
+    if (a <= WL || b <= WL) continue;
+    pairs++; worst = Math.max(worst, Math.abs(a - b));
+  }
+  check('flattening a biome does not cut a step at its border', worst <= 12,
+    'worst step across the wetland border is ' + worst + ' blocks (' + pairs + ' border pairs)');
+}
+
 console.log(fails ? '\n' + fails + ' FAILED' : '\nALL PASS ✓');
 process.exit(fails ? 1 : 0);
