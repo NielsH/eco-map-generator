@@ -10532,7 +10532,10 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     {
       const TREND_BLOCKS = 60, TREND_CUT = 1.00;
       const PEAK_GAIN = 2.60, PEAK_KNEE = 0.97;                  // how far the tail is stretched, and from where
-      const cells = Math.max(4, Math.round(TREND_BLOCKS / (1200 / res)));
+      // BPC, not a hardcoded 1200: both of these windows are specified in WORLD BLOCKS, and dividing by
+      // the wrong pitch makes them the wrong size everywhere except a 120-chunk world. On a 200-chunk
+      // world this asked for 60 blocks and got 98.
+      const cells = Math.max(4, Math.round(TREND_BLOCKS / BPC));
       //Blur over LAND ONLY: letting the ocean vote drags every coast down and the correction then lifts it.
       const before = Float32Array.from(hf);                                    // what the trend removal is about to take
       const num = new Float32Array(n), den = new Float32Array(n);
@@ -10634,7 +10637,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     // and anything read straight off it gets printed into the terrain.
     {
       const FLAT_BLOCKS = 40;                                    // window the ground is levelled over
-      const cells = Math.max(3, Math.round(FLAT_BLOCKS / (1200 / res)));
+      const cells = Math.max(3, Math.round(FLAT_BLOCKS / BPC));   // world blocks -> cells at THIS world's pitch
       // Tighter than the biome nudge blurs. At res/27 the blur ate the mask inside a region as small as
       // a wetland - the middle of one kept less than half its value and barely flattened. This still
       // ramps the effect out over ~19 blocks, which is a walk, not a step.
