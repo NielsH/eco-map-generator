@@ -1342,7 +1342,15 @@
     // essentially at sea level: measured against three stock worlds, ours sat 1 block over the sea where
     // stock is already 3-4, and only reached stock's 40-block height somewhere past 80. That shelf is
     // what makes a block of pollution sea-rise take a tenth of the map.
-    const OCEAN_DIST = 0.13 * res, EPOW = 1.4;                                    // reach full height ~13% inland -> steeper coasts
+    // The coastal ramp is a DISTANCE, not a fraction of the map. As `0.13 * res` it spanned 13% of the
+    // world whatever the world was - 155 m at 120 chunks, 259 m at 200 - and since it multiplies the
+    // relief, the ground kept climbing for the whole of it. That is the dome: measured against stock,
+    // which reaches 6 blocks by 40 m and then plateaus at 7-9 however big the world is, ours ran to 15
+    // at 150 m on a 120-chunk map and 18 at 200 m on a 200-chunk one.
+    //
+    // 110 blocks is past stock's plateau, so the beach still ramps and the interior no longer does.
+    const RAMP_BLOCKS = 110;
+    const OCEAN_DIST = Math.max(8, RAMP_BLOCKS / BPC), EPOW = 1.4;                // a fixed distance inland, in cells
     const aboveMid = cls => { const b = ECO_BIOME_ELEV[CN[cls]] || [0.52, 0.62]; return Math.max(0, ((b[0] + b[1]) / 2 - 0.5) * 2); };   // biome target elevation above sea, [0,1]
     const tgt = new Float32Array(n); for (let j = 0; j < n; j++) tgt[j] = land[j] === 1 ? aboveMid(biome[j]) : 0;
     boxBlurTor(tgt, res, Math.max(3, Math.round(res / 27)), 2);                   // smooth the biome nudge so borders ramp, not step
@@ -1366,7 +1374,22 @@
     const warpY = (x, y) => y + (vnR(x + 137.5, y + 91.3, WARP_FREQ, res) - 0.5) * 2 * WARP_AMP;
     const ridged = (x0, y0) => { const x = warpX(x0, y0), y = warpY(x0, y0); let s = 0, amp = 1, fr = RIDGE_FREQ, norm = 0; for (let o = 0; o < RIDGE_OCTAVES; o++) { const nz = vnR(x, y, fr, res); s += amp * (1 - Math.abs(2 * nz - 1)); norm += amp; amp *= RIDGE_FALLOFF; fr *= 2; } return s / norm; };
     const DIST_WOBBLE = 12;     // cells the coast-distance ramp wanders, so its contours are not clean offsets
-    const MAXH = 1.35;
+    // Relief amplitude comes down with the ramp, and has to. The ramp was the only thing holding the
+    // interior down: with it shortened, full relief applies almost everywhere, and at 1.35 the same map
+    // came out at 24 blocks median against stock's 6.
+    //
+    // 0.50 is NOT the value that best matches stock's height - 0.30 gives a median of 6 and a 90th
+    // percentile of 14, against stock's 6 and 15-16, which is as close as this field gets. It fails
+    // verify-water's rim check: ground 5-15 cells from water that sits below the water line falls to 1.9%
+    // where the bound is 5% and stock runs 30-45%. Flattening the interior and keeping water perched in
+    // basins turn out to be the same knob, and the hollows go first. Raising FINE_AMP to 0.30 does not
+    // buy them back (1.3-2.5%) - it is the coarse relief the hollows come from, not the fine noise - and
+    // neither does taking more out with the trend removal, which costs them faster than it costs the dome.
+    //
+    // So this is deliberately a partial fix, at the last amplitude that keeps the rim: the dome is halved,
+    // not removed. What is left of it wants a way to make local hollows without a general elevation, which
+    // is a different piece of work from this one.
+    const MAXH = 0.50;
     const ceil = new Float32Array(n);                                            // coastal ceiling, reused by the peak pass                                                           // interior peaks reach near the world's max height
     for (let j = 0; j < n; j++) {
       if (land[j] !== 1) continue;
@@ -1463,7 +1486,10 @@
     // fell to 89), and weakening the correction to save them brings the dome straight back. So they are put
     // back separately, over a small share of the land.
     {
-      const PEAK_FREQ = 5, PEAK_THRESH = 0.74, PEAK_AMP = 0.55;
+      // PEAK_AMP rises as MAXH falls: the tail is now doing more of the mountain-making, where before the
+      // general relief did much of it. Stock's 90th percentile is 15-16 blocks while its peaks reach
+      // 105-115, and that gap is exactly what this pass is for. Tallest ground is unmoved at 58-60.
+      const PEAK_FREQ = 5, PEAK_THRESH = 0.74, PEAK_AMP = 1.6;
       for (let j = 0; j < n; j++) {
         if (land[j] !== 1) continue;
         const x = j % res, y = (j / res) | 0;
