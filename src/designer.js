@@ -1492,7 +1492,16 @@
     // at two thirds.
     {
       const HL_SPAN = 0.33;      // how far a biome's band must sit over the middle to count as fully highland
-      const HL_RELIEF = 0.9;     // relief a fully-highland biome gains, in the peak pass's own units
+      const HL_RELIEF = 1.9;     // relief a fully-highland CREST gains, in the peak pass's own units
+      // Gated on the ridged field, the way the peak pass is gated on its own noise, because ungated this
+      // was a general elevation rather than a mountain range. `hl` saturates at 1 across a whole drawn
+      // highland and the ridged term has a healthy mean, so every column in the region gained: measured on
+      // a 200-chunk world it lifted the median land 200-250 m inland from 21 blocks to 33, against stock's
+      // 7-9. The paragraph above is explicit that stock's mountains are RARE and tall rather than a raised
+      // plateau, and the peak pass takes that care; this one did not.
+      //
+      // Now only crests gain, and HL_RELIEF rises to keep those crests as tall as they were.
+      const HL_KNEE = 0.38;      // below this the ridged field is valley floor, and gains nothing
       for (let j = 0; j < n; j++) {
         if (land[j] !== 1) continue;
         const x = j % res, y = (j / res) | 0;
@@ -1501,7 +1510,10 @@
         const wj = (((Math.round(warpY(x, y)) % res) + res) % res) * res + (((Math.round(warpX(x, y)) % res) + res) % res);
         const hl = Math.min(1, (tgt[wj] - 0.25) / HL_SPAN);
         if (hl <= 0) continue;
-        hf[j] += HL_RELIEF * hl * Math.pow(ridged(x, y), 1.3) * ceil[j] * 0.5;
+        const r = Math.pow(ridged(x, y), 1.3);
+        const crest = r <= HL_KNEE ? 0 : (r - HL_KNEE) / (1 - HL_KNEE);
+        if (crest <= 0) continue;
+        hf[j] += HL_RELIEF * hl * crest * crest * ceil[j] * 0.5;
       }
     }
 
