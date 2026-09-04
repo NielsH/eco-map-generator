@@ -9218,7 +9218,8 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
   //
   // Hold the PITCH instead of the grid. Only the coarsening is corrected: a world small enough to already
   // be finer than 2.68 keeps the 448 it has, so nothing at or below 120 chunks moves by a byte.
-  const IMPORT_BPC = 1200 / 448;            // the pitch every constant in imageToMaps was tuned at
+  const TUNED_WORLD = 1200;                 // the world imageToMaps' constants were tuned on: 120 chunks
+  const IMPORT_BPC = TUNED_WORLD / 448;     // the pitch every constant in imageToMaps was tuned at
   const IMPORT_RES_MAX = 1024;              // measured: a 1.19 MB bundle on a 200-chunk map, cap 2 MB
   function importRes(worldBlocks) {
     if (!worldBlocks) return IMPORT_RES;
@@ -10489,7 +10490,25 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     // tens of blocks across — so its terraces come out wide. Piling on high octaves here gives detail finer
     // than a terrace band, which just makes the height cross a band every block or two: a dense corduroy
     // instead of broad benches. RIDGE_FREQ/RIDGE_OCTAVES set how coarse those patches are.
-    const RIDGE_FREQ = 6;   // coarser than it was (9): finer than a terrace band just makes corduroy
+    // RIDGE_FREQ is CYCLES ACROSS THE WORLD, so on a bigger map the same mountain range is drawn
+    // proportionally bigger and the ground between crests proportionally flatter. Stock does the
+    // opposite - VoronoiWorldGenerator scales its noise by worldWidth/72 - so a hill stays a hill's
+    // size in blocks however large the world is.
+    //
+    // Measured on one drawing, each size at the pitch it is actually built at: mean rise per cell fell
+    // from 0.33 at 120 chunks to 0.20 at 280, and flat share rose from 81% to 86%. A bigger world was
+    // not getting more mountainous, it was getting emptier.
+    //
+    // Only the COARSENING is corrected. Below 120 chunks FREQ_SCALE clamps to 1, because scaling the
+    // other way makes a small world's features bigger, and on a 72-chunk map - Eco's default - that
+    // took the 90th percentile from 14 blocks to 20.
+    //
+    // Only THIS frequency. The fine noise and the low-ground swell scale with it to no measurable
+    // effect, and scaling the warp and the peak field as well costs 2 blocks of median height at 200
+    // chunks (10 -> 12) for 0.01 of rise - those two place features rather than texture them, and
+    // making them denser just puts more peaks on the map.
+    const FREQ_SCALE = Math.max(1, (res * BPC) / TUNED_WORLD);
+    const RIDGE_FREQ = Math.max(1, Math.round(6 * FREQ_SCALE));   // finer than a terrace band just makes corduroy
     const RIDGE_OCTAVES = 5;
     const RIDGE_FALLOFF = 0.55;
     const FINE_AMP = 0.06;
