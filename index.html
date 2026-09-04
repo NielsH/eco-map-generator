@@ -9209,6 +9209,21 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
   let importLegendIdxHi = null;  // legend index per hi-res cell, so remapping a colour rebuilds instantly
   let paintedSinceImport = false; // once the user hand-edits an import, export falls back to the G² paint grid
   const IMPORT_RES = 448;        // biome/height resolution exported for a pure image import (finer = steeper, less-terraced terrain)
+  // ...and the resolution it is EXPORTED at, which is not the same thing once the world is not 120 chunks.
+  // The export grid was this constant at every world size, so a bigger world simply stretched each cell
+  // over more ground: 2.68 world blocks per cell at 120 chunks, where every constant in imageToMaps was
+  // tuned, and 4.46 at 200. That is what flattened a 4 km2 world - 62.5% of it came out as flat 5x5
+  // building pads against stock's 36-39% - and what let the bed's ring steps grow big enough for the
+  // mod's cliff pass to fill lakes with rock.
+  //
+  // Hold the PITCH instead of the grid. Only the coarsening is corrected: a world small enough to already
+  // be finer than 2.68 keeps the 448 it has, so nothing at or below 120 chunks moves by a byte.
+  const IMPORT_BPC = 1200 / 448;            // the pitch every constant in imageToMaps was tuned at
+  const IMPORT_RES_MAX = 1024;              // measured: a 1.19 MB bundle on a 200-chunk map, cap 2 MB
+  function importRes(worldBlocks) {
+    if (!worldBlocks) return IMPORT_RES;
+    return Math.max(IMPORT_RES, Math.min(IMPORT_RES_MAX, Math.round(worldBlocks / IMPORT_BPC)));
+  }
   // dark -> light biome ramp for brightness mode (low/dark = deep water, high/light = snow), reads as terrain
   const BRIGHT_RAMP = ['Ocean', 'Wetland', 'ColdForest', 'Taiga', 'RainForest', 'Grassland', 'WarmForest', 'Desert', 'Tundra', 'Coast', 'Ice'];
 
@@ -11592,7 +11607,10 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
   // Frequencies are cycles across the whole map, so they are derived from world size; left fixed, a big
   // world is always smoother than a small one.
   const EXPORT_BLOCKS_PER_CELL = 2;         // the image-import path exports at ~2.7 and lands in stock's band
-  const EXPORT_RES_MAX = 512;               // keeps the bundle inside the service's size limit
+  // 512 held the paint path to 3.91 blocks per cell on a 200-chunk world when it asks for 2. The maps are
+  // a small part of the bundle and they compress well - three 1024-cell maps are 247 KB of a 1.19 MB
+  // upload against the service's 2 MB limit - so the cap was costing detail it did not need to.
+  const EXPORT_RES_MAX = 1024;
   const FINE_WAVE1 = 32, FINE_WAVE2 = 14;   // world blocks per cycle of the two added octaves
   const FINE_A1 = 0.12, FINE_A2 = 0.07;     // weights, against the three shipped octaves which sum to 1
   const FINE_RELIEF = 0.45;                 // height range the added detail spans, as RELIEF_AMP does
@@ -11792,7 +11810,8 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
       // Water depth follows vanilla's rule, which is defined per world BLOCK, so the import needs to know
       // how many blocks a cell of its grid covers.
       const wwCells = ((typeof readForm === 'function' ? (readForm().worldWidth | 0) : 0) || 120) * 10;
-      hi = imageToMaps(IMPORT_RES, wwCells / IMPORT_RES); biomeOut = hi.biome; heightOut = hi.height;
+      const iRes = importRes(wwCells);
+      hi = imageToMaps(iRes, wwCells / iRes); biomeOut = hi.biome; heightOut = hi.height;
       waterOut = hi.water; anyWater = hi.water.some(v => v > 0);   // enclosed water in the image -> lakes
     }
     // `hiRes` is 0 unless this came from a pure image import - the bundle reports it, and it is the only
