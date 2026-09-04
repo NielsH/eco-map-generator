@@ -13,6 +13,7 @@
 #   test/verify-highland.js a drawn highland comes out a range rather than a raised plateau
 #   test/verify-ramp.js    the coastal ramp finishes at the same DISTANCE inland whatever the world size
 #   test/verify-scale.js   a landform comes out the same size in blocks whatever the world size
+#   test/verify-sheets.js  neighbouring cells come out at different heights, so the land is not level sheets
 # plus a build-sync check: index.html is a GENERATED artifact (build.js inlines src/* + WorldGenerator.eco into it) and
 # GitHub Pages serves index.html straight from main — so a commit that edits src/ without rebuilding ships a live page
 # that silently lacks the change. The check rebuilds and fails if the committed page differs from the sources.
@@ -62,6 +63,7 @@ jobs:
       - run: node test/verify-highland.js
       - run: node test/verify-ramp.js
       - run: node test/verify-scale.js
+      - run: node test/verify-sheets.js
 
       # A suite that exists but is not listed above runs only on the author's machine, which is where the
       # last four ended up. Cheap to check, and it fails the moment someone adds one without wiring it in.
