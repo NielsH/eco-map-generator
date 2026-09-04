@@ -44,6 +44,10 @@ function imageToMapsBody() {
 {
   // Comments stripped first: the explanation of this very bug names the number, and a check that trips
   // over its own documentation teaches people to delete the documentation.
+  //
+  // What this is really looking for is an UNNAMED world size used as a conversion. A deliberate reference
+  // to the size the constants were tuned on is fine and should be spelled `TUNED_WORLD`, which says so;
+  // the failure mode is a bare 1200 sitting in an expression where only this world's pitch belongs.
   const body = imageToMapsBody()
     .replace(/\/\*[\s\S]*?\*\//g, ' ')
     .split(String.fromCharCode(10))
