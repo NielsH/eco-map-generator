@@ -8,6 +8,10 @@
 #   test/verify-paint.js   the HAND-PAINTED path instead: brush and fill on the torus, the height field, a painted river
 #   test/verify-export.js  the bundle it all leaves in: the zip writer and its reader, the CRC, the design round trip
 #   test/verify-search.js  src/search.js: the wrap-invariant similarity score that ranks every candidate seed
+#   test/verify-memory.js  what one Find-mode candidate retains, and a pinned fingerprint of the world it makes
+#   test/verify-pitch.js   no window inside imageToMaps may size itself from a hardcoded 120-chunk world
+#   test/verify-highland.js a drawn highland comes out a range rather than a raised plateau
+#   test/verify-ramp.js    the coastal ramp finishes at the same DISTANCE inland whatever the world size
 # plus a build-sync check: index.html is a GENERATED artifact (build.js inlines src/* + WorldGenerator.eco into it) and
 # GitHub Pages serves index.html straight from main — so a commit that edits src/ without rebuilding ships a live page
 # that silently lacks the change. The check rebuilds and fails if the committed page differs from the sources.
@@ -52,6 +56,20 @@ jobs:
       - run: node test/verify-export.js
       - run: node test/verify-search.js
       - run: node test/verify-seed.js
+      - run: node test/verify-memory.js
+      - run: node test/verify-pitch.js
+      - run: node test/verify-highland.js
+      - run: node test/verify-ramp.js
+
+      # A suite that exists but is not listed above runs only on the author's machine, which is where the
+      # last four ended up. Cheap to check, and it fails the moment someone adds one without wiring it in.
+      - name: every suite is wired into this workflow
+        run: |
+          missing=0
+          for f in test/verify-*.js; do
+            grep -qF "run: node $f" .github/workflows/test.yml || { echo "::error::$f is not run by this workflow"; missing=1; }
+          done
+          exit $missing
 
       - name: index.html is in sync with src/
         run: |
