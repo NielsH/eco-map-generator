@@ -9975,7 +9975,9 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
   // a flat reach is flat for its whole depth and a steep one is steep for its whole depth. The floor is
   // not zero — a bank still has to clear the ring beside the water, or the ledge comes back.
   const VALLEY_SHOULDER_MIN = 0.6 * BLK, VALLEY_SHOULDER_MAX = 6 * BLK;
-  const VALLEY_RISE_MIN = 3, VALLEY_RISE_MAX = 6;   // cells, ~2.7 world blocks each
+  // The reaches are DISTANCES, in world blocks. As `res / 27` the valley reached 45 blocks on a 120-chunk
+  // world and 74 on a 200-chunk one, and pulled 42% of that map's land toward one shoulder height.
+  const VALLEY_RISE_MIN = 3, VALLEY_RISE_MAX = 6, VALLEY_BLOCKS = 45, SHORE_BLOCKS = 30, BLUFF_BLOCKS = 8.6;   // the rise in cells; the valley's reach, the shore cap's and the bluff's climb in world blocks
   // Three blocks, not eight. The bluff allowance sits on TOP of a corridor that already rises, and at
   // eight the near-river ground averaged 5.8 blocks over the water where vanilla runs 2-3, and the extra
   // relief came out as evenly-spaced single-block risers (72% of them, against vanilla's 68-81%).
@@ -10017,7 +10019,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
   //
   // Runs AFTER the per-cell flattening for the same reason vanilla runs it after per-polygon elevations
   // are set: flattening gives every cell one height, and would otherwise snap the carved bank back up.
-  function valleyBanks(res, n, land, wsurf, hf, prof) {
+  function valleyBanks(res, n, land, wsurf, hf, prof, BPC) {
     const nbr4 = j => { const x = j % res, y = (j / res) | 0; return [((x + 1) % res) + y * res, ((x + res - 1) % res) + y * res, x + ((y + 1) % res) * res, x + ((y + res - 1) % res) * res]; };
     const vshF = prof.vshF, vrsF = prof.vrsF, bluff = prof.bluff;
     // Tuned against measured vanilla, not copied from it. Vanilla's own constants (a fifth per pass over
@@ -10030,7 +10032,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     //   vanilla              9.2   13.4   18.6
     //   these constants      6.8   13.4   18.6   (at or below vanilla at every percentile)
     //   vanilla's constants  9.2   17.2   22.8
-    const VALLEY_REACH = Math.max(3, Math.round(res / 27));   // ~45 world blocks on a 120-wide world
+    const VALLEY_REACH = Math.max(3, Math.round(VALLEY_BLOCKS / BPC));
     // 0.45, not 0.25. At 0.25 the ground climbs steadily away from the water — 2.3 blocks up at 6 m and
     // 4.2 at 20 m on a real map — where vanilla's sits at 0.7-1.1 the whole way out to 40 m. A steady
     // climb on both sides is what makes a channel read as a trench cut through a plateau, or an aqueduct
@@ -10085,17 +10087,17 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
   // leaves the ground behind free to climb, and read out of a real save that is what the bank actually is:
   // the highest ground within 3 m of our shores is 2 blocks over the water at p50 where vanilla's is 1.
   // A rim 2 blocks high for the length of a river is what reads as a wall from the water.
-  function capShoreBand(res, n, land, wsurf, hf, prof, aroundLand, SETTLE_MARGIN) {
+  function capShoreBand(res, n, land, wsurf, hf, prof, aroundLand, SETTLE_MARGIN, BPC) {
     const nbr4 = j => { const x = j % res, y = (j / res) | 0; return [((x + 1) % res) + y * res, ((x + res - 1) % res) + y * res, x + ((y + 1) % res) * res, x + ((y + res - 1) % res) * res]; };
     const vshF = prof.vshF, vrsF = prof.vrsF, bluff = prof.bluff;
-    const SHORE_REACH = Math.max(3, Math.round(res / 40));
+    const SHORE_REACH = Math.max(3, Math.round(SHORE_BLOCKS / BPC));
     const SHORE_RISE = 0.2 * BLK;
     // A bluff climbs in about a cell and a half, and it starts a cell BACK from the water rather than at
     // it. Rising straight off the waterline puts the whole riser in the first 4 m, where vanilla has
     // almost none (1.5% of columns step 3+ blocks); starting it back moves the riser to 3-7 m, which is
     // where vanilla's is (3.2% and 2.4%). SETBACK is its own low-frequency field so the risers do not all
     // land at one distance from the bank — that would be the uniform kerb again, one step out.
-    const BLUFF_REACH = Math.max(2, res / 140), BLUFF_SETBACK = 0.9, SETBACK_VARY = 1.5;
+    const BLUFF_REACH = Math.max(2, BLUFF_BLOCKS / BPC), BLUFF_SETBACK = 0.9, SETBACK_VARY = 1.5;
     // The plain bank needs a metre or two of its own: the bluff field is nearly binary, so without this
     // every stretch that is not a cliff comes out the same height and the shoreline reads flat.
     const BANK_VARY = 1 * BLK, BANK_REACH = 2;
@@ -10696,6 +10698,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
       }
     }
 
+    let flatMask = null;   // how far each cell is levelled, read again by the cell relief below
     // Some biomes are FLAT ground, not just ground at a particular height. A stock wetland sits inside a
     // 3-4 block band and is the flattest biome in the world, because stock derives the biome FROM the
     // terrain and can only ever put one on low flat ground. Here the biome is drawn independently, so a
@@ -10721,6 +10724,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
       const mask = new Float32Array(n);
       for (let j = 0; j < n; j++) mask[j] = land[j] === 1 ? (BIOME_FLATTEN[CN[biome[j]]] || 0) : 0;
       boxBlurTor(mask, res, maskR, 2);
+      flatMask = mask;
       for (let j = 0; j < n; j++) {
         if (land[j] !== 1 || mask[j] <= 0.001 || den[j] <= 1e-4) continue;
         const localMean = num[j] / den[j];
@@ -10827,24 +10831,29 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     // Cells come from a jittered grid (one site per grid square, so the nearest site is always within the
     // 5x5 block around a pixel — no full Voronoi build needed). Cells whose site is not land are left
     // alone, which keeps coastlines smooth instead of stepping them.
-    const CELL_SPACING = 6.5;       // cells across, in import cells (~17 world blocks, close to vanilla's)
+    // 5 import cells is ~13 world blocks. At 6.5 (~17) a 13x13-block pad fitted inside every cell, so a third
+    // of the land sat on a level 35 m sheet whatever the cells' heights did; stock's polygons are 10-13.
+    const CELL_SPACING = 5;         // cells across, in import cells
+    let cellOff = null;             // each pixel's own cell offset, applied once the valley pass has run
     // Reads hf as it stands and hands back the hard per-cell field plus a once-blurred copy of it, for the
     // caller to mix. `siteOk(si)` says which sites may be sampled, `cellOk(j)` which pixels may move; the
-    // corridor pass below runs it a second time with a narrower pair of those.
-    const cellFlatten = (siteOk, cellOk) => {
+    // corridor pass below runs it a second time with a narrower pair of those. `siteOffset(cx, cy, si)`,
+    // if given, is a site's own departure from the field it read, handed back per pixel as `off`.
+    const cellFlatten = (siteOk, cellOk, siteOffset) => {
       const cells = Math.max(1, Math.round(res / CELL_SPACING)), cw = res / cells;
       const wrapC = v => ((v % cells) + cells) % cells;
       const wrapD = (a, b) => { const d = Math.abs(a - b); return d > res / 2 ? res - d : d; };
       const siteX = new Float32Array(cells * cells), siteY = new Float32Array(cells * cells);
       const siteV = new Float32Array(cells * cells), siteUse = new Uint8Array(cells * cells);
+      const siteOff = new Float32Array(cells * cells);
       for (let cy = 0; cy < cells; cy++) for (let cx = 0; cx < cells; cx++) {
         const c = cy * cells + cx;
         const px = (cx + h2(cx, cy)) * cw, py = (cy + h2(cx + 7777, cy + 3333)) * cw;
         siteX[c] = px; siteY[c] = py;
         const ix = Math.min(res - 1, px | 0), iy = Math.min(res - 1, py | 0), si = iy * res + ix;
-        if (siteOk(si)) { siteV[c] = hf[si]; siteUse[c] = 1; }
+        if (siteOk(si)) { siteV[c] = hf[si]; siteOff[c] = siteOffset ? siteOffset(cx, cy, si) : 0; siteUse[c] = 1; }
       }
-      const flat = new Float32Array(hf);
+      const flat = new Float32Array(hf), off = new Float32Array(n);
       for (let y = 0; y < res; y++) for (let x = 0; x < res; x++) {
         const j = y * res + x;
         if (!cellOk(j)) continue;
@@ -10856,17 +10865,38 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
           const dx = wrapD(x, siteX[c]), dy = wrapD(y, siteY[c]), d = dx * dx + dy * dy;
           if (d < bd) { bd = d; best = c; }
         }
-        if (best >= 0) flat[j] = siteV[best];
+        if (best >= 0) { flat[j] = siteV[best]; off[j] = siteOff[best]; }
       }
       const soft = new Float32Array(flat);
       boxBlurTor(soft, res, 1, 1);
-      return { flat, soft };
+      return { flat, soft, off };
     };
     {
       const CELL_SHARP = 0.90;      // how much of the hard cell edge survives the smoothing
+      // A cell is its OWN height, not a sample of the smooth field. Stock draws each polygon's elevation
+      // with a random term of several blocks, so neighbours land on different terrace levels; sampled off
+      // a smooth field, neighbours 17 blocks apart differed by a block and a half - half a level - and the
+      // terrace merged them into sheets. Measured on the owner's 200-chunk map: 64% of the land inside a
+      // level 13x13-block pad and one level running 233,000 columns, against stock's 25-28% and 34-41,000.
+      // Stock has no less relief at any lag from 2.7 m to 43 m, only more of it (1.7x), as more risers of
+      // the same size - so the offset is zero-mean noise, not a lift, and the median height does not move.
+      //
+      // Gated off over the first 45 blocks in from the sea, where stock's own noise is clamped under its
+      // ocean-distance ceiling, and off the levelled biomes. A cell never goes DOWN past 5 blocks over the
+      // sea: the +3 sea-rise loss stays at 16% (stock 26-33%) instead of climbing to 17-18%. Not 6 - that
+      // takes the hollows beyond a lake's rim with it (verify-water's rim check: 4.0% against a 5% bound).
+      const CELL_RELIEF = 3.0;         // blocks either way a cell departs from the smooth field
+      const CELL_GATE_BLOCKS = 45;     // in from the sea, over which the offset fades in
+      const CELL_FLOOR_BLOCKS = 5;     // over the sea; no cell is put down below it
       const isLand = j => land[j] === 1;
-      const { flat, soft } = cellFlatten(isLand, isLand);
+      const cellRelief = (cx, cy, si) => {
+        const gate = Math.min(1, distO[si] * BPC / CELL_GATE_BLOCKS) * (1 - flatMask[si]);
+        const off = (h2(cx + 5151, cy + 2323) - 0.5) * 2 * CELL_RELIEF * BLK * gate;
+        return Math.max(Math.min(hf[si], 0.5 + CELL_FLOOR_BLOCKS * BLK), hf[si] + off) - hf[si];
+      };
+      const { flat, soft, off } = cellFlatten(isLand, isLand, cellRelief);
       for (let j = 0; j < n; j++) if (land[j] === 1) hf[j] = soft[j] * (1 - CELL_SHARP) + flat[j] * CELL_SHARP;
+      cellOff = off;
     }
     // A real river is not the same on both banks or along its length: the inside of a bend silts up into
     // a flat point bar, the outside is cut back into a bluff. Everything below relaxes and caps the shore
@@ -10880,7 +10910,23 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     // it, and that step is the ledge: 18% of shore rays. So the relax, the lift and the cap all read it.
     const prof = bankProfileFields(res, n, wsurf, aroundLand);
     const vshF = prof.vshF, vrsF = prof.vrsF, bluff = prof.bluff;
-    valleyBanks(res, n, land, wsurf, hf, prof);
+    valleyBanks(res, n, land, wsurf, hf, prof, BPC);
+    // The offsets go on AFTER the valley pass, which pulls every cell within its reach toward one shoulder
+    // height and would otherwise erase them - that pass is where the largest sheet came from (the 233,000
+    // columns above were a river corridor). Faded in over the shoulder's own rise so the bank keeps the
+    // profile the passes below were tuned to.
+    {
+      const CELL_TAPER = VALLEY_RISE_MAX;   // cells from the water over which a cell's own offset fades in
+      const dw = new Int32Array(n).fill(-1), q = [];
+      for (let j = 0; j < n; j++) if (land[j] === 2) { dw[j] = 0; q.push(j); }
+      for (let k = 0; k < q.length; k++) { const c = q[k]; if (dw[c] >= CELL_TAPER + 1) continue;
+        for (const nb of nbr4(c)) if (dw[nb] < 0 && land[nb] === 1) { dw[nb] = dw[c] + 1; q.push(nb); } }
+      for (let j = 0; j < n; j++) {
+        if (land[j] !== 1) continue;
+        const t = dw[j] < 0 ? 1 : Math.max(0, Math.min(1, (dw[j] - 1) / CELL_TAPER));
+        hf[j] += cellOff[j] * t;
+      }
+    }
     // Flatten the very first ring of land into a bank rather than a lip. The valley pass above shapes the
     // slope but leaves this ring wherever the relaxation put it — up to 4.9 blocks over the water at p90 —
     // and CliffExtruder measures the ring against the BED, not the surface, so those blocks clear its
@@ -10901,7 +10947,7 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     // the water a second time; it is the lower bound on the shore, so nothing may leave it unenforced.
     const restoreShore = () => restoreShoreLip(res, land, wsurf, hf);
     restoreShore();
-    capShoreBand(res, n, land, wsurf, hf, prof, aroundLand, SETTLE_MARGIN);
+    capShoreBand(res, n, land, wsurf, hf, prof, aroundLand, SETTLE_MARGIN, BPC);
     // Snap the shaped corridor back onto the same cells the rest of the land uses.
     //
     // Vanilla relaxes its river valleys on POLYGONS — one height per Voronoi cell — so its corridor is
@@ -11807,11 +11853,11 @@ if (DEFAULT_ECO) loadConfigText(DEFAULT_ECO);
     // side and lies below its surface on the other, and either way the bank ends up the high point of its
     // own surroundings - a kerb following the water.
     const prof = bankProfileFields(N, N * N, wf.wsurf, settled.aroundLand);
-    valleyBanks(N, N * N, wf.land, wf.wsurf, fine, prof);
+    valleyBanks(N, N * N, wf.land, wf.wsurf, fine, prof, worldBlocks / N);
     // The ground either side: cap the ring so it is not a ledge, then put the shore back above the water.
     capBankLip(N, wf.land, wf.wsurf, fine);
     restoreShoreLip(N, wf.land, wf.wsurf, fine);
-    capShoreBand(N, N * N, wf.land, wf.wsurf, fine, prof, settled.aroundLand, settled.SETTLE_MARGIN);
+    capShoreBand(N, N * N, wf.land, wf.wsurf, fine, prof, settled.aroundLand, settled.SETTLE_MARGIN, worldBlocks / N);
     restoreShoreLip(N, wf.land, wf.wsurf, fine);
     // The bed shelves up at the edges and deepens away from them. A flat bed a fixed depth down puts a step
     // at every shoreline that Eco's CliffExtruder turns into a rock face - measured on a seeded world
