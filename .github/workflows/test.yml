@@ -52,6 +52,7 @@ jobs:
 
       - run: node test/verify-core.js
       - run: node test/verify-water.js
+      - run: node test/verify-river-banks.js
       - run: node test/verify-shape.js
       - run: node test/verify-import.js
       - run: node test/verify-paint.js
