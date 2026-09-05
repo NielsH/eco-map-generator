@@ -1680,14 +1680,26 @@
     const settled = settleWaterLevels(res, n, land, hf, distO, BPC, groups, boxBlurTor);
     const level = settled.level, fromShore = settled.fromShore, aroundLand = settled.aroundLand;
     const SETTLE_MARGIN = settled.SETTLE_MARGIN;
-    for (const cells of groups) {
-      const tally = {}; for (const j of cells) for (const nb of nbr4(j)) if (land[nb] === 1) tally[biome[nb]] = (tally[biome[nb]] || 0) + 1;
-      let lb = SC.Grassland, bc = -1; for (const k in tally) if (tally[k] > bc) { bc = tally[k]; lb = +k; }   // majority shore biome
-      // Only the mask and the surface are settled here. hf/water/bed are written once, at the end, out of
-      // the surface the passes below leave behind — anything put in them now is overwritten unread.
-      for (const j of cells) {
-        biome[j] = lb; land[j] = 2; wsurf[j] = Math.max(SEA + 0.01, level[j] - 0.012);   // just under the surrounding bank
+    // Only the mask and the surface are settled here. hf/water/bed are written once, at the end, out of
+    // the surface the passes below leave behind — anything put in them now is overwritten unread.
+    for (const cells of groups) for (const j of cells) {
+      land[j] = 2; wsurf[j] = Math.max(SEA + 0.01, level[j] - 0.012);   // just under the surrounding bank
+    }
+    // Each water cell takes the biome of its NEAREST shore, not one majority label for the whole body.
+    // A river is a single connected group from source to sea, so a per-group majority vote painted its
+    // entire length — and therefore both its banks — with whichever biome happened to line most of it.
+    // On a river crossing grassland, desert, rainforest and cold forest that came out Grassland end to
+    // end. Seed every water cell that touches land with the majority biome of its own land neighbours,
+    // then flood that inward through the body so mid-channel cells inherit the nearest bank.
+    {
+      const wlabel = new Int32Array(n).fill(-1), q = [];
+      for (const cells of groups) for (const j of cells) {
+        const tally = {}; let best = -1, bc = 0;
+        for (const nb of nbr4(j)) if (land[nb] === 1) { const b = biome[nb]; const t = (tally[b] || 0) + 1; tally[b] = t; if (t > bc) { bc = t; best = b; } }
+        if (best >= 0) { wlabel[j] = best; q.push(j); }
       }
+      for (let h = 0; h < q.length; h++) { const c = q[h]; for (const nb of nbr4(c)) if (land[nb] === 2 && wlabel[nb] < 0) { wlabel[nb] = wlabel[c]; q.push(nb); } }
+      for (const cells of groups) for (const j of cells) biome[j] = wlabel[j] >= 0 ? wlabel[j] : SC.Grassland;
     }
     // Settle the water surface: spikes, cross-channel levelling, then one level per lake. Shared with
     // the seeded path, which needs exactly the same treatment - see solveWaterSurface.
