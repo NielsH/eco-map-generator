@@ -290,6 +290,15 @@ const html = `<!DOCTYPE html>
   .ovRow .ndel{border:none; background:transparent; color:var(--muted); font-size:12px; padding:0 5px; cursor:pointer; border-radius:5px; opacity:0; flex:0 0 auto;}
   .ovRow:hover .ndel, .ovRow.sel .ndel{opacity:1;}
   .ovRow .ndel:hover{color:#c0392b; background:var(--surf);}
+  #ovLane{position:relative;}
+  #ovProbe{position:absolute; z-index:5; pointer-events:none; display:none; max-width:260px; padding:6px 8px;
+    border:0.5px solid var(--border2); border-radius:7px; background:var(--surf); color:var(--text);
+    font-size:11.5px; line-height:1.5; box-shadow:0 4px 14px rgba(0,0,0,.35);}
+  #ovProbe .pd{color:var(--muted); margin-bottom:3px;}
+  #ovProbe .pr{display:flex; gap:6px; align-items:center;}
+  #ovProbe .pr b{margin-left:auto; font-variant-numeric:tabular-nums;}
+  #ovProbe .pdot{width:8px; height:8px; border-radius:50%; flex:0 0 auto; border:0.5px solid var(--border2);}
+  #ovProbe .psub{color:var(--muted); margin-top:4px; border-top:0.5px solid var(--border); padding-top:3px;}
   .oreNode .nmv{border:none; background:transparent; color:var(--muted); font-size:10px; padding:2px 4px; cursor:pointer; border-radius:5px; line-height:1;}
   .oreNode .nmv:hover:not(:disabled){color:var(--text); background:var(--surf1);}
   .oreNode .nmv:disabled{opacity:.25; cursor:default;}
@@ -1192,10 +1201,39 @@ const OreVisual = (function () {
     if (!cells.length) s += '<text x="' + (CX + 20) + '" y="' + (TOPY + 44) + '" fill="' + cM + '" font-size="12">nothing here yet — add a vein or scatter below</text>';
     s += rect(CX, colTop, Wc, colBot - colTop, 'fill="none" stroke="' + cB + '" stroke-width="1"');
     s += '</svg>';
-    laneEl.innerHTML = s; svgEl = document.getElementById('ovSvg');
+    laneEl.innerHTML = s; svgEl = document.getElementById('ovSvg'); probeEl = null;
+    svgEl.addEventListener('pointermove', showProbe);
+    svgEl.addEventListener('pointerleave', hideProbe);
+    svgEl.addEventListener('pointerdown', hideProbe);
     svgEl.addEventListener('pointerdown', onDown);
   }
   const pointerDepth = e => { const r = svgEl.getBoundingClientRect(); return depthAtSvgY((e.clientY - r.top) * (H / r.height)); };
+  // Read the column at one depth. Everything needed was already computed for the drawing - lastProb per
+  // stratum per depth, and every object's own depth range - but you could only get at it by reading the
+  // picture, and the picture is a stack of probabilities that no eye reads to 1%.
+  let probeEl = null;
+  function hideProbe() { if (probeEl) probeEl.style.display = 'none'; }
+  function showProbe(e) {
+    if (drag || !svgEl || !laneEl) return;                      // never fight a drag
+    const d = Math.round(pointerDepth(e));
+    if (!(d >= 0 && d <= maxD) || !lastProb.length) { hideProbe(); return; }
+    if (!probeEl) { probeEl = document.createElement('div'); probeEl.id = 'ovProbe'; laneEl.appendChild(probeEl); }
+    const rows = strata.map((st, i) => ({ st: st, p: (lastProb[i] && lastProb[i][d]) || 0 }))
+      .filter(r => r.p >= 0.005).sort((a, b) => b.p - a.p);
+    let h = '<div class="pd">depth ' + d + '</div>';
+    h += rows.length ? rows.map(r => '<div class="pr"><span class="pdot" style="background:' + blockColorRaw(r.st.block) + '"></span>'
+      + prettyName(shortBlock(r.st.block)) + '<b>' + Math.round(r.p * 100) + '%</b></div>').join('')
+      : '<div class="pr">nothing generates here</div>';
+    const here = objs.filter(o => { const r = o.node.DepthRange; return r && d >= (r.min | 0) && d <= (r.max | 0); });
+    if (here.length) h += '<div class="psub">' + here.map(o => (o.kind === 'dep' ? 'vein ' : 'fill ') + oreLabel(o)
+      + ' in ' + prettyName(shortBlock(btOf(o.parent.BlockType) || '')) ).join('<br>') + '</div>';
+    probeEl.innerHTML = h; probeEl.style.display = 'block';
+    const lr = laneEl.getBoundingClientRect(), pw = probeEl.offsetWidth, ph = probeEl.offsetHeight;
+    let x = e.clientX - lr.left + laneEl.scrollLeft + 14, y = e.clientY - lr.top + laneEl.scrollTop + 14;
+    if (x + pw > laneEl.scrollLeft + lr.width) x = Math.max(0, x - pw - 28);
+    if (y + ph > laneEl.scrollTop + lr.height) y = Math.max(0, y - ph - 28);
+    probeEl.style.left = x + 'px'; probeEl.style.top = y + 'px';
+  }
   function onDown(e) { const t = e.target; if (!t || !t.dataset) return;
     if (t.dataset.stripnext != null) { stripOfs++; render(); return; }
     if (t.dataset.sdrag != null || t.dataset.sedge != null) { const p = (t.dataset.sedge != null ? t.dataset.sedge : t.dataset.sdrag).split('|'); const st = strata[+p[0]];
