@@ -3,3 +3,4 @@
 Thumbs.db
 *.swp
 node_modules/
+.claude/worktrees/

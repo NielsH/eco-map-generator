@@ -283,6 +283,9 @@ const html = `<!DOCTYPE html>
   .ovRow .ndel{border:none; background:transparent; color:var(--muted); font-size:12px; padding:0 5px; cursor:pointer; border-radius:5px; opacity:0; flex:0 0 auto;}
   .ovRow:hover .ndel, .ovRow.sel .ndel{opacity:1;}
   .ovRow .ndel:hover{color:#c0392b; background:var(--surf);}
+  .oreNode .nmv{border:none; background:transparent; color:var(--muted); font-size:10px; padding:2px 4px; cursor:pointer; border-radius:5px; line-height:1;}
+  .oreNode .nmv:hover:not(:disabled){color:var(--text); background:var(--surf1);}
+  .oreNode .nmv:disabled{opacity:.25; cursor:default;}
   .oreAdd{display:flex; gap:8px; padding:9px 0 5px;}
   .oreAdd button{font-size:12px; padding:4px 11px;}
   #blockChartWrap{width:100%; overflow-x:auto; position:relative; border:0.5px solid var(--border); border-radius:12px; background:var(--surf); padding:6px 0; margin-top:4px;}
@@ -372,7 +375,7 @@ const html = `<!DOCTYPE html>
         <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start;justify-content:center;margin-top:8px">
           <div id="ovLane" style="flex:0 0 auto;border:0.5px solid var(--border);border-radius:12px;background:var(--surf);padding:6px 10px;overflow-x:auto;max-width:100%"></div>
           <div style="flex:1 1 240px;min-width:230px;max-width:340px">
-            <div class="lbl" style="margin:0 0 4px">All blocks — click to select, ✕ to remove</div>
+            <div class="lbl" style="margin:0 0 4px">All blocks — click to select, ✕ to remove, ▲▼ to reorder. Layers are walked in order; within a layer the first match wins.</div>
             <div id="ovList" style="max-height:260px;overflow-y:auto;margin-bottom:10px;border:0.5px solid var(--border);border-radius:8px;padding:4px"></div>
             <div id="ovDetail"></div>
             <div class="oreAdd" style="margin-top:8px"><button id="ovAddVein">+ vein</button><button id="ovAddScatter">+ fill</button></div>
@@ -1165,25 +1168,51 @@ const OreVisual = (function () {
   function removeStratum(st) { if (!st) return; const bm = biomes()[biomeIdx]; const arr = bm && bm.Module && bm.Module.BlockDepthRanges; if (!arr) return;
     const idx = arr.indexOf(st.node); if (idx < 0) return; arr.splice(idx, 1); if (sel && sel.node === st.node) sel = null;
     render(); renderDetail(); renderList(); scheduleOreRender(); }
+  /** Move a node one place within the array that holds it. Order is semantics here, in two ways: the
+   *  layer chain is walked in order, and within a layer the FIRST sub-module that matches a depth wins,
+   *  so two fills over the same depths are not commutative. Nothing in the panel could reorder either. */
+  function moveIn(arr, node, dir) { const i = arr.indexOf(node), j = i + dir;
+    if (i < 0 || j < 0 || j >= arr.length) return false;
+    arr.splice(j, 0, arr.splice(i, 1)[0]); return true; }
+  const moveBtns = (canUp, canDown) => '<button class="nmv" data-mv="-1"' + (canUp ? '' : ' disabled') + ' title="Move earlier — layers are walked in order, and within a layer the first match wins">▲</button>'
+    + '<button class="nmv" data-mv="1"' + (canDown ? '' : ' disabled') + ' title="Move later">▼</button>';
+  function wireMove(arr, node) { detailEl.querySelectorAll('.nmv').forEach(b => b.onclick = () => {
+    if (!moveIn(arr, node, +b.dataset.mv)) return; render(); renderDetail(); renderList(); scheduleOreRender(); }); }
   function renderDetail() {
     if (!detailEl) return;
-    if (!sel) { detailEl.innerHTML = '<div class="lbl" style="padding:6px 0">Click a base-rock layer, vein, or scatter to edit it — or add a vein/scatter below.</div>'; return; }
+    if (!sel) { detailEl.innerHTML = '<div class="lbl" style="padding:6px 0">Click a layer, fill, or vein to edit it — or add one below.</div>'; return; }
     if (sel.kind === 'strat') { const opts = collectBlockTypes(), col = blockColorRaw(sel.block);
-      detailEl.innerHTML = '<div class="oreNode" style="border-top:none"><span class="ndot" style="background:' + col + '"></span><span class="tag">base rock</span>' + blockSelect(sel.block, opts)
-        + '<span class="kk"><label>layer bottom</label><input type="number" class="kv" data-sf="Min" value="' + (sel.node.Min | 0) + '"><span class="dash">–</span><input type="number" class="kv" data-sf="Max" value="' + (sel.node.Max | 0) + '"></span>'
-        + '<button class="ndel" title="Remove this rock layer and its veins/scatters">✕</button></div>'
+      detailEl.innerHTML = '<div class="oreNode" style="border-top:none"><span class="ndot" style="background:' + col + '"></span><span class="tag">layer</span>' + blockSelect(sel.block, opts)
+        + '<span class="kk"><label title="the depth this layer stops at - every column draws its own end between these two">ends at depth</label><input type="number" class="kv" data-sf="Min" value="' + (sel.node.Min | 0) + '"><span class="dash">–</span><input type="number" class="kv" data-sf="Max" value="' + (sel.node.Max | 0) + '"></span>'
+        + moveBtns(true, true)
+        + '<button class="ndel" title="Remove this layer and everything in it">✕</button></div>'
         + '<div id="ovStratNote" style="font-size:11.5px;color:var(--muted);margin-top:5px">' + stratNoteHtml(sel.node) + '</div>';
-      wireStrat(sel); return; }
+      wireStrat(sel);
+      { const bm = biomes()[biomeIdx], arr = bm && bm.Module && bm.Module.BlockDepthRanges; if (arr) wireMove(arr, sel.node); }
+      return; }
     const o = sel, opts = collectBlockTypes(), dep = o.kind === 'dep';
     const dot = '<span class="ndot" style="background:' + oreDot(o) + '"></span>', del = '<button class="ndel" title="Remove this node">✕</button>';
     let h = '<div class="oreNode" style="border-top:none">' + dot + '<span class="tag">' + (dep ? 'vein' : 'fill') + '</span>' + blockSelect(btOf(o.node.BlockType), opts);
     h += dep ? (knob1('SpawnPercentChance', o.node.SpawnPercentChance, dep) + knobR('DepthRange', o.node.DepthRange, dep) + knobR('DepositDepthRange', o.node.DepositDepthRange, dep) + knobR('BlocksCountRange', o.node.BlocksCountRange, dep))
              : (knob1('PercentChance', o.node.PercentChance, dep) + knobR('DepthRange', o.node.DepthRange, dep) + knob1('NoiseFrequency', o.node.NoiseFrequency, dep));
-    h += del + '</div>'; detailEl.innerHTML = h; wireDetail(o);
+    if (!dep) h += noiseSelects(o.node);
+    h += moveBtns(true, true) + del + '</div>'; detailEl.innerHTML = h; wireDetail(o); wireMove(o.sub, o.node);
   }
+  // StandardTerrainModule.Initialize sorts its noise samples and takes a band of the requested width:
+  // Bands takes it around the MEDIAN (contiguous sheets following an isosurface), Blobs takes the low
+  // TAIL (compact pockets). Same coverage, completely different-looking rock - and neither was editable,
+  // though stock configs use both. NoiseType picks the field the band is cut from.
+  const SEL_OPT = (v, cur) => '<option value="' + v + '"' + (v === cur ? ' selected' : '') + '>' + v + '</option>';
+  function noiseSelects(n) {
+    const shape = n.NoiseDistributionType || 'Bands', type = n.NoiseType || 'Perlin';
+    return '<span class="kk"><label title="Bands follow a surface through the rock; Blobs are compact pockets">shape</label>'
+      + '<select class="kv" data-f="NoiseDistributionType">' + ['Bands', 'Blobs'].map(v => SEL_OPT(v, shape)).join('') + '</select></span>'
+      + '<span class="kk"><label title="the noise field the band is cut from">noise</label>'
+      + '<select class="kv" data-f="NoiseType">' + ['Perlin', 'Billow', 'RidgedMulti'].map(v => SEL_OPT(v, type)).join('') + '</select></span>'; }
   function wireDetail(o) { const node = o.node;
     detailEl.querySelectorAll('input,select').forEach(inp => inp.addEventListener('input', () => {
       const f = inp.dataset.f; if (!f) return;
+      if (f === 'NoiseDistributionType' || f === 'NoiseType') { node[f] = inp.value; render(); scheduleOreRender(); return; }
       if (f === 'block') { node.BlockType = node.BlockType || {}; node.BlockType.Type = inp.value; o.mat = oreMaterial(inp.value) || o.mat; render(); renderList(); scheduleOreRender(); return; }
       const val = parseFloat(inp.value); if (!isFinite(val)) return;
       if (f.endsWith('_min') || f.endsWith('_max')) { const key = f.slice(0, -4), mm = f.slice(-3); node[key] = node[key] || {}; node[key][mm] = val; } else node[f] = val;
