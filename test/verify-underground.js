@@ -192,53 +192,44 @@ check('the list still nests and shows liveness', el('ovList').innerHTML.indexOf(
   check('OreVisual block is byte-identical in index.html', html.indexOf(buildSrc.slice(a, b)) >= 0);
 }
 
-// ---- the strip of real columns: its request/reply path through a fake worker, then the port it rides on ----
+// ---- the ghost: selecting a vein draws one deposit, to scale, in its grow window ----
+// This replaced the strip of real columns. The strip could never show a vein - growth draws from one world
+// random in traversal order and competes through a global dedup map, so a slice of it cannot be computed -
+// and it showed fills, which made its silence read as "no ore here". The deposit it could not draw is the
+// thing you wanted to see, and this draws it.
 {
-  // a second lane with a worker, a canvas and a form to read; setTimeout fires at once so the debounce is inert
   const els2 = {}, el2 = elementsOf(els2);
-  const posted = []; const fakeWorker = { postMessage(m) { posted.push(m); }, onmessage: null };
-  const painted = []; const canvas = { width: 0, height: 0, getContext() { return { fillStyle: '', fillRect(x, y) { painted.push(x + ',' + y); } }; }, toDataURL() { return 'data:image/png;base64,FAKE'; } };
-  const doc2 = { getElementById: el2, handlers: {}, addEventListener(ev, fn) { this.handlers[ev] = fn; }, createElement() { return canvas; } };
+  const doc2 = { getElementById: el2, handlers: {}, addEventListener(ev, fn) { this.handlers[ev] = fn; }, createElement() { return { getContext() { return {}; } }; } };
   const cfg = { worldWidth: 72, seed: 4242, waterLevel: 60, maxGenerationHeight: 120 };
-  const lifted2 = new Function('$', 'document', 'getComputedStyle', 'BlockChart', 'buildExportJson', 'setTimeout', 'clearTimeout', 'Worker', 'makeWorker', 'readForm', 'baseCfg', 'VT',
+  const lifted2 = new Function('$', 'document', 'getComputedStyle', 'BlockChart', 'buildExportJson', 'setTimeout', 'clearTimeout', 'readForm', 'baseCfg',
     slice + '\nreturn { OreVisual, setTerrain: t => { terrain = t; } };')(
-    el2, doc2, () => ({ getPropertyValue: () => '#123456' }), { render() {} }, () => ({}), fn => { fn(); return 1; }, () => {}, function () {}, () => fakeWorker, () => cfg, cfg, [1, 2, 3]);
+    el2, doc2, () => ({ getPropertyValue: () => '#123456' }), { render() {} }, () => ({}), fn => { fn(); return 1; }, () => {}, () => cfg, cfg);
   lifted2.setTerrain(terrain);
   lifted2.OreVisual.init(); lifted2.OreVisual.build();
   el2('ovBiomes').querySelectorAll('button')[desertIdx].onclick();
-  let svg2 = el2('ovLane').innerHTML;
-  const req = posted.filter(m => m.type === 'strip').slice(-1)[0];
-  check('the strip worker is initialised with the vector table first', posted[0] && posted[0].type === 'init' && posted[0].vt.length === 3);
-  check('a strip is requested for Desert at the current seed and mean surface', !!req && req.biome === 'Desert' && req.cfg.seed === 4242 && req.cfg.worldWidth === 72 && req.n === 48 && req.intHeight === 67, req && JSON.stringify([req.biome, req.cfg, req.n, req.intHeight]));
-  check('the lane says it is computing while the worker works', svg2.indexOf('computing real columns') >= 0 && svg2.indexOf('<image') < 0);
-  // the reply: 48 columns of 68 blocks, surface at the top of each
-  const rows = req.intHeight + 1, cols = [];
-  for (let i = 0; i < req.n; i++) { const c = new Array(rows); for (let y = 0; y < rows; y++) c[y] = y === 0 ? 'Eco.World.Blocks.ImpenetrableStoneBlock' : y > rows - 4 ? 'Eco.World.Blocks.DesertSandBlock' : 'Eco.World.Blocks.SandstoneBlock'; cols.push(c); }
-  fakeWorker.onmessage({ data: { type: 'strip-done', key: 'stale', cols: cols, x0: 1, z: 1, intHeight: req.intHeight } });
-  check('a reply for another key is dropped', el2('ovLane').innerHTML.indexOf('<image') < 0);
-  fakeWorker.onmessage({ data: { type: 'strip-done', key: req.key, cols: cols, x0: 360, z: 360, intHeight: req.intHeight } });
-  svg2 = el2('ovLane').innerHTML;
-  check('the reply paints one pixel per block', painted.length === req.n * rows && canvas.width === req.n && canvas.height === rows, painted.length + ' px');
-  const img = svg2.slice(svg2.indexOf('<image'), svg2.indexOf('/>', svg2.indexOf('<image')));
-  const SCd = 1000 / 120;
-  check('the strip image spans the same rows as the stack, at the stack scale', img.indexOf('height="' + (rows * SCd).toFixed(1) + '"') >= 0 && img.indexOf('preserveAspectRatio="none"') >= 0 && img.indexOf('pixelated') >= 0, img.slice(0, 90));
-  // The omission has to be stated where it is READ, not only in a footnote: the strip shows fills, so a
-  // grey line at the bottom saying veins are missing was taken for "there is no ore down here".
-  check('the strip is captioned with its slice, and says loudly that veins are missing',
-    svg2.indexOf('48 real columns at z360, x360–407') >= 0 && svg2.indexOf('data-stripnext') >= 0 &&
-    svg2.indexOf('no veins in this view') >= 0 && svg2.indexOf('world-wide pass') >= 0);
-  check('the world-Y edge sits to the right of the strip', svg2.indexOf('world Y under the mean surface (Y67)') >= 0 && svg2.indexOf('surface Y61–72') >= 0);
-  const before = posted.length;
-  el2('ovSvg').handlers.pointerdown({ target: { dataset: { stripnext: '1' } }, clientY: 0, clientX: 0, preventDefault() {} });
-  const req2 = posted.slice(-1)[0];
-  check('next slice asks for another offset and shows the old strip dimmed meanwhile', posted.length === before + 1 && req2.ofs === 1 && el2('ovLane').innerHTML.indexOf('opacity="0.4"') >= 0);
-  // an edit to ANOTHER biome must re-request: every later fill's seed moves with it
-  const grass = terrain.Modules.find(m => m.BiomeName === 'Grassland');
-  const b0 = posted.length; grass.Module.BlockDepthRanges[0].SubModules.push({ '$type': 'Eco.WorldGenerator.StandardTerrainModule, Eco.WorldGenerator', BlockType: { Type: 'Eco.World.Blocks.DirtBlock, Eco.World' }, DepthRange: { min: 0, max: 1 }, PercentChance: 0.1 });
-  fakeWorker.onmessage({ data: { type: 'strip-done', key: req2.key, cols: cols, x0: 0, z: 0, intHeight: req.intHeight } });   // settle the pending request first
-  el2('ovBiomes').querySelectorAll('button')[desertIdx].onclick();
-  check('a fill added to an earlier biome re-requests the strip', posted.length === b0 + 1 && posted.slice(-1)[0].type === 'strip');
-  grass.Module.BlockDepthRanges[0].SubModules.pop();
+  const noSel = el2('ovLane').innerHTML;
+  check('nothing is drawn until a vein is selected', noSel.indexOf('one deposit') < 0);
+
+  // Select a vein the way the lane does it: its own move handle. Only a vein gets grow-window grips, so a
+  // data-drag index that appears with "|gt" is a vein.
+  const gt = noSel.indexOf('|gt"');
+  const idx = gt < 0 ? null : noSel.slice(noSel.lastIndexOf('data-drag="', gt) + 11, gt);
+  check('the Desert lane offers a vein to select', idx !== null && /^[0-9]+$/.test(idx), String(idx));
+  if (idx !== null) {
+    el2('ovSvg').handlers.pointerdown({ target: { dataset: { drag: idx + '|move' } }, clientX: 0, clientY: 0, preventDefault() {} });
+    doc2.handlers.pointerup && doc2.handlers.pointerup();
+    const svg2 = el2('ovLane').innerHTML;
+    check('selecting a vein draws one deposit with its size on it',
+      /one deposit[\s\S]{0,4}[0-9]+ tall[\s\S]{0,4}[0-9]+ wide/.test(svg2), svg2.slice(Math.max(0, svg2.indexOf('one deposit') - 8), svg2.indexOf('one deposit') + 52));
+    check('the soft grow window is drawn around it, dashed',
+      svg2.indexOf('stroke-dasharray="3 3"') >= 0 && svg2.indexOf('grows within') >= 0);
+    // the drawing and the detail panel must not drift apart - they read the same veinExtent
+    const m1 = svg2.match(/one deposit[\s\S]{0,4}([0-9]+) tall[\s\S]{0,4}([0-9]+) wide/);
+    const m2 = el2('ovDetail').innerHTML.match(/about <b>([0-9]+) blocks tall<\/b> and <b>([0-9]+) wide<\/b>/);
+    check('the drawing and the note agree on the size', !!m1 && !!m2 && m1[1] === m2[1] && m1[2] === m2[2],
+      m1 && m2 ? m1[1] + 'x' + m1[2] + ' drawn vs ' + m2[1] + 'x' + m2[2] + ' written' : 'no match');
+  }
+  check('no strip is requested any more', el2('ovLane').innerHTML.indexOf('real columns') < 0);
 }
 
 // ---- the port the strip rides on, with the real noise ----
@@ -247,21 +238,16 @@ check('the list still nests and shows liveness', el('ovList').innerHTML.indexOf(
   core.setVectorTable(fs.readFileSync(path.join(ROOT, 'src', 'vectortable.txt'), 'utf8').trim().split(',').map(Number));
   const cfg = { worldWidth: 72, seed: 4242, waterLevel: 60, maxGenerationHeight: 120 };
   const full = voxel.initTerrain(terrain, cfg); full.biomeAt = () => 'Desert';
-  const only = voxel.initTerrain(terrain, cfg, 'Desert'); only.biomeAt = () => 'Desert';
+  const again = voxel.initTerrain(terrain, cfg); again.biomeAt = () => 'Desert';
   let same = true; for (let i = 0; i < 64 && same; i++) { const x = 100 + i * 7, z = 300 + i * 3;
-    const a = voxel.generateColumn(full, x, z, 67), b = voxel.generateColumn(only, x, z, 67); if (a.join() !== b.join()) same = false; }
-  check('calibrating one biome gives the same columns as calibrating all (seed order kept)', same);
-  const dS = full.biomes.Desert.ranges.flatMap(r => r.subs.filter(s => s.kind === 'scatter')), oS = only.biomes.Desert.ranges.flatMap(r => r.subs.filter(s => s.kind === 'scatter'));
+    const a = voxel.generateColumn(full, x, z, 67), b = voxel.generateColumn(again, x, z, 67); if (a.join() !== b.join()) same = false; }
+  check('the same terrain calibrates to the same ground twice', same);
+  const dS = full.biomes.Desert.ranges.flatMap(r => r.subs.filter(s => s.kind === 'scatter'));
+  const oS = again.biomes.Desert.ranges.flatMap(r => r.subs.filter(s => s.kind === 'scatter'));
   check('the calibration memo returns the exact bands', dS.length > 0 && dS.every((s, i) => s._nMin === oS[i]._nMin && s._nMax === oS[i]._nMax && s._seed === oS[i]._seed), dS.length + ' fills');
-  const r = voxel.biomeStrip(terrain, cfg, 'Desert', 48, 0, 67), r2 = voxel.biomeStrip(terrain, cfg, 'Desert', 48, 0, 67);
-  check('biomeStrip: 48 columns of intHeight+1 blocks, world floor at the bottom', r.cols.length === 48 && r.cols.every(c => c.length === 68 && c[0] === voxel.IMPENETRABLE));
-  check('biomeStrip is deterministic', JSON.stringify(r) === JSON.stringify(r2));
-  const top = r.cols.filter(c => c[67].indexOf('DesertSand') >= 0).length;
-  check('Desert columns are Desert Sand at the surface (a 0-0 layer alive in 99% plus a fill)', top >= 44, top + '/48');
-  const other = voxel.biomeStrip(terrain, { worldWidth: 72, seed: 99, waterLevel: 60, maxGenerationHeight: 120 }, 'Desert', 48, 0, 67);
-  check('another seed digs different ground', JSON.stringify(other.cols) !== JSON.stringify(r.cols));
-  const slice1 = voxel.biomeStrip(terrain, cfg, 'Desert', 48, 1, 67);
-  check('another slice is elsewhere in the world', slice1.x0 !== r.x0 && slice1.z !== r.z);
+  const other = voxel.initTerrain(terrain, { worldWidth: 72, seed: 99, waterLevel: 60, maxGenerationHeight: 120 }); other.biomeAt = () => 'Desert';
+  check('another seed digs different ground',
+    voxel.generateColumn(other, 360, 360, 67).join() !== voxel.generateColumn(full, 360, 360, 67).join());
 }
 
 console.log(fails ? '\n' + fails + ' check(s) failed' : '\nall checks passed');
