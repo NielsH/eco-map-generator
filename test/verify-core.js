@@ -2,7 +2,7 @@
 // assemblies (SharpNoise.dll) and .NET's seeded Random. Run: node test/verify-core.js
 const fs = require('fs');
 const path = require('path');
-const { CsRandom, Perlin, RidgedMulti, gradientCoherentNoise3D, setVectorTable, NQ } = require('../src/core.js');
+const { CsRandom, Perlin, Billow, RidgedMulti, gradientCoherentNoise3D, setVectorTable, NQ } = require('../src/core.js');
 
 setVectorTable(fs.readFileSync(path.join(__dirname, '../src/vectortable.txt'), 'utf8').trim().split(',').map(Number));
 let fails = 0;
@@ -29,15 +29,35 @@ for (const line of fs.readFileSync(path.join(__dirname, 'noise_ref.tsv'), 'utf8'
     const [, q, seed, x, y, z, val] = f;
     const g = gradientCoherentNoise3D(+x, +y, +z, +seed, q === 'Best' ? NQ.Best : NQ.Standard);
     noiseChecks++; if (!approx(g, +val)) { fails++; console.log(`GCN ${q} ${seed} (${x},${y},${z}) ${g} != ${val}`); }
-  } else if (f[0].startsWith('PERLIN') || f[0].startsWith('RIDGED')) {
+  } else if (f[0].startsWith('PERLIN') || f[0].startsWith('RIDGED') || f[0].startsWith('BILLOW')) {
     const [label, x, y, z, val] = f;
     const mod = label === 'PERLIN_BEST_f0.5_s7' ? new Perlin({ Seed:7, Frequency:0.5, Quality:NQ.Best })
       : label === 'PERLIN_STD_f10_s3' ? new Perlin({ Seed:3, Frequency:10.0 })
-      : label === 'RIDGED_f6_s5' ? new RidgedMulti({ Seed:5, Frequency:6.0 }) : null;
+      : label === 'RIDGED_f6_s5' ? new RidgedMulti({ Seed:5, Frequency:6.0 })
+      : label === 'BILLOW_f6_s5' ? new Billow({ Seed:5, Frequency:6.0 })
+      : label === 'BILLOW_f0.5_s7' ? new Billow({ Seed:7, Frequency:0.5 }) : null;
     if (!mod) continue;
     const g = mod.getValue(+x, +y, +z);
     noiseChecks++; if (!approx(g, +val)) { fails++; console.log(`${label} (${x},${y},${z}) ${g} != ${val}`); }
   }
+}
+
+// Billow must be its own field, not an alias for Perlin. That is exactly how it was wrong: the voxel model
+// resolved RidgedMulti-or-else-Perlin, so a fill set to Billow generated one way in the game and previewed as
+// another. The reference rows above pin the values; this pins that it is not simply Perlin wearing a name.
+{
+  const b = new Billow({ Seed: 5, Frequency: 6.0 }), p = new Perlin({ Seed: 5, Frequency: 6.0 });
+  let same = 0, n = 0;
+  for (let i = 0; i < 40; i++) { const x = i * 0.137, z = i * 0.271;
+    n++; if (approx(b.getValue(x, 0, z), p.getValue(x, 0, z))) same++; }
+  noiseChecks++;
+  if (same > 0) { fails++; console.log(`BILLOW is Perlin at ${same}/${n} points`); }
+}
+// ...and the voxel model has to reach for it by name, or the strip and the 3D view silently show Perlin.
+{
+  const vx = fs.readFileSync(path.join(__dirname, '..', 'src', 'voxel.js'), 'utf8');
+  noiseChecks++;
+  if (vx.indexOf('VC.Billow') < 0) { fails++; console.log('voxel.js never constructs Billow'); }
 }
 
 console.log(`Random + ${noiseChecks} noise checks`);
