@@ -65,6 +65,7 @@ jobs:
       - run: node test/verify-ramp.js
       - run: node test/verify-scale.js
       - run: node test/verify-sheets.js
+      - run: node test/verify-underground.js
 
       # A suite that exists but is not listed above runs only on the author's machine, which is where the
       # last four ended up. Cheap to check, and it fails the moment someone adds one without wiring it in.
