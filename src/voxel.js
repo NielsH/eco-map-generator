@@ -73,11 +73,9 @@ function parseTerrain(terr) {
 }
 
 // ---- initialize noise seeds (reproduces InitModules' double-init) and keep the growth random ----
-// onlyBiome: calibrate that biome's scatters alone. Every seed is still drawn, in order, for every biome -
-// a fill's seed depends on how many submodules every earlier biome has - but calibration is the whole cost
 // (1 s / 9 s / 33 s for all biomes at 72 / 144 / 216 wide), and the underground editor's strip of real
 // columns needs one biome at a time.
-function initTerrain(terr, cfg, onlyBiome) {
+function initTerrain(terr, cfg) {
   const biomes = parseTerrain(terr);
   const fs = cfg.worldWidth / 72.0;
   const rand = new VC.CsRandom(cfg.seed);
@@ -93,7 +91,6 @@ function initTerrain(terr, cfg, onlyBiome) {
   initPass();   // pass 2: InitModules recurses (the double-init quirk)
   for (const name of order) for (const r of biomes[name].ranges) {
     r._depthNoise = new VC.Perlin({ Frequency: r.noiseFreq * fs, Seed: r._depthSeed });
-    if (onlyBiome && name !== onlyBiome) continue;
     for (const s of r.subs) if (s.kind === 'scatter') calibrateScatter(s, fs);
   }
   return { biomes, fs, cfg, _rand: rand, _deposits: null };   // _rand continues as the deposit growth random
@@ -176,15 +173,6 @@ function generateColumn(ctx, x, z, intHeight) {
 // fills only. Veins are a global post-pass - computeDeposits needs every column's height in the world
 // before it can place one - so the strip states that it omits them rather than approximating them.
 // ofs picks another slice (a different x run and z row) of the same world.
-function biomeStrip(terr, cfg, biome, n, ofs, intHeight) {
-  const ctx = initTerrain(terr, cfg, biome);
-  ctx.biomeAt = () => biome;
-  const W = cfg.worldWidth * 10, wrap = v => ((v % W) + W) % W;
-  const x0 = wrap((W >> 1) + (ofs | 0) * 97), z = wrap((W >> 1) + (ofs | 0) * 61);
-  const cols = [];
-  for (let i = 0; i < n; i++) cols.push(generateColumn(ctx, wrap(x0 + i), z, intHeight));
-  return { cols, x0, z, intHeight };
-}
 
 // ================= deposit (ore vein) global precompute =================
 // min-heap with FIFO tie-break, mirroring the server's UniquePriorityQueue (+ per-item dedup set)
@@ -365,4 +353,4 @@ function meshChunkFromCols(chunk, hiddenArr, sliceTop) {
   return { pos: new Float32Array(pos), nor: new Float32Array(nor), pal: new Uint16Array(pal), palette };
 }
 
-if (typeof module !== 'undefined') module.exports = { initTerrain, generateColumn, parseTerrain, heightToInt, selectBase, computeDeposits, bindVoxel, genChunkColumns, meshChunkFromCols, biomeStrip, IMPENETRABLE };
+if (typeof module !== 'undefined') module.exports = { initTerrain, generateColumn, parseTerrain, heightToInt, selectBase, computeDeposits, bindVoxel, genChunkColumns, meshChunkFromCols, IMPENETRABLE };
