@@ -8972,8 +8972,9 @@ const OreVisual = (function () {
       + (e.shapes > 1 ? ', averaged over its ' + e.shapes + ' growth shapes' : '') + '.';
     if (relief > 0) h += ' Each one hangs under the surface of <b>its own</b> seed, and the ground here rolls over '
       + relief + ' blocks, so across the biome the ore can sit anywhere in a band about <b>' + band + ' blocks</b> deep — that is its reach, not its thickness.';
-    if (perCol > 0) h += ' At this seed rate that is roughly <b>' + (perCol < 1 ? perCol.toFixed(2) : Math.round(perCol))
-      + ' blocks of ore per column</b>' + (perCol >= band ? ', more than the band can hold — expect it solid.' : '.');
+    if (perCol > 0) { const pc = perCol < 1 ? perCol.toFixed(2) : Math.round(perCol);
+      h += ' At this seed rate that is roughly <b>' + pc + ' block' + (String(pc) === '1' ? '' : 's') + ' of ore per column</b>'
+        + (perCol >= band ? ', more than the band can hold — expect it solid.' : '.'); }
     if (tooDense) h += ' <b style="color:#c0705a">The engine will warn at load</b>: one seed per ' + perSeed
       + ' blocks with deposits up to ' + (bc.max | 0) + ' is too dense; it wants about 1 per ' + Math.round((bc.max | 0) * 1.2) + '.';
     return h; }
