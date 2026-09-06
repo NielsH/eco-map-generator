@@ -112,10 +112,16 @@
   /* the row markup has always emitted a colour dot, but only .oreNode .ndot was ever given a size,
      so in this list it collapsed to nothing. Give it one - the colour is the fastest way to read the list. */
   .ovRow .ndot{width:9px; height:9px; border-radius:50%; border:0.5px solid var(--border2); flex:0 0 auto;}
+  .ovRow .lmeta{display:flex; align-items:center; gap:5px;}
+  .ovRow .lends{opacity:.6;}
+  .ovRow .lis.mixed{font-style:italic; opacity:.75;}
+  /* how much of the world this layer is actually the rock in - a measured share, not a verdict */
+  .ovRow .lpct{min-width:32px; text-align:right; font-weight:600;}
+  .ovRow .lpct.lv-hi{color:#5fa463;} .ovRow .lpct.lv-mid{color:#c99a3f;} .ovRow .lpct.lv-lo{color:#c0705a;}
   .ovRow .lmeta{color:var(--muted); font-size:10.5px; flex:0 0 auto; font-variant-numeric:tabular-nums; white-space:nowrap;}
   /* a scatter/vein lives INSIDE a stratum - indent it under its parent and run a guide line down the group */
   .ovRow.sub{margin-left:9px; padding-left:13px; border-left:1px solid var(--border);}
-  .ovRow.sub .ltag{width:38px;}
+  .ovRow.sub .ltag{width:32px;}
   .ovRow .ndel{border:none; background:transparent; color:var(--muted); font-size:12px; padding:0 5px; cursor:pointer; border-radius:5px; opacity:0; flex:0 0 auto;}
   .ovRow:hover .ndel, .ovRow.sel .ndel{opacity:1;}
   .ovRow .ndel:hover{color:#c0392b; background:var(--surf);}
@@ -211,7 +217,7 @@
             <div class="lbl" style="margin:0 0 4px">All blocks — click to select, ✕ to remove</div>
             <div id="ovList" style="max-height:260px;overflow-y:auto;margin-bottom:10px;border:0.5px solid var(--border);border-radius:8px;padding:4px"></div>
             <div id="ovDetail"></div>
-            <div class="oreAdd" style="margin-top:8px"><button id="ovAddVein">+ vein</button><button id="ovAddScatter">+ scatter</button></div>
+            <div class="oreAdd" style="margin-top:8px"><button id="ovAddVein">+ vein</button><button id="ovAddScatter">+ fill</button></div>
           </div>
         </div>
       </div>
@@ -8399,7 +8405,11 @@ const ORE_SLIDER = {
   DepositDepthRange:  { min:0, max:120,  step:1 },
   BlocksCountRange:   { min:0, max:300,  step:1 },
 };
-const KNOB_LABEL = { SpawnPercentChance:'chance', PercentChance:'chance', NoiseFrequency:'freq', DepthRange:'seed depth', DepositDepthRange:'grows over', BlocksCountRange:'blocks (vein size)' };
+// A fill's PercentChance is a calibrated VOLUME FRACTION (StandardTerrainModule.Initialize sorts ~9k noise
+// samples and takes a band that wide), not a per-block dice roll - "coverage" says that, "chance" does not.
+// A vein's SpawnPercentChance is a seed rate, and reads far better as the engine's own "1 per N blocks".
+// DepositDepthRange is a penalty, not a bound, so it may not be called a range it stays in.
+const KNOB_LABEL = { SpawnPercentChance:'seed rate', PercentChance:'coverage', NoiseFrequency:'patch size', DepthRange:'seeds at depth', DepositDepthRange:'stays within (soft)', BlocksCountRange:'vein size (blocks)' };
 const sMax = (f, v) => { const c = ORE_SLIDER[f]; v = v || 0; return c.step < 1 ? Math.max(c.max, +(v * 1.25).toFixed(4)) : Math.max(c.max, Math.ceil(v)); };
 function collectBlockTypes() {
   const set = new Set();
@@ -8412,10 +8422,14 @@ function blockSelect(cur, opts) {
 }
 // a slider paired with an editable number (number can exceed the slider's range, which auto-expands)
 function slPair(f, c, mx, v) { return '<input type="range" data-f="' + f + '" min="' + c.min + '" max="' + mx + '" step="' + c.step + '" value="' + v + '"><input type="number" class="kv" data-f="' + f + '" step="' + c.step + '" min="0" value="' + v + '">'; }
-function knob1(field, v) { const c = ORE_SLIDER[field]; v = (v != null ? v : 0);
-  return '<span class="kk"><label>' + KNOB_LABEL[field] + '</label>' + slPair(field, c, sMax(field, v), v) + '</span>'; }
-function knobR(field, r) { r = r || {}; const c = ORE_SLIDER[field], mx = sMax(field, Math.max(r.min || 0, r.max || 0));
-  return '<span class="kk"><label>' + KNOB_LABEL[field] + '</label>' + slPair(field + '_min', c, mx, r.min != null ? r.min : 0) + '<span class="dash">–</span>' + slPair(field + '_max', c, mx, r.max != null ? r.max : 0) + '</span>'; }
+// DepthRange is the same field with two meanings: on a fill it is the depths it FILLS, on a vein only the
+// depths its seed may LAND in. One label for both is how that got confusing, so pass the kind.
+const knobLabel = (field, dep) => (dep && field === 'DepthRange') ? 'seeds at depth'
+  : (!dep && field === 'DepthRange') ? 'fills depth' : KNOB_LABEL[field];
+function knob1(field, v, dep) { const c = ORE_SLIDER[field]; v = (v != null ? v : 0);
+  return '<span class="kk"><label>' + knobLabel(field, dep) + '</label>' + slPair(field, c, sMax(field, v), v) + '</span>'; }
+function knobR(field, r, dep) { r = r || {}; const c = ORE_SLIDER[field], mx = sMax(field, Math.max(r.min || 0, r.max || 0));
+  return '<span class="kk"><label>' + knobLabel(field, dep) + '</label>' + slPair(field + '_min', c, mx, r.min != null ? r.min : 0) + '<span class="dash">–</span>' + slPair(field + '_max', c, mx, r.max != null ? r.max : 0) + '</span>'; }
 function tmplVein() { return { '$type':'Eco.WorldGenerator.DepositTerrainModule, Eco.WorldGenerator', SpawnAtLeastOne:false, SpawnPercentChance:0.005, DepthRange:{min:10,max:30}, DepositDepthRange:{min:0,max:40}, BlocksCountRange:{min:10,max:40}, BlockType:{Type:'Eco.Mods.TechTree.IronOreBlock, Eco.Mods'}, DirectionWeights:[{X:1,Y:1,Z:1}], WeightVariance:{X:1,Y:1,Z:1} }; }
 function tmplScatter() { return { '$type':'Eco.WorldGenerator.StandardTerrainModule, Eco.WorldGenerator', BlockType:{Type:'Eco.Mods.TechTree.CoalBlock, Eco.Mods'}, HeightRange:{min:-1,max:1}, DepthRange:{min:0,max:6}, PercentChance:0.3, NoiseFrequency:20, NoiseType:'Perlin', NoiseDistributionType:'Bands' }; }
 let oreRenderTimer = null;
@@ -8428,6 +8442,7 @@ function scheduleOreRender() { clearTimeout(oreRenderTimer); oreRenderTimer = se
 const OreVisual = (function () {
   const TOP = 16, SC = 5, X0 = 46, COLW = 58, Wc = 300, MINW = 5, MINBH = 16;
   let biomeIdx = 0, sel = null, objs = [], strata = [], maxD = 120, H = 0, oreX = X0, lastBands = [], oreLayout = [];
+  let lastAlive = [], lastProb = [];   // per-stratum: share of columns it is the rock in at all, and at each depth
   // world-height projection state (set each render): the biome's surface band, the vertical axis, and the centred column
   let surfLo = 60, surfHi = 60, surfMid = 60, YmaxE = 120, SCe = 3, TOPY = 18, cxE = 0, maxHW = 0;
   const ELEV = { Grassland:[.02,.4], WarmForest:[.1,.5], ColdForest:[.1,.7], RainForest:[.1,.5], Desert:[.02,.2], Taiga:[.3,1], Tundra:[.4,1], Ice:[.6,1], Wetland:[.02,.3], ColdCoast:[.05,.1], WarmCoast:[.05,.1] };
@@ -8484,15 +8499,39 @@ const OreVisual = (function () {
   const mulb = a => () => { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
   function selBase(T, N, d) { let last = N - 1; for (let i = N - 2; i >= 0; i--) { let sk = false; for (let j = i + 1; j < N; j++) { if (T[j] <= T[i]) { sk = true; break; } } if (sk) continue; if (d <= T[i]) last = i; else break; } return last; }
   // which base stratum dominates each depth (same threshold model the composition chart uses), grouped into contiguous bands
-  function baseBands(list, md) { const N = list.length; if (!N) return { bands: [], prob: [] };
-    const cnt = list.map(() => new Float64Array(md + 1)), S = 120, rnd = mulb(0x51ed3c), T = new Float64Array(N);
-    for (let s = 0; s < S; s++) { for (let i = 0; i < N; i++) T[i] = list[i].min + rnd() * (list[i].max - list[i].min); for (let d = 0; d <= md; d++) cnt[selBase(T, N, d)][d]++; }
+  // A stratum's threshold is NOT uniform in [Min,Max]. The engine draws it from clamp(0.5*Perlin+0.5),
+  // which is a bell: sd 0.209 of the range, so "55-60" ends at 57 or 58 in 65% of columns and at 55 or
+  // 60 in 3% each. Sampling it uniformly - which this did - pushed every probability the panel shows
+  // toward the range edges. These are the 32 quantiles of that distribution, measured over 200k samples
+  // of this repo's own bit-exact Perlin across five frequencies and seeds (it is frequency-independent).
+  const BELL = [0.0000, 0.1031, 0.1719, 0.2189, 0.2554, 0.2859, 0.3130, 0.3368, 0.3587, 0.3796, 0.3989,
+    0.4178, 0.4358, 0.4532, 0.4705, 0.4876, 0.5000, 0.5121, 0.5287, 0.5463, 0.5637, 0.5825, 0.6013,
+    0.6214, 0.6425, 0.6654, 0.6900, 0.7177, 0.7488, 0.7845, 0.8301, 0.8967, 1.0000];
+  /** Inverse-CDF sample of that bell from a uniform u, linear between quantiles. */
+  function bell(u) { const q = u * (BELL.length - 1), i = Math.min(BELL.length - 2, Math.floor(q));
+    return BELL[i] + (BELL[i + 1] - BELL[i]) * (q - i); }
+  // prob[i][d] is how often stratum i is the rock at depth d; alive[i] is how often it is the rock at
+  // ANY depth. The two answer different questions and the panel used to have only the first: a stratum can
+  // be the plurality nowhere and still be the rock in a large minority of columns, which reads as "dead"
+  // if you look at bands alone. Stock Desert's second Sand layer is exactly that - it wins nowhere and is
+  // alive in 43% of columns.
+  function baseBands(list, md) { const N = list.length; if (!N) return { bands: [], prob: [], alive: [] };
+    const cnt = list.map(() => new Float64Array(md + 1)), S = 240, rnd = mulb(0x51ed3c), T = new Float64Array(N);
+    const alive = new Float64Array(N), seen = new Uint8Array(N);
+    for (let s = 0; s < S; s++) {
+      // round, as the engine does - the skip test compares thresholds with <=, so rounding decides ties
+      for (let i = 0; i < N; i++) T[i] = Math.round(list[i].min + bell(rnd()) * (list[i].max - list[i].min));
+      seen.fill(0);
+      for (let d = 0; d <= md; d++) { const w = selBase(T, N, d); cnt[w][d]++; seen[w] = 1; }
+      for (let i = 0; i < N; i++) if (seen[i]) alive[i]++;
+    }
+    for (let i = 0; i < N; i++) alive[i] /= S;
     const bands = []; let cur = -1, start = 0;
     for (let d = 0; d <= md; d++) { let bi = 0, bv = -1; for (let i = 0; i < N; i++) if (cnt[i][d] > bv) { bv = cnt[i][d]; bi = i; }
       if (bi !== cur) { if (cur >= 0) bands.push({ st: list[cur], si: cur, top: start, bot: d - 1 }); cur = bi; start = d; } }
     if (cur >= 0) bands.push({ st: list[cur], si: cur, top: start, bot: md });
     for (let i = 0; i < N; i++) for (let d = 0; d <= md; d++) cnt[i][d] /= S;
-    return { bands: bands, prob: cnt }; }
+    return { bands: bands, prob: cnt, alive: alive }; }
   const labelColor = c => { if (c && c[0] === '#') { let h = c.slice(1); if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2]; const r = parseInt(h.slice(0,2),16), g = parseInt(h.slice(2,4),16), b = parseInt(h.slice(4,6),16); return (0.299*r + 0.587*g + 0.114*b) > 150 ? '#1a1a18' : '#f5f5f0'; } return '#1a1a18'; };
   function render() {
     const bms = biomes();
@@ -8504,7 +8543,8 @@ const OreVisual = (function () {
     if (sel) { if (sel.kind === 'strat') { const f = strata.find(st => st.node === sel.node); sel = f ? { kind: 'strat', node: f.node, block: f.block } : null; } else { const f = objs.find(o => o.node === sel.node); sel = f || null; } }
     maxD = Math.max(20, worldMaxD());
     const hasBase = strata.length > 0; let baseProb = [];
-    if (hasBase) { const bb = baseBands(strata, maxD); lastBands = bb.bands; baseProb = bb.prob; } else lastBands = [];
+    if (hasBase) { const bb = baseBands(strata, maxD); lastBands = bb.bands; baseProb = bb.prob; lastAlive = bb.alive; lastProb = bb.prob; }
+    else { lastBands = []; lastAlive = []; lastProb = []; }
     const stratIdxOf = new Map(); strata.forEach((st, i) => stratIdxOf.set(st.node, i));
     // crushed variants share their solid twin's raw colour (and often the base rock's), so lighten them to read as a distinct paler shade
     const oreCol = bt => isCrushed(bt) ? lightenColor(blockColorRaw(bt)) : blockColorRaw(bt);
@@ -8527,7 +8567,11 @@ const OreVisual = (function () {
     // a scatter only shows in proportion to how often its own rock layer is generated at that depth; a vein overwrites across layers
     const shAt = (i, d) => { const info = oi[i]; if (d < info.mn || d > info.mx || info.sh <= 0) return 0;
       if (info.shape) return info.sh * info.shape[d];
-      if (info.o.kind === 'std' && hasBase) { const pi = stratIdxOf.get(info.o.parent); if (pi != null) return info.sh * baseProb[pi][d]; }
+      // A vein was drawn at full strength whatever its parent, so one seeded in a layer that only exists in
+      // 43% of columns looked as certain as one in a layer that always exists. Its SEED can only land where
+      // its own stratum is the rock, so scale by the parent there too - it just does not carve to it,
+      // since the blocks it then grows do overwrite whatever they reach.
+      if (hasBase) { const pi = stratIdxOf.get(info.o.parent); if (pi != null) return info.sh * baseProb[pi][d]; }
       return info.sh; };
     // one 100% column at each DEPTH: veins overwrite first (first-wins), then each stratum's rock is carved by its scatters
     const N = strata.length;
@@ -8632,22 +8676,56 @@ const OreVisual = (function () {
     // by the template literal this file is emitted from.
     if (s.indexOf('.') >= 0) { while (s.slice(-1) === '0') s = s.slice(0, -1); if (s.slice(-1) === '.') s = s.slice(0, -1); }
     return s + '%'; }
-  const depthOf = n => { const r = n && n.DepthRange; return r ? (r.min | 0) + '–' + (r.max | 0) : ''; };
+  // An en dash between a negative bound and its max reads as one number ("-2-1"), and depths really do
+  // go negative: a vein whose grow range starts at -2 may climb two blocks ABOVE the surface. Spell
+  // those out instead.
+  const rangeOf = r => { if (!r) return ''; const a = r.min | 0, b = r.max | 0;
+    return (a < 0 || b < 0) ? a + ' to ' + b : a + '–' + b; };
+  // A scatter's DepthRange IS the depths it fills. A vein's is only where its SEED may land - it then
+  // grows through DepositDepthRange, which the engine widens to include the seed range and treats as a
+  // soft bound (leaving it costs 5x a normal vertical step). Naming the seed range as the extent was
+  // simply wrong, so say both - and only when they differ, since after the widening they often do not.
+  function metaOf(o) {
+    const seed = rangeOf(o.node.DepthRange);
+    if (o.kind !== 'dep') return seed;
+    const grow = rangeOf(o.node.DepositDepthRange);
+    return (grow && grow !== seed) ? 'seed ' + seed + ' · grows ' + grow : seed;
+  }
+  /** The depths where this layer is the commonest rock, from the bands render() already solved. */
+  function occupiedBand(node) { let top = null, bot = null;
+    lastBands.forEach(b => { if (b.st.node === node) { top = top == null ? b.top : Math.min(top, b.top); bot = bot == null ? b.bot : Math.max(bot, b.bot); } });
+    return top == null ? null : { top: top, bot: bot }; }
+  const livePct = v => v >= 0.995 ? '100%' : v < 0.005 ? '<1%' : Math.round(v * 100) + '%';
+  const liveClass = v => v >= 0.9 ? 'lv-hi' : v >= 0.25 ? 'lv-mid' : 'lv-lo';
+  // A row carries BOTH numbers on purpose. "ends" is the one you edit and the only one in the file; "is" is
+  // where the layer actually sits, which "ends" cannot tell you because the top comes from the layer above.
+  // Showing only one of the two has confused a reader every time it has been tried.
+  const stratMetaDesc = (st, occ, live) =>
+    'ends: the depth this layer stops at, drawn per column between Min and Max — this is the editable number'
+    + (occ ? ' · is: the depths where it is the commonest rock' : ' · it is never the commonest rock at any depth')
+    + (live == null ? '' : ' · it is the rock somewhere in ' + livePct(live) + ' of columns');
+  /** A vein's spawn chance as the engine itself phrases it: one seed per N blocks. */
+  const seedRate = v => !v ? '' : '1 per ' + (1 / v >= 1000 ? Math.round(1 / v / 100) * 100 : Math.round(1 / v));
+  const METdesc = o => o.kind === 'dep'
+    ? 'where its seed block may land, the depths it then grows through (a soft bound), and how often one starts'
+    : 'the depths it fills, and the share of that rock it takes — a calibrated volume fraction, not a dice roll';
   // list of every block in the biome, NESTED: each base rock, then the veins and scatters that live inside
   // it. They were listed flat - every rock, then every ore - which hid the one thing that decides what a
   // scatter does: which stratum contains it, since it only applies within that stratum's own depth band.
   function renderList() {
     if (!listEl) return;
     let h = '';
-    const stratRow = (st, i) => { const seld = sel && sel.kind === 'strat' && sel.node === st.node;
-      return '<div class="ovRow' + (seld ? ' sel' : '') + '" data-lk="s" data-li="' + i + '"><span class="ndot" style="background:' + blockColorRaw(st.block) + '"></span><span class="ltag">rock</span><span class="lnm">' + prettyName(shortBlock(st.block)) + '</span><span class="lmeta" title="the depth this layer ends at, per column">' + (st.node.Min | 0) + '–' + (st.node.Max | 0) + '</span><button class="ndel" data-delstrat="' + i + '" title="Remove this rock layer and its veins/scatters">✕</button></div>'; };
+    const stratRow = (st, i, occ, live) => { const seld = sel && sel.kind === 'strat' && sel.node === st.node;
+      const isAt = occ ? '<span class="lis">is ' + occ.top + '–' + occ.bot + '</span>' : '<span class="lis mixed">mixed in</span>';
+      const chip = live == null ? '' : '<span class="lpct ' + liveClass(live) + '">' + livePct(live) + '</span>';
+      return '<div class="ovRow' + (seld ? ' sel' : '') + '" data-lk="s" data-li="' + i + '"><span class="ndot" style="background:' + blockColorRaw(st.block) + '"></span><span class="ltag">layer</span><span class="lnm">' + prettyName(shortBlock(st.block)) + '</span><span class="lmeta" title="' + stratMetaDesc(st, occ, live) + '"><span class="lends">ends ' + (st.node.Min | 0) + '–' + (st.node.Max | 0) + '</span>' + isAt + chip + '</span><button class="ndel" data-delstrat="' + i + '" title="Remove this layer and everything in it">✕</button></div>'; };
     const objRow = (o, i, nested) => { const seld = sel && sel.kind !== 'strat' && sel.node === o.node;
-      const chance = pct(o.kind === 'dep' ? o.node.SpawnPercentChance : o.node.PercentChance);
-      const meta = [depthOf(o.node), chance].filter(Boolean).join(' · ');
-      return '<div class="ovRow' + (seld ? ' sel' : '') + (nested ? ' sub' : '') + '" data-lk="o" data-li="' + i + '"><span class="ndot" style="background:' + oreDot(o) + '"></span><span class="ltag">' + (o.kind === 'dep' ? 'vein' : 'scatter') + '</span><span class="lnm">' + oreLabel(o) + '</span><span class="lmeta" title="the depths it covers, and how much of them it takes">' + meta + '</span><button class="ndel" data-del="' + i + '" title="Remove this block">✕</button></div>'; };
+      const chance = o.kind === 'dep' ? seedRate(o.node.SpawnPercentChance) : pct(o.node.PercentChance);
+      const meta = [metaOf(o), chance].filter(Boolean).join(' · ');
+      return '<div class="ovRow' + (seld ? ' sel' : '') + (nested ? ' sub' : '') + '" data-lk="o" data-li="' + i + '"><span class="ndot" style="background:' + oreDot(o) + '"></span><span class="ltag">' + (o.kind === 'dep' ? 'vein' : 'fill') + '</span><span class="lnm">' + oreLabel(o) + '</span><span class="lmeta" title="' + METdesc(o) + '">' + meta + '</span><button class="ndel" data-del="' + i + '" title="Remove this block">✕</button></div>'; };
     const placed = new Set();
     strata.forEach((st, i) => {
-      h += stratRow(st, i);
+      h += stratRow(st, i, occupiedBand(st.node), lastAlive.length ? lastAlive[i] : null);
       objs.forEach((o, j) => { if (o.parent !== st.node) return; placed.add(j); h += objRow(o, j, true); });
     });
     // anything whose parent is not a listed stratum (a depth range with no base block of its own) still
@@ -8677,9 +8755,9 @@ const OreVisual = (function () {
       wireStrat(sel); return; }
     const o = sel, opts = collectBlockTypes(), dep = o.kind === 'dep';
     const dot = '<span class="ndot" style="background:' + oreDot(o) + '"></span>', del = '<button class="ndel" title="Remove this node">✕</button>';
-    let h = '<div class="oreNode" style="border-top:none">' + dot + '<span class="tag">' + (dep ? 'vein' : 'scatter') + '</span>' + blockSelect(btOf(o.node.BlockType), opts);
-    h += dep ? (knob1('SpawnPercentChance', o.node.SpawnPercentChance) + knobR('DepthRange', o.node.DepthRange) + knobR('DepositDepthRange', o.node.DepositDepthRange) + knobR('BlocksCountRange', o.node.BlocksCountRange))
-             : (knob1('PercentChance', o.node.PercentChance) + knobR('DepthRange', o.node.DepthRange) + knob1('NoiseFrequency', o.node.NoiseFrequency));
+    let h = '<div class="oreNode" style="border-top:none">' + dot + '<span class="tag">' + (dep ? 'vein' : 'fill') + '</span>' + blockSelect(btOf(o.node.BlockType), opts);
+    h += dep ? (knob1('SpawnPercentChance', o.node.SpawnPercentChance, dep) + knobR('DepthRange', o.node.DepthRange, dep) + knobR('DepositDepthRange', o.node.DepositDepthRange, dep) + knobR('BlocksCountRange', o.node.BlocksCountRange, dep))
+             : (knob1('PercentChance', o.node.PercentChance, dep) + knobR('DepthRange', o.node.DepthRange, dep) + knob1('NoiseFrequency', o.node.NoiseFrequency, dep));
     h += del + '</div>'; detailEl.innerHTML = h; wireDetail(o);
   }
   function wireDetail(o) { const node = o.node;
@@ -8693,9 +8771,18 @@ const OreVisual = (function () {
     }));
     const d = detailEl.querySelector('.ndel'); if (d) d.onclick = () => { const idx = o.sub.indexOf(o.node); if (idx >= 0) o.sub.splice(idx, 1); sel = null; render(); renderDetail(); renderList(); scheduleOreRender(); };
   }
-  function stratNoteHtml(node) { let top = null, bot = null; lastBands.forEach(b => { if (b.st.node === node) { top = top == null ? b.top : Math.min(top, b.top); bot = bot == null ? b.bot : Math.max(bot, b.bot); } });
-    const cov = top != null ? ('fills depth <b>' + top + '–' + bot + '</b>') : '<b>overridden</b> — its bottom sits below a deeper layer, so the engine skips it. Lower this bottom, or raise the layers below it.';
-    return cov + ' · Min–Max is where this layer <b>ends</b> — its top comes from the layer above. Drag the bottom edge to move the boundary.'; }
+  // No verdict, a measurement. "Overridden" was a plurality artefact: a layer that is the rock in a large
+  // minority of columns wins nowhere and was reported as skipped entirely.
+  function stratNoteHtml(node) {
+    const i = strata.findIndex(st => st.node === node);
+    const live = i >= 0 && lastAlive.length ? lastAlive[i] : null;
+    const occ = occupiedBand(node);
+    const where = occ ? 'usually the rock at depth <b>' + occ.top + '–' + occ.bot + '</b>'
+      : 'never the commonest rock at any depth — it only ever appears mixed in with the layers around it';
+    const how = live == null ? '' : ' · it is the rock somewhere in <b>' + livePct(live) + '</b> of columns'
+      + (live < 0.5 ? ', because a deeper layer often ends above it' : '');
+    return where + how + ' · Min–Max is where this layer <b>ends</b> — its top comes from the layer above,'
+      + ' and every column draws its own end between them. Drag the bottom edge to move the boundary.'; }
   function wireStrat(o) { const node = o.node;
     detailEl.querySelectorAll('input,select').forEach(inp => inp.addEventListener('input', () => {
       if (inp.dataset.f === 'block') { node.BlockType = node.BlockType || {}; node.BlockType.Type = inp.value; sel.block = inp.value; render(); renderList(); scheduleOreRender(); return; }
