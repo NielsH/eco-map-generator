@@ -1333,13 +1333,18 @@ const OreVisual = (function () {
     const perCol = seedsPerCol * (((bc.min | 0) + (bc.max | 0)) / 2);
     const perSeed = node.SpawnPercentChance ? Math.round(1 / node.SpawnPercentChance) : Infinity;
     const tooDense = (bc.max | 0) > perSeed;
-    let h = 'one deposit grows about <b>' + e.tall + ' blocks tall</b> and <b>' + e.wide + ' wide</b>'
-      + ' — ' + e.n + ' blocks' + (e.capped ? ' (shape sampled at ' + GROW_CAP + ')' : '')
+    // Lead with the number a drill returns. "5 blocks tall" is the deposit's own height somewhere in it;
+    // a flat sheet 5 tall spreads 3000 blocks over 971 columns and the MEDIAN one holds 3, while the same
+    // 3000 as blobs holds 5. Thickness is what you dig, and it is set by growth far more than by size.
+    let h = '<b>a drill through one passes about ' + e.thick + ' block' + (e.thick === 1 ? '' : 's') + '</b>'
+      + ' — it is ' + e.tall + ' tall and ' + e.wide + ' wide overall'
+      + ', ' + e.n + ' blocks' + (e.capped ? ' (shape sampled at ' + GROW_CAP + ')' : '')
       + (e.shapes > 1 ? ', averaged over its ' + e.shapes + ' growth shapes' : '') + '.';
     if (relief > 0) h += ' Each one hangs under the surface of <b>its own</b> seed, and the ground here rolls over '
-      + relief + ' blocks, so the ore reaches across a band about <b>' + band + ' blocks thick</b> — that is what one column digs through.';
-    if (perCol > 0) h += ' At this seed rate that is roughly <b>' + (perCol < 1 ? perCol.toFixed(2) : Math.round(perCol))
-      + ' blocks of ore per column</b>' + (perCol >= band ? ', more than the band can hold — expect it solid.' : '.');
+      + relief + ' blocks, so across the biome the ore can sit anywhere in a band about <b>' + band + ' blocks</b> deep — that is its reach, not its thickness.';
+    if (perCol > 0) { const pc = perCol < 1 ? perCol.toFixed(2) : Math.round(perCol);
+      h += ' At this seed rate that is roughly <b>' + pc + ' block' + (String(pc) === '1' ? '' : 's') + ' of ore per column</b>'
+        + (perCol >= band ? ', more than the band can hold — expect it solid.' : '.'); }
     if (tooDense) h += ' <b style="color:#c0705a">The engine will warn at load</b>: one seed per ' + perSeed
       + ' blocks with deposits up to ' + (bc.max | 0) + ' is too dense; it wants about 1 per ' + Math.round((bc.max | 0) * 1.2) + '.';
     return h; }
@@ -1378,11 +1383,13 @@ const OreVisual = (function () {
     const pri = (pr, i, v) => pr + i - rnd() * v;
     let xlo = 0, xhi = 0, zlo = 0, zhi = 0, ylo = seedY, yhi = seedY;
     const proj = new Set();   // (x, depth) - the deposit as a cut face would show it
+    const col = new Map();    // blocks per (x, z) - what a drill straight down actually passes through
     // EnqueueUnique, as the engine has it: a point already taken or already queued is not queued again.
     const offer = (x, y, z, pr) => { const k = x + ',' + y + ',' + z;
       if (taken.has(k) || queued.has(k)) return; queued.add(k); heapPush(q, { x: x, y: y, z: z, pr: pr }); };
     const spawn = (x, y, z, pr) => { const k = x + ',' + y + ',' + z;
       if (taken.has(k)) return false; taken.add(k); queued.delete(k); proj.add(x + ',' + y);
+      const ck = x + ',' + z; col.set(ck, (col.get(ck) || 0) + 1);
       if (x < xlo) xlo = x; if (x > xhi) xhi = x; if (z < zlo) zlo = z; if (z > zhi) zhi = z;
       if (y < ylo) ylo = y; if (y > yhi) yhi = y;
       offer(x + 1, y, z, pri(pr, inv.x, iv.x));
@@ -1394,7 +1401,9 @@ const OreVisual = (function () {
       return true; };
     spawn(0, seedY, 0, 0);
     while (taken.size < n && q.length) { const e = heapPop(q); spawn(e.x, e.y, e.z, e.pr); }
+    const hs = [...col.values()].sort((a, b) => a - b);
     return { tall: yhi - ylo + 1, wide: Math.max(xhi - xlo, zhi - zlo) + 1, blocks: taken.size,
+             thick: hs.length ? hs[hs.length >> 1] : 0,   // the MEDIAN column, not the deepest one
              proj: [...proj].map(k => k.split(',').map(Number)) };
   }
   /** The typical extent of the selected vein, at its mean size and each of its weight vectors. */
@@ -1406,15 +1415,15 @@ const OreVisual = (function () {
     const n = Math.round((((bc.min | 0) + (bc.max | 0)) / 2));
     const key = n + '|' + (dd.min | 0) + '|' + (dd.max | 0) + '|' + JSON.stringify(ws) + '|' + JSON.stringify(wv);
     const hit = extentMemo.get(key); if (hit) return hit;
-    let tall = 0, wide = 0; const runs = [];
+    let tall = 0, wide = 0, thick = 0; const runs = [];
     ws.forEach(w => { const r = growExtent(n, { X: w.X || 1, Y: w.Y || 1, Z: w.Z || 1 },
       { X: wv.X || 0, Y: wv.Y || 0, Z: wv.Z || 0 }, dd.min | 0, dd.max | 0);
-      tall += r.tall; wide += r.wide; runs.push(r); });
+      tall += r.tall; wide += r.wide; thick += r.thick; runs.push(r); });
     const mt = tall / ws.length, mw = wide / ws.length;
     // one shape has to stand for the list, so take the one nearest the average rather than the first
     let best = runs[0], bd = Infinity;
     runs.forEach(r => { const d = Math.abs(r.tall - mt) + Math.abs(r.wide - mw); if (d < bd) { bd = d; best = r; } });
-    const out = { tall: Math.round(mt), wide: Math.round(mw), capped: n > GROW_CAP, n: n, shapes: ws.length,
+    const out = { tall: Math.round(mt), wide: Math.round(mw), thick: Math.round(thick / ws.length), capped: n > GROW_CAP, n: n, shapes: ws.length,
                   proj: best.proj, projTall: best.tall, projWide: best.wide };
     extentMemo.set(key, out); return out; }
 
