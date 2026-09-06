@@ -122,6 +122,35 @@ class Perlin {
   }
 }
 
+// Billow: the same fractal sum as Perlin, but each octave's signal is folded through |signal| first, so the
+// field has no negative lobes of its own - the troughs become ridges of their own and the result reads as
+// puffy clumps rather than smooth swells. The trailing +0.5 is SharpNoise's, not a normalisation.
+// Verified bit-exact against the game's own SharpNoise.dll - see BILLOW rows in test/noise_ref.tsv.
+class Billow {
+  constructor(o = {}) {
+    this.Frequency = o.Frequency ?? 1.0;
+    this.Lacunarity = o.Lacunarity ?? 2.0;
+    this.OctaveCount = o.OctaveCount ?? 6;
+    this.Persistence = o.Persistence ?? 0.5;
+    this.Quality = o.Quality ?? NQ.Standard;
+    this.Seed = o.Seed ?? 0;
+  }
+  getValue(x, y, z) {
+    let value = 0.0, curPersistence = 1.0;
+    x *= this.Frequency; y *= this.Frequency; z *= this.Frequency;
+    for (let o = 0; o < this.OctaveCount; o++) {
+      const nx = makeInt32Range(x), ny = makeInt32Range(y), nz = makeInt32Range(z);
+      const seed = (this.Seed + o) | 0;
+      let signal = gradientCoherentNoise3D(nx, ny, nz, seed, this.Quality);
+      signal = 2.0 * Math.abs(signal) - 1.0;
+      value += signal * curPersistence;
+      x *= this.Lacunarity; y *= this.Lacunarity; z *= this.Lacunarity;
+      curPersistence *= this.Persistence;
+    }
+    return value + 0.5;
+  }
+}
+
 class RidgedMulti {
   constructor(o = {}) {
     this.Frequency = o.Frequency ?? 1.0;
@@ -159,4 +188,4 @@ class ScaleBias {
   getValue(x, y, z) { return this.Source0.getValue(x, y, z) * this.Scale + this.Bias; }
 }
 
-if (typeof module !== 'undefined') module.exports = { CsRandom, Perlin, RidgedMulti, ScaleBias, gradientCoherentNoise3D, setVectorTable, NQ };
+if (typeof module !== 'undefined') module.exports = { CsRandom, Perlin, Billow, RidgedMulti, ScaleBias, gradientCoherentNoise3D, setVectorTable, NQ };

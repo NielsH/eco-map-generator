@@ -104,7 +104,10 @@ function initTerrain(terr, cfg, onlyBiome) {
 // so the (20*fs)^3-sample sort runs once per distinct fill rather than once per keystroke.
 const calibMemo = new Map();
 function calibrateScatter(sc, fs) {
-  const NoiseCtor = sc.noiseType === 'RidgedMulti' ? VC.RidgedMulti : VC.Perlin;
+  // Every NoiseType the engine offers, resolved by name. This used to be RidgedMulti-or-else-Perlin, so a
+  // fill set to Billow generated one way in the game and previewed as another, with nothing to say so.
+  const NoiseCtor = sc.noiseType === 'RidgedMulti' ? VC.RidgedMulti
+    : sc.noiseType === 'Billow' ? VC.Billow : VC.Perlin;
   sc._perlin = new NoiseCtor({ Frequency: sc.noiseFreq * fs, Seed: sc._seed });
   const key = sc._seed + '|' + fs + '|' + sc.noiseType + '|' + sc.noiseFreq + '|' + sc.pc + '|' + sc.dist;
   const hit = calibMemo.get(key);

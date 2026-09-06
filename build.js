@@ -28,7 +28,7 @@ const render3dSrc = fs.readFileSync('src/render3d.js', 'utf8');
 const designerSrc = fs.readFileSync('src/designer.js', 'utf8');   // "Design a map" (main thread; injected raw)
 
 const LIB = [core, geo, worldgen, raster, voxel, search,
-  `const C = { CsRandom, Perlin, RidgedMulti, ScaleBias, gradientCoherentNoise3D, setVectorTable, NQ };`,
+  `const C = { CsRandom, Perlin, Billow, RidgedMulti, ScaleBias, gradientCoherentNoise3D, setVectorTable, NQ };`,
   `const G = { poissonSamples, Voronoi };`,
   `bindVoxel(C);`
 ].join('\n\n');
@@ -853,7 +853,14 @@ const ORE_SLIDER = {
 // samples and takes a band that wide), not a per-block dice roll - "coverage" says that, "chance" does not.
 // A vein's SpawnPercentChance is a seed rate, and reads far better as the engine's own "1 per N blocks".
 // DepositDepthRange is a penalty, not a bound, so it may not be called a range it stays in.
-const KNOB_LABEL = { SpawnPercentChance:'seed rate', PercentChance:'coverage', NoiseFrequency:'patch size', DepthRange:'seeds at depth', DepositDepthRange:'stays within (soft)', BlocksCountRange:'vein size (blocks)' };
+// NoiseFrequency is cycles across the WHOLE map, so raising it makes each patch smaller. Calling it
+// "patch size" read as the opposite of what it does; stock fills sit at 3 (a handful of big patches)
+// while strata run 15-40.
+const KNOB_TITLE = { NoiseFrequency:'how many patches fit across the map - higher means MORE and SMALLER patches',
+  PercentChance:'the share of this layer the fill takes, as a volume fraction',
+  SpawnPercentChance:'how often a vein seed is planted',
+  BlocksCountRange:'how many blocks one vein grows to' };
+const KNOB_LABEL = { SpawnPercentChance:'seed rate', PercentChance:'coverage', NoiseFrequency:'patches across map', DepthRange:'seeds at depth', DepositDepthRange:'stays within (soft)', BlocksCountRange:'vein size (blocks)' };
 const sMax = (f, v) => { const c = ORE_SLIDER[f]; v = v || 0; return c.step < 1 ? Math.max(c.max, +(v * 1.25).toFixed(4)) : Math.max(c.max, Math.ceil(v)); };
 function collectBlockTypes() {
   const set = new Set();
@@ -870,10 +877,11 @@ function slPair(f, c, mx, v) { return '<input type="range" data-f="' + f + '" mi
 // depths its seed may LAND in. One label for both is how that got confusing, so pass the kind.
 const knobLabel = (field, dep) => (dep && field === 'DepthRange') ? 'seeds at depth'
   : (!dep && field === 'DepthRange') ? 'fills depth' : KNOB_LABEL[field];
+const knobTitle = field => KNOB_TITLE[field] ? ' title="' + KNOB_TITLE[field] + '"' : '';
 function knob1(field, v, dep) { const c = ORE_SLIDER[field]; v = (v != null ? v : 0);
-  return '<span class="kk"><label>' + knobLabel(field, dep) + '</label>' + slPair(field, c, sMax(field, v), v) + '</span>'; }
+  return '<span class="kk"><label' + knobTitle(field) + '>' + knobLabel(field, dep) + '</label>' + slPair(field, c, sMax(field, v), v) + '</span>'; }
 function knobR(field, r, dep) { r = r || {}; const c = ORE_SLIDER[field], mx = sMax(field, Math.max(r.min || 0, r.max || 0));
-  return '<span class="kk"><label>' + knobLabel(field, dep) + '</label>' + slPair(field + '_min', c, mx, r.min != null ? r.min : 0) + '<span class="dash">–</span>' + slPair(field + '_max', c, mx, r.max != null ? r.max : 0) + '</span>'; }
+  return '<span class="kk"><label' + knobTitle(field) + '>' + knobLabel(field, dep) + '</label>' + slPair(field + '_min', c, mx, r.min != null ? r.min : 0) + '<span class="dash">–</span>' + slPair(field + '_max', c, mx, r.max != null ? r.max : 0) + '</span>'; }
 function tmplVein() { return { '$type':'Eco.WorldGenerator.DepositTerrainModule, Eco.WorldGenerator', SpawnAtLeastOne:false, SpawnPercentChance:0.005, DepthRange:{min:10,max:30}, DepositDepthRange:{min:0,max:40}, BlocksCountRange:{min:10,max:40}, BlockType:{Type:'Eco.Mods.TechTree.IronOreBlock, Eco.Mods'}, DirectionWeights:[{X:1,Y:1,Z:1}], WeightVariance:{X:1,Y:1,Z:1} }; }
 function tmplScatter() { return { '$type':'Eco.WorldGenerator.StandardTerrainModule, Eco.WorldGenerator', BlockType:{Type:'Eco.Mods.TechTree.CoalBlock, Eco.Mods'}, HeightRange:{min:-1,max:1}, DepthRange:{min:0,max:6}, PercentChance:0.3, NoiseFrequency:20, NoiseType:'Perlin', NoiseDistributionType:'Bands' }; }
 let oreRenderTimer = null;
@@ -1441,7 +1449,7 @@ const OreVisual = (function () {
     const shape = n.NoiseDistributionType || 'Bands', type = n.NoiseType || 'Perlin';
     return '<span class="kk"><label title="Bands follow a surface through the rock; Blobs are compact pockets">shape</label>'
       + '<select class="kv" data-f="NoiseDistributionType">' + ['Bands', 'Blobs'].map(v => SEL_OPT(v, shape)).join('') + '</select></span>'
-      + '<span class="kk"><label title="the noise field the band is cut from">noise</label>'
+      + '<span class="kk"><label title="the noise field the band is cut from: Perlin swells smoothly, Billow folds its troughs up into puffy clumps, RidgedMulti has sharp crests over broad flat valleys">noise</label>'
       + '<select class="kv" data-f="NoiseType">' + ['Perlin', 'Billow', 'RidgedMulti'].map(v => SEL_OPT(v, type)).join('') + '</select></span>'; }
   function wireDetail(o) { const node = o.node;
     detailEl.querySelectorAll('input,select').forEach(inp => inp.addEventListener('input', () => {
