@@ -267,6 +267,13 @@ const html = `<!DOCTYPE html>
   .ovRow.sel{outline:1.5px solid var(--accent); background:var(--surf1);}
   .ovRow .ltag{color:var(--muted); font-size:9.5px; text-transform:uppercase; letter-spacing:.03em; flex:0 0 auto; width:44px;}
   .ovRow .lnm{flex:1 1 auto; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  /* the row markup has always emitted a colour dot, but only .oreNode .ndot was ever given a size,
+     so in this list it collapsed to nothing. Give it one - the colour is the fastest way to read the list. */
+  .ovRow .ndot{width:9px; height:9px; border-radius:50%; border:0.5px solid var(--border2); flex:0 0 auto;}
+  .ovRow .lmeta{color:var(--muted); font-size:10.5px; flex:0 0 auto; font-variant-numeric:tabular-nums; white-space:nowrap;}
+  /* a scatter/vein lives INSIDE a stratum - indent it under its parent and run a guide line down the group */
+  .ovRow.sub{margin-left:9px; padding-left:13px; border-left:1px solid var(--border);}
+  .ovRow.sub .ltag{width:38px;}
   .ovRow .ndel{border:none; background:transparent; color:var(--muted); font-size:12px; padding:0 5px; cursor:pointer; border-radius:5px; opacity:0; flex:0 0 auto;}
   .ovRow:hover .ndel, .ovRow.sel .ndel{opacity:1;}
   .ovRow .ndel:hover{color:#c0392b; background:var(--surf);}
@@ -1039,14 +1046,34 @@ const OreVisual = (function () {
     else if (drag.k === 'w') { const vbW = svgEl.viewBox.baseVal.width, xx = (e.clientX - r.left) * (vbW / r.width);
       if (drag.wx != null) setShare(o, Math.max(0.005, Math.min(1, drag.wshare - (xx - drag.wx) / Wc))); }
     render(); renderDetail(); scheduleOreRender(); }
-  // list of every block in the biome (base rock + veins + scatters); click to select, ✕ to remove an ore
+  /** A percentage with no trailing noise: 1 -> 100%, .075 -> 7.5%, .0025 -> 0.25%. */
+  function pct(v) { if (v == null) return ''; const n = v * 100;
+    let s = n >= 10 ? n.toFixed(0) : n >= 1 ? n.toFixed(1) : n.toFixed(2);
+    // trim only a FRACTIONAL tail (100 must not become 1). No regex: a backslash here would be eaten
+    // by the template literal this file is emitted from.
+    if (s.indexOf('.') >= 0) { while (s.slice(-1) === '0') s = s.slice(0, -1); if (s.slice(-1) === '.') s = s.slice(0, -1); }
+    return s + '%'; }
+  const depthOf = n => { const r = n && n.DepthRange; return r ? (r.min | 0) + '–' + (r.max | 0) : ''; };
+  // list of every block in the biome, NESTED: each base rock, then the veins and scatters that live inside
+  // it. They were listed flat - every rock, then every ore - which hid the one thing that decides what a
+  // scatter does: which stratum contains it, since it only applies within that stratum's own depth band.
   function renderList() {
     if (!listEl) return;
     let h = '';
-    strata.forEach((st, i) => { const seld = sel && sel.kind === 'strat' && sel.node === st.node;
-      h += '<div class="ovRow' + (seld ? ' sel' : '') + '" data-lk="s" data-li="' + i + '"><span class="ndot" style="background:' + blockColorRaw(st.block) + '"></span><span class="ltag">rock</span><span class="lnm">' + prettyName(shortBlock(st.block)) + '</span><button class="ndel" data-delstrat="' + i + '" title="Remove this rock layer and its veins/scatters">✕</button></div>'; });
-    objs.forEach((o, i) => { const seld = sel && sel.kind !== 'strat' && sel.node === o.node;
-      h += '<div class="ovRow' + (seld ? ' sel' : '') + '" data-lk="o" data-li="' + i + '"><span class="ndot" style="background:' + oreDot(o) + '"></span><span class="ltag">' + (o.kind === 'dep' ? 'vein' : 'scatter') + '</span><span class="lnm">' + oreLabel(o) + '</span><button class="ndel" data-del="' + i + '" title="Remove this block">✕</button></div>'; });
+    const stratRow = (st, i) => { const seld = sel && sel.kind === 'strat' && sel.node === st.node;
+      return '<div class="ovRow' + (seld ? ' sel' : '') + '" data-lk="s" data-li="' + i + '"><span class="ndot" style="background:' + blockColorRaw(st.block) + '"></span><span class="ltag">rock</span><span class="lnm">' + prettyName(shortBlock(st.block)) + '</span><span class="lmeta" title="the depth this layer ends at, per column">' + (st.node.Min | 0) + '–' + (st.node.Max | 0) + '</span><button class="ndel" data-delstrat="' + i + '" title="Remove this rock layer and its veins/scatters">✕</button></div>'; };
+    const objRow = (o, i, nested) => { const seld = sel && sel.kind !== 'strat' && sel.node === o.node;
+      const chance = pct(o.kind === 'dep' ? o.node.SpawnPercentChance : o.node.PercentChance);
+      const meta = [depthOf(o.node), chance].filter(Boolean).join(' · ');
+      return '<div class="ovRow' + (seld ? ' sel' : '') + (nested ? ' sub' : '') + '" data-lk="o" data-li="' + i + '"><span class="ndot" style="background:' + oreDot(o) + '"></span><span class="ltag">' + (o.kind === 'dep' ? 'vein' : 'scatter') + '</span><span class="lnm">' + oreLabel(o) + '</span><span class="lmeta" title="the depths it covers, and how much of them it takes">' + meta + '</span><button class="ndel" data-del="' + i + '" title="Remove this block">✕</button></div>'; };
+    const placed = new Set();
+    strata.forEach((st, i) => {
+      h += stratRow(st, i);
+      objs.forEach((o, j) => { if (o.parent !== st.node) return; placed.add(j); h += objRow(o, j, true); });
+    });
+    // anything whose parent is not a listed stratum (a depth range with no base block of its own) still
+    // has to be reachable, so it goes at the end rather than silently disappearing from the list.
+    objs.forEach((o, j) => { if (!placed.has(j)) h += objRow(o, j, false); });
     listEl.innerHTML = h || '<div class="lbl" style="padding:6px">No blocks in this biome.</div>';
     listEl.querySelectorAll('.ovRow').forEach(row => row.onclick = e => { if (e.target.closest('.ndel')) return;
       if (row.dataset.lk === 's') { const st = strata[+row.dataset.li]; sel = st ? { kind: 'strat', node: st.node, block: st.block } : null; }
