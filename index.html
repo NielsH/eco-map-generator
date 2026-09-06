@@ -8836,7 +8836,13 @@ const OreVisual = (function () {
       s += '<text x="' + SX + '" y="' + (TOPY - 6) + '" font-size="9" fill="' + cM + '">' + cap + '</text>';
       s += '<text x="' + (SX + SW) + '" y="' + (TOPY - 6) + '" text-anchor="end" font-size="9" fill="' + cAcc + '" data-stripnext="1" style="cursor:pointer">next slice ›</text>';
       s += rect(SX, sTop, SW, yAtDepth(rows) - sTop, 'fill="none" stroke="' + cB + '"');
-      s += '<text x="' + SX + '" y="' + f1(yAtDepth(rows) + 11) + '" font-size="9" fill="' + cM + '" pointer-events="none">veins omitted — they are a world-wide pass</text>';
+      // The strip DOES show fills, so a grey footnote saying veins are missing reads as a technicality
+      // rather than as "the biggest thing in this biome is not in this picture". It has been mistaken for
+      // "there is no ore here" - say it at the top, in the ore colour, where the ore would have been.
+      { const warn = '#c0705a';
+        s += '<text x="' + (SX + SW / 2) + '" y="' + f1(TOPY + 14) + '" text-anchor="middle" font-size="10" font-weight="600" fill="' + warn + '" pointer-events="none" paint-order="stroke" stroke="' + cssv('--surf') + '" stroke-width="3">no veins in this view</text>';
+        s += '<text x="' + (SX + SW / 2) + '" y="' + f1(TOPY + 26) + '" text-anchor="middle" font-size="9" fill="' + warn + '" pointer-events="none" paint-order="stroke" stroke="' + cssv('--surf') + '" stroke-width="3">fills only — veins are a world-wide pass</text>';
+        s += '<text x="' + SX + '" y="' + f1(yAtDepth(rows) + 11) + '" font-size="9" fill="' + cM + '" pointer-events="none">select a vein to see one drawn to scale on the left</text>'; }
     }
     // ---- the selected vein, drawn as one deposit at true scale ------------------------------------
     // The bar beside it is the SETTING - the depths a seed may land in. It says nothing about how big the
