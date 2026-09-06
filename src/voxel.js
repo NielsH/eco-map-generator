@@ -73,7 +73,11 @@ function parseTerrain(terr) {
 }
 
 // ---- initialize noise seeds (reproduces InitModules' double-init) and keep the growth random ----
-function initTerrain(terr, cfg) {
+// onlyBiome: calibrate that biome's scatters alone. Every seed is still drawn, in order, for every biome -
+// a fill's seed depends on how many submodules every earlier biome has - but calibration is the whole cost
+// (1 s / 9 s / 33 s for all biomes at 72 / 144 / 216 wide), and the underground editor's strip of real
+// columns needs one biome at a time.
+function initTerrain(terr, cfg, onlyBiome) {
   const biomes = parseTerrain(terr);
   const fs = cfg.worldWidth / 72.0;
   const rand = new VC.CsRandom(cfg.seed);
@@ -89,15 +93,27 @@ function initTerrain(terr, cfg) {
   initPass();   // pass 2: InitModules recurses (the double-init quirk)
   for (const name of order) for (const r of biomes[name].ranges) {
     r._depthNoise = new VC.Perlin({ Frequency: r.noiseFreq * fs, Seed: r._depthSeed });
+    if (onlyBiome && name !== onlyBiome) continue;
     for (const s of r.subs) if (s.kind === 'scatter') calibrateScatter(s, fs);
   }
   return { biomes, fs, cfg, _rand: rand, _deposits: null };   // _rand continues as the deposit growth random
 }
 
 // StandardTerrainModule.Initialize: build seamless noise, sample it to pick the value band for PercentChance.
+// The band is a pure function of the six values in the key, and the editor re-initialises after every edit,
+// so the (20*fs)^3-sample sort runs once per distinct fill rather than once per keystroke.
+const calibMemo = new Map();
 function calibrateScatter(sc, fs) {
   const NoiseCtor = sc.noiseType === 'RidgedMulti' ? VC.RidgedMulti : VC.Perlin;
   sc._perlin = new NoiseCtor({ Frequency: sc.noiseFreq * fs, Seed: sc._seed });
+  const key = sc._seed + '|' + fs + '|' + sc.noiseType + '|' + sc.noiseFreq + '|' + sc.pc + '|' + sc.dist;
+  const hit = calibMemo.get(key);
+  if (hit) { sc._nMin = hit[0]; sc._nMax = hit[1]; return; }
+  calibrateScatterUncached(sc, fs);
+  if (calibMemo.size > 4096) calibMemo.clear();
+  calibMemo.set(key, [sc._nMin, sc._nMax]);
+}
+function calibrateScatterUncached(sc, fs) {
   const step = 0.05 / fs, samples = [];
   for (let x = 0; x <= 1.0; x += step)
     for (let y = 0; y <= 1.0; y += step)
@@ -150,6 +166,21 @@ function generateColumn(ctx, x, z, intHeight) {
     out[y] = block;
   }
   return out;
+}
+
+// A cross-section of n adjacent real columns of one biome at this seed: what the underground editor draws
+// beside its probability view, so the fuzzy bands can be checked against actual ground. Base rock and
+// fills only. Veins are a global post-pass - computeDeposits needs every column's height in the world
+// before it can place one - so the strip states that it omits them rather than approximating them.
+// ofs picks another slice (a different x run and z row) of the same world.
+function biomeStrip(terr, cfg, biome, n, ofs, intHeight) {
+  const ctx = initTerrain(terr, cfg, biome);
+  ctx.biomeAt = () => biome;
+  const W = cfg.worldWidth * 10, wrap = v => ((v % W) + W) % W;
+  const x0 = wrap((W >> 1) + (ofs | 0) * 97), z = wrap((W >> 1) + (ofs | 0) * 61);
+  const cols = [];
+  for (let i = 0; i < n; i++) cols.push(generateColumn(ctx, wrap(x0 + i), z, intHeight));
+  return { cols, x0, z, intHeight };
 }
 
 // ================= deposit (ore vein) global precompute =================
@@ -331,4 +362,4 @@ function meshChunkFromCols(chunk, hiddenArr, sliceTop) {
   return { pos: new Float32Array(pos), nor: new Float32Array(nor), pal: new Uint16Array(pal), palette };
 }
 
-if (typeof module !== 'undefined') module.exports = { initTerrain, generateColumn, parseTerrain, heightToInt, selectBase, computeDeposits, bindVoxel, genChunkColumns, meshChunkFromCols, IMPENETRABLE };
+if (typeof module !== 'undefined') module.exports = { initTerrain, generateColumn, parseTerrain, heightToInt, selectBase, computeDeposits, bindVoxel, genChunkColumns, meshChunkFromCols, biomeStrip, IMPENETRABLE };
