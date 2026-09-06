@@ -36,6 +36,8 @@
 //   maps that disagree are not used at all       bundleMaps stops comparing height.bin's length
 //   painting takes the export off the bundle     passthroughMaps drops its paintedSinceImport guard
 //   the export asks before it rebuilds           the passthrough call is deleted from buildExportMaps
+//   a re-imported bundle shows its water         bundlePreview previews biome.bin on its own
+//   ...and does not export the overlay           bundlePreview draws onto b.biome instead of a new buffer
 //
 //   node test/verify-export.js
 'use strict';
@@ -314,6 +316,34 @@ const zip = run(PARTS, { FILES }, `
   check('the export consults the kept maps before it rebuilds one',
     i >= 0 && pass >= 0 && coarsen >= 0 && pass < coarsen,
     i < 0 ? 'buildExportMaps not found' : 'passthroughMaps at +' + pass + ', sampleG at +' + coarsen);
+}
+
+// What a re-imported bundle SHOWS. A lake or a river carries the biome of its nearest shore in biome.bin —
+// that is the whole point of the shore-biome rule — so water.bin is the only thing that says a cell is
+// water. Preview the biome map alone and every river disappears behind the land it runs through, which is
+// exactly what happened the first time the preview was wired up. And the overlay has to go into its OWN
+// buffer: drawn onto the biome map it would be exported, undoing the rule it exists to work around.
+{
+  const RES = 4, n = RES * RES;
+  const biome = new Uint8Array(n).fill(2);        // all grassland
+  const water = new Uint8Array(n);
+  water[5] = 200; water[6] = 200;                  // a two-cell river running through it
+  const r = run(['fn:bundlePreview'], { biome, water, SC: { Ocean: 0 } }, `
+    const b = { res: 4, biome: biome, water: water, height: new Uint8Array(16), anyWater: true };
+    const p = bundlePreview(b);
+    const dry = bundlePreview({ res: 4, biome: biome, water: new Uint8Array(16), height: null, anyWater: false });
+    return { shown: Array.from(p), biomeAfter: Array.from(b.biome), aliased: p === b.biome,
+             dryShown: Array.from(dry) };`);
+  const asOcean = r.shown[5] === 0 && r.shown[6] === 0;
+  const landKept = r.shown.filter((v, i) => i !== 5 && i !== 6).every(v => v === 2);
+  check('a re-imported bundle shows the water its biome map hides',
+    asOcean && landKept,
+    'the two water cells read ' + r.shown[5] + '/' + r.shown[6] + ' (want Ocean 0), the land around them ' +
+    (landKept ? 'unchanged' : 'was overwritten'));
+  check('...without putting it in the map that gets exported',
+    !r.aliased && r.biomeAfter.every(v => v === 2) && r.dryShown.every(v => v === 2),
+    r.aliased ? 'the preview IS the biome buffer' :
+      'biome map after previewing: ' + r.biomeAfter.join(',') + '; a waterless bundle previews ' + r.dryShown.join(','));
 }
 
 done();

@@ -2952,6 +2952,20 @@
     return { res: res, biome: b, height: h, water: w || new Uint8Array(b.length), anyWater: anyWater };
   }
 
+  /**
+   * What to SHOW for a re-imported bundle. Not its biome map on its own: a lake or a river carries the
+   * biome of its nearest shore in biome.bin (so both banks get the biome they run through, rather than one
+   * label for the whole body), and water.bin is the only thing that says it is water at all. Drawing the
+   * biome map alone therefore hides every river and lake behind the land around it. Overlay them the same
+   * way biome.png does, into a NEW buffer - painting them onto b.biome would put them in the exported map
+   * and undo the shore-biome rule.
+   */
+  function bundlePreview(b) {
+    const p = new Uint8Array(b.biome.length);
+    for (let i = 0; i < p.length; i++) p[i] = b.water[i] ? SC.Ocean : b.biome[i];
+    return p;
+  }
+
   // Re-import a previously exported design .zip: restore the editable layers (design.json) + the world
   // config (WorldGenerator.eco), so you can keep tuning and re-export/regenerate.
   function importDesignZip(file) {
@@ -2973,7 +2987,7 @@
         hideLegend();                                   // clears any stale image-import state
         // ...and only THEN take the bundle's own maps, so hideLegend cannot wipe them again.
         importedBundle = bundleMaps(zf);
-        if (importedBundle) { importPreview = importedBundle.biome; importPreviewRes = importedBundle.res; }
+        if (importedBundle) { importPreview = bundlePreview(importedBundle); importPreviewRes = importedBundle.res; }
         importMode = d.importMode || 'colors';
         if (d.paintRoughness != null) { paintRoughness = d.paintRoughness; const rg = $('dsnRough'); if (rg) rg.value = Math.round(paintRoughness / 0.16 * 100); const rv = $('dsnRoughV'); if (rv) rv.textContent = roughLabel(paintRoughness); }
         if (d.elevValue != null) { elevValue = d.elevValue; const el = $('dsnElev'); if (el) el.value = Math.round(elevValue * 100); const ev = $('dsnElevV'); if (ev) ev.textContent = elevLabel(elevValue); }
