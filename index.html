@@ -134,6 +134,10 @@
   #ovProbe .pr b{margin-left:auto; font-variant-numeric:tabular-nums;}
   #ovProbe .pdot{width:8px; height:8px; border-radius:50%; flex:0 0 auto; border:0.5px solid var(--border2);}
   #ovProbe .psub{color:var(--muted); margin-top:4px; border-top:0.5px solid var(--border); padding-top:3px;}
+  .ovRow[draggable]{cursor:grab;}
+  .ovRow.dragging{opacity:.4;}
+  .ovRow.dropInto{outline:1.5px dashed var(--accent); outline-offset:-1px;}
+  .ovRow.dropAt{box-shadow:inset 0 2px 0 var(--accent);}
   .oreNode .nmv{border:none; background:transparent; color:var(--muted); font-size:10px; padding:2px 4px; cursor:pointer; border-radius:5px; line-height:1;}
   .oreNode .nmv:hover:not(:disabled){color:var(--text); background:var(--surf1);}
   .oreNode .nmv:disabled{opacity:.25; cursor:default;}
@@ -226,7 +230,7 @@
         <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start;justify-content:center;margin-top:8px">
           <div id="ovLane" style="flex:0 0 auto;border:0.5px solid var(--border);border-radius:12px;background:var(--surf);padding:6px 10px;overflow-x:auto;max-width:100%"></div>
           <div style="flex:1 1 240px;min-width:230px;max-width:340px">
-            <div class="lbl" style="margin:0 0 4px">All blocks — click to select, ✕ to remove, ▲▼ to reorder. Layers are walked in order; within a layer the first match wins.</div>
+            <div class="lbl" style="margin:0 0 4px">All blocks — click to select, ✕ to remove, ▲▼ or drag to reorder and to move between layers. Layers are walked in order; within a layer the first match wins.</div>
             <div id="ovList" style="max-height:260px;overflow-y:auto;margin-bottom:10px;border:0.5px solid var(--border);border-radius:8px;padding:4px"></div>
             <div id="ovDetail"></div>
             <div class="oreAdd" style="margin-top:8px"><button id="ovAddVein">+ vein</button><button id="ovAddScatter">+ fill</button></div>
@@ -8926,7 +8930,7 @@ const OreVisual = (function () {
     const objRow = (o, i, nested) => { const seld = sel && sel.kind !== 'strat' && sel.node === o.node;
       const chance = o.kind === 'dep' ? seedRate(o.node.SpawnPercentChance) : pct(o.node.PercentChance);
       const meta = [metaOf(o), chance].filter(Boolean).join(' · ');
-      return '<div class="ovRow' + (seld ? ' sel' : '') + (nested ? ' sub' : '') + '" data-lk="o" data-li="' + i + '"><span class="ndot" style="background:' + oreDot(o) + '"></span><span class="ltag">' + (o.kind === 'dep' ? 'vein' : 'fill') + '</span><span class="lnm">' + oreLabel(o) + '</span><span class="lmeta" title="' + METdesc(o) + '">' + meta + '</span><button class="ndel" data-del="' + i + '" title="Remove this block">✕</button></div>'; };
+      return '<div class="ovRow' + (seld ? ' sel' : '') + (nested ? ' sub' : '') + '" draggable="true" data-lk="o" data-li="' + i + '"><span class="ndot" style="background:' + oreDot(o) + '"></span><span class="ltag">' + (o.kind === 'dep' ? 'vein' : 'fill') + '</span><span class="lnm">' + oreLabel(o) + '</span><span class="lmeta" title="' + METdesc(o) + '">' + meta + '</span><button class="ndel" data-del="' + i + '" title="Remove this block">✕</button></div>'; };
     const placed = new Set();
     strata.forEach((st, i) => {
       h += stratRow(st, i, occupiedBand(st.node), lastAlive.length ? lastAlive[i] : null);
@@ -8943,6 +8947,36 @@ const OreVisual = (function () {
     listEl.querySelectorAll('.ndel[data-del]').forEach(btn => btn.onclick = e => { e.stopPropagation();
       const o = objs[+btn.dataset.del]; if (!o) return; const idx = o.sub.indexOf(o.node); if (idx >= 0) o.sub.splice(idx, 1); if (sel && sel.node === o.node) sel = null; render(); renderDetail(); renderList(); scheduleOreRender(); });
     listEl.querySelectorAll('.ndel[data-delstrat]').forEach(btn => btn.onclick = e => { e.stopPropagation(); removeStratum(strata[+btn.dataset.delstrat]); });
+    wireDrag();
+  }
+  // Drag a fill or vein onto a layer to move it there, or onto another fill/vein to drop it in at that
+  // spot. Both matter: which layer decides whether it can act at all, and the position decides who wins
+  // when two of them cover the same depths, since the first match takes it.
+  let dragI = null;
+  function clearDrop() { if (!listEl) return;
+    listEl.querySelectorAll('.ovRow').forEach(r => { r.classList.remove('dropInto'); r.classList.remove('dropAt'); }); }
+  function wireDrag() {
+    listEl.querySelectorAll('.ovRow[draggable]').forEach(row => {
+      row.addEventListener('dragstart', e => { dragI = +row.dataset.li;
+        e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', 'ore');
+        row.classList.add('dragging'); });
+      row.addEventListener('dragend', () => { dragI = null; row.classList.remove('dragging'); clearDrop(); });
+    });
+    listEl.querySelectorAll('.ovRow').forEach(row => {
+      row.addEventListener('dragover', e => { if (dragI == null) return;
+        e.preventDefault(); e.dataTransfer.dropEffect = 'move';
+        clearDrop(); row.classList.add(row.dataset.lk === 's' ? 'dropInto' : 'dropAt'); });
+      row.addEventListener('dragleave', () => row.classList.remove('dropInto', 'dropAt'));
+      row.addEventListener('drop', e => { e.preventDefault(); clearDrop();
+        if (dragI == null) return; const o = objs[dragI]; dragI = null; if (!o) return;
+        let destStrat = null, at = -1;
+        if (row.dataset.lk === 's') { const st = strata[+row.dataset.li]; destStrat = st && st.node; }
+        else { const t = objs[+row.dataset.li]; if (!t || t.node === o.node) return;
+               destStrat = t.parent; at = (t.sub || []).indexOf(t.node); }
+        if (!moveToLayer(o, destStrat, at)) return;
+        const node = o.node; render(); sel = objs.find(x => x.node === node) || null;
+        renderDetail(); renderList(); scheduleOreRender(); });
+    });
   }
   // remove a base-rock layer (its BlockDepthRange, along with any veins/scatters nested in it)
   function removeStratum(st) { if (!st) return; const bm = biomes()[biomeIdx]; const arr = bm && bm.Module && bm.Module.BlockDepthRanges; if (!arr) return;
@@ -8951,6 +8985,24 @@ const OreVisual = (function () {
   /** Move a node one place within the array that holds it. Order is semantics here, in two ways: the
    *  layer chain is walked in order, and within a layer the FIRST sub-module that matches a depth wins,
    *  so two fills over the same depths are not commutative. Nothing in the panel could reorder either. */
+  /**
+   * Move a fill or vein into another layer. This is the one edit the panel could not make, and it is the
+   * one that matters: a sub-module is only consulted while its OWN layer owns the depth, so a vein seeded
+   * at 20-24 inside a layer that ends at 20 can never spawn - the engine never asks it. Nothing said so
+   * and nothing could fix it; adding always appended to the first layer, and the arrows only moved within
+   * one. The "at" argument is an index in the destination, or -1 to append.
+   */
+  function moveToLayer(o, destStrat, at) {
+    if (!o || !destStrat) return false;
+    destStrat.SubModules = destStrat.SubModules || [];
+    const from = o.sub, i = from.indexOf(o.node);
+    if (i < 0) return false;
+    from.splice(i, 1);
+    const dest = destStrat.SubModules;
+    let j = at == null || at < 0 ? dest.length : at;
+    if (from === dest && at != null && at > i) j--;      // the splice above shifted everything after i
+    dest.splice(Math.max(0, Math.min(dest.length, j)), 0, o.node);
+    return true; }
   function moveIn(arr, node, dir) { const i = arr.indexOf(node), j = i + dir;
     if (i < 0 || j < 0 || j >= arr.length) return false;
     arr.splice(j, 0, arr.splice(i, 1)[0]); return true; }
@@ -8958,6 +9010,18 @@ const OreVisual = (function () {
     + '<button class="nmv" data-mv="1"' + (canDown ? '' : ' disabled') + ' title="Move later">▼</button>';
   function wireMove(arr, node) { detailEl.querySelectorAll('.nmv').forEach(b => b.onclick = () => {
     if (!moveIn(arr, node, +b.dataset.mv)) return; render(); renderDetail(); renderList(); scheduleOreRender(); }); }
+  /** Arrows on a fill/vein: past the end of its own layer, step into the neighbouring one. */
+  function wireMoveObj(o) { detailEl.querySelectorAll('.nmv').forEach(b => b.onclick = () => {
+    const dir = +b.dataset.mv, i = o.sub.indexOf(o.node);
+    let ok = moveIn(o.sub, o.node, dir);
+    if (!ok) {                                            // at an edge - hop to the next layer along
+      const si = strata.findIndex(st => st.node === o.parent), ds = strata[si + dir];
+      if (!ds) return;
+      ok = moveToLayer(o, ds.node, dir < 0 ? -1 : 0);      // up: append to the end of the one above
+    }
+    if (!ok) return;
+    const node = o.node; render(); sel = objs.find(x => x.node === node) || null;
+    renderDetail(); renderList(); scheduleOreRender(); }); }
   function renderDetail() {
     if (!detailEl) return;
     if (!sel) { detailEl.innerHTML = '<div class="lbl" style="padding:6px 0">Click a layer, fill, or vein to edit it — or add one below.</div>'; return; }
@@ -8976,7 +9040,7 @@ const OreVisual = (function () {
     h += dep ? (knob1('SpawnPercentChance', o.node.SpawnPercentChance, dep) + knobR('DepthRange', o.node.DepthRange, dep) + knobR('DepositDepthRange', o.node.DepositDepthRange, dep) + knobR('BlocksCountRange', o.node.BlocksCountRange, dep))
              : (knob1('PercentChance', o.node.PercentChance, dep) + knobR('DepthRange', o.node.DepthRange, dep) + knob1('NoiseFrequency', o.node.NoiseFrequency, dep));
     if (!dep) h += noiseSelects(o.node);
-    h += moveBtns(true, true) + del + '</div>'; detailEl.innerHTML = h; wireDetail(o); wireMove(o.sub, o.node);
+    h += moveBtns(true, true) + del + '</div>'; detailEl.innerHTML = h; wireDetail(o); wireMoveObj(o);
   }
   // StandardTerrainModule.Initialize sorts its noise samples and takes a band of the requested width:
   // Bands takes it around the MEDIAN (contiguous sheets following an isosurface), Blobs takes the low
@@ -9022,7 +9086,12 @@ const OreVisual = (function () {
   }
   function add(type) { const bm = biomes()[biomeIdx]; if (!bm) return; bm.Module = bm.Module || {};
     if (!bm.Module.BlockDepthRanges || !bm.Module.BlockDepthRanges.length) bm.Module.BlockDepthRanges = [{ NoiseFrequency: 40, Min: 0, Max: 0, BlockType: { Type: 'Eco.World.Blocks.DirtBlock, Eco.World' }, SubModules: [] }];
-    const layer = bm.Module.BlockDepthRanges[0]; layer.SubModules = layer.SubModules || []; const n = type === 'vein' ? tmplVein() : tmplScatter();
+    // Into the layer you are looking at. Appending to the first layer regardless is how a vein ends up in a
+    // layer that does not own its depths, which is silent and fatal.
+    const arr = bm.Module.BlockDepthRanges;
+    const target = sel ? (sel.kind === 'strat' ? sel.node : sel.parent) : null;
+    const layer = (target && arr.indexOf(target) >= 0) ? target : arr[0];
+    layer.SubModules = layer.SubModules || []; const n = type === 'vein' ? tmplVein() : tmplScatter();
     layer.SubModules.push(n); render(); sel = objs.find(x => x.node === n) || null; renderDetail(); renderList(); scheduleOreRender(); }
   function build() { laneEl = $('ovLane'); detailEl = $('ovDetail'); listEl = $('ovList');
     if (!terrain || !terrain.Modules) { if (laneEl) laneEl.innerHTML = '<div class="lbl" style="padding:10px">No TerrainModule to edit.</div>'; if (detailEl) detailEl.innerHTML = ''; return; }
