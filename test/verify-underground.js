@@ -229,15 +229,17 @@ check('the list still nests and shows liveness', el('ovList').innerHTML.indexOf(
     check('the soft grow window is drawn around it, dashed',
       svg2.indexOf('stroke-dasharray="3 3"') >= 0 && svg2.indexOf('grows within') >= 0);
     // the drawing and the detail panel must not drift apart - they read the same veinExtent
-    const m1 = svg2.match(/a drill passes ~[0-9]+ of its ([0-9]+) tall[\s\S]{0,4}([0-9]+) wide/);
-    const m2 = el2('ovDetail').innerHTML.match(/it is ([0-9]+) tall and ([0-9]+) wide/);
+    const m1 = svg2.match(/a drill passes ~[0-9]+ of its ([0-9]+) tall × ([0-9]+) wide/);
+    const m2 = el2('ovDetail').innerHTML.match(/One deposit is ([0-9]+) tall and ([0-9]+) wide/);
     check('the drawing and the note agree on the size', !!m1 && !!m2 && m1[1] === m2[1] && m1[2] === m2[2],
       m1 && m2 ? m1[1] + 'x' + m1[2] + ' drawn vs ' + m2[1] + 'x' + m2[2] + ' written' : 'no match');
   }
-  // The height of ONE deposit is not what a column digs through: each deposit's window hangs under its own
-  // seed's surface, so across a biome's relief the windows slide past each other and the ore reaches across
-  // a much thicker band. Settings of 20-24 over Desert's 11 blocks of relief prospect as 16 blocks solid,
-  // where the panel used to promise 5.
+  // The height of ONE deposit is not what a column digs through. Deposits overlap, and a window asked for
+  // more ore per column than it is tall fills and spills. Measured with the voxel port on a user's Desert
+  // (5-tall window, seeds 20-24): 0.0015 x 1000-5000 sheets is 22 blocks of ore per column and prospects
+  // as 23 solid; 0.0005 (7.5 per column) as 7-9 solid, where the note used to say "about 3" and nothing
+  // else; 500-block sheets at 3 per column as 3, where one deposit's own median column is 1. Relief moves
+  // the layer but changed none of those numbers. The numbers pinned here are the ones a person acts on.
   {
     const desert = terrain.Modules.find(m => m.BiomeName === 'Desert');
     const layer = desert.Module.BlockDepthRanges.find(r => (r.SubModules || []).some(x => /Deposit/.test(x['$type'] || '')));
@@ -250,7 +252,7 @@ check('the list still nests and shows liveness', el('ovList').innerHTML.indexOf(
     const i2 = el2('ovLane').innerHTML.slice(el2('ovLane').innerHTML.lastIndexOf('data-drag="', gt2) + 11, gt2);
     el2('ovSvg').handlers.pointerdown({ target: { dataset: { drag: i2 + '|move' } }, clientX: 0, clientY: 0, preventDefault() {} });
     const note = el2('ovDetail').innerHTML;
-    const one = note.match(/it is ([0-9]+) tall/);
+    const one = note.match(/One deposit is ([0-9]+) tall/);
     const band = note.match(/within about ([0-9]+) blocks of depth/);
     const relief = note.match(/rolls over ([0-9]+) blocks/);
     check('the note separates one deposit from what a column digs through',
@@ -263,14 +265,47 @@ check('the list still nests and shows liveness', el('ovList').innerHTML.indexOf(
     check('it says the ore per column and that the engine will warn at this rate',
       note.indexOf('blocks of ore per column') >= 0 && note.indexOf('engine will warn at load') >= 0);
     const drill = note.match(/drill through one passes about ([0-9]+) block/);
-    check('the note leads with what a drill passes through, and a sheet is thinner than it is tall',
+    check('one sheet on its own is thinner than it is tall',
       !!drill && !!one && +drill[1] < +one[1], drill && one ? drill[1] + ' drilled vs ' + one[1] + ' tall' : 'no match');
+    // 22 blocks of ore per column into a 5-tall window: the world prospects as 23 solid, not the 3 one sheet holds
+    const here = note.match(/a drill here passes about ([0-9]+) blocks of it, or more/);
+    check('the note leads with the solid layer the world actually gets, not one sheet', !!here && +here[1] >= 20 && +here[1] <= 26, here && here[1]);
+    check('the headline comes before the deposit', note.indexOf('a drill here passes') < note.indexOf('One deposit is'));
+    // 7.5 per column used to pass the crowding rule (it compared against window + relief = 16) and say "about 3"
+    v.SpawnPercentChance = 0.0005;
+    lifted2.OreVisual.build();
+    el2('ovSvg').handlers.pointerdown({ target: { dataset: { drag: i2 + '|move' } }, clientX: 0, clientY: 0, preventDefault() {} });
+    const seven = el2('ovDetail').innerHTML.match(/a drill here passes about ([0-9]+) blocks of it, or more/);
+    check('7.5 blocks per column into a 5-tall window is called solid, about 8 or more', !!seven && +seven[1] >= 7 && +seven[1] <= 9, seven && seven[1]);
+    // the recommendation: 500-block blobs at 3 per column - 5 thick under about half the columns, no spill
+    v.SpawnPercentChance = 0.0012;
     v.DirectionWeights = [{ X: 1, Y: 1, Z: 1 }]; v.WeightVariance = { X: 1, Y: 1, Z: 1 };
     v.BlocksCountRange = { min: 500, max: 500 };
     lifted2.OreVisual.build();
     el2('ovSvg').handlers.pointerdown({ target: { dataset: { drag: i2 + '|move' } }, clientX: 0, clientY: 0, preventDefault() {} });
-    const blobDrill = el2('ovDetail').innerHTML.match(/drill through one passes about ([0-9]+) block/);
+    const bnote = el2('ovDetail').innerHTML;
+    const blobDrill = bnote.match(/drill through one passes about ([0-9]+) block/);
     check('the same window as blobs fills it instead of spreading', !!blobDrill && +blobDrill[1] >= 5, blobDrill && blobDrill[1]);
+    const hits = bnote.match(/a drill that hits it passes about ([0-9]+) blocks<\/b>, and it lies under roughly ([0-9]+)% of columns/);
+    check('blobs at 3 per column: about 5 thick under roughly half the columns, and no spill',
+      !!hits && +hits[1] === 5 && +hits[2] >= 35 && +hits[2] <= 75 && bnote.indexOf('or more') < 0, hits ? hits[1] + ' thick, ' + hits[2] + '%' : 'no match');
+    // the same rate as small sheets: one sheet's median column is 1, but they overlap and the world digs 3
+    v.DirectionWeights = [{ X: 4, Y: 1, Z: 4 }]; v.WeightVariance = { X: 3, Y: 1, Z: 3 };
+    lifted2.OreVisual.build();
+    el2('ovSvg').handlers.pointerdown({ target: { dataset: { drag: i2 + '|move' } }, clientX: 0, clientY: 0, preventDefault() {} });
+    const snote = el2('ovDetail').innerHTML;
+    const sOne = snote.match(/drill through one passes about ([0-9]+) block/), sHit = snote.match(/a drill that hits it passes about ([0-9]+) block/);
+    check('small sheets: one on its own is 1 thick, but overlapping they dig as 3', !!sOne && +sOne[1] === 1 && !!sHit && +sHit[1] >= 3 && +sHit[1] <= 4,
+      sOne && sHit ? sOne[1] + ' alone, ' + sHit[1] + ' in the world' : 'no match');
+    // the engine widens the grow window to include the seed range (Initialize: DepositDepthRange.Merge(DepthRange));
+    // the ghost and the note must grow through the merged window, as the bar already drew it
+    v.DepthRange = { min: 2, max: 4 }; v.DepositDepthRange = { min: 12, max: 20 }; v.BlocksCountRange = { min: 3000, max: 3000 };
+    v.DirectionWeights = [{ X: 1, Y: 1, Z: 1 }]; v.WeightVariance = { X: 1, Y: 1, Z: 1 };
+    lifted2.OreVisual.build();
+    el2('ovSvg').handlers.pointerdown({ target: { dataset: { drag: i2 + '|move' } }, clientX: 0, clientY: 0, preventDefault() {} });
+    const merged = el2('ovDetail').innerHTML.match(/One deposit is ([0-9]+) tall/);
+    check('a seed range outside the grow range widens the window the deposit grows in', !!merged && +merged[1] >= 12, merged && merged[1]);
+    check('the ghost window box spans the merged range', el2('ovLane').innerHTML.indexOf('grows within') >= 0);
   }
   check('no strip is requested any more', el2('ovLane').innerHTML.indexOf('real columns') < 0);
 }

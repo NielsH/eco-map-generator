@@ -1157,7 +1157,7 @@ const OreVisual = (function () {
     // deep. So draw one, same scale as the depth axis, against the soft window it is allowed to grow in.
     if (selBarInfo && selBarInfo.shape) {
       const node = selBarInfo.o.node, e = veinExtent(node);
-      const dd = node.DepositDepthRange || node.DepthRange || { min: 0, max: 10 };
+      const dd = growWindow(node);
       const px = SCd;                                  // one block, both ways, so the shape is not distorted
       let cx = (selBarX != null ? selBarX + BW / 2 : GX + GW / 2);
       const halfW = (e.projWide * px) / 2 + 4;
@@ -1169,7 +1169,7 @@ const OreVisual = (function () {
         s += rect(bx, by, px + 0.4, px + 0.4, 'fill="' + selBarInfo.col + '"'); });
       const capY = Math.min(yAtDepth(maxD), wHi + 13);
       s += '<text x="' + f1(cx) + '" y="' + f1(capY) + '" text-anchor="middle" font-size="9.5" fill="' + cM + '" paint-order="stroke" stroke="' + cssv('--surf') + '" stroke-width="3">'
-        + 'one deposit, a drill passes ~' + e.thick + ' of its ' + e.tall + ' tall Ã— ' + e.wide + ' wide'
+        + 'one deposit, a drill passes ~' + e.thick + ' of its ' + e.tall + ' tall × ' + e.wide + ' wide'
         + (e.shapes > 1 ? ' (1 of ' + e.shapes + ' shapes)' : '') + '</text>';
       s += '<text x="' + f1(cx) + '" y="' + f1(wLo - 5) + '" text-anchor="middle" font-size="9" fill="' + cM + '" paint-order="stroke" stroke="' + cssv('--surf') + '" stroke-width="3">grows within</text>';
       s += '</g>';
@@ -1308,35 +1308,51 @@ const OreVisual = (function () {
       + (cur === 'mixed' ? '<option value="mixed" selected>mixed (' + (node.DirectionWeights || []).length + ' shapes)</option>' : '');
     return '<span class="kk"><label title="which way a deposit prefers to grow - the single biggest lever on what it looks like underground">growth</label>'
       + '<select class="kv" data-f="growth">' + opts + '</select></span>'; }
-  // One deposit is not what you dig through, and the difference is not small. Two things stack on top of it:
+  // One deposit is not what you dig through. Deposits overlap - the engine grows them all against one
+  // shared map and a block already taken is simply skipped - so a column under two sheets holds both,
+  // and a window asked for more ore per column than it is tall fills up and spills past its 5x
+  // penalty. Measured with the voxel port on the user's own Desert (5-tall window, seeds 20-24):
+  //     ore/col                one deposit's median column   what a drill passes (median, columns with ore)
+  //   3.0  sheets 500          1                             3      under 86% of columns
+  //   3.0  blobs 500           5                             5-6    under 63%
+  //   7.5  sheets 1000-5000    3                             7-9    under 100%   <- got no warning before
+  //   22   sheets 1000-5000    3                             23     under 100%   <- the world that prospected 16+
+  // Relief moves the layer up and down across the biome (each window hangs under its own seed's
+  // surface) but changed none of these numbers: a flat map gave the same thicknesses.
   //
-  //   * every deposit's soft window is anchored to ITS OWN seed column's surface
-  //     (DepositTerrainModule.ConvertDepthRangeToHeightRange: depth + height - range), so across a biome's
-  //     surface relief the windows slide past each other in absolute Y. Desert's surface runs Y61-Y72, so a
-  //     5-deep window seeded anywhere in it unions to a 16-block band - and one column passes through all
-  //     of it. Measured against the game: settings of 20-24 with 11 blocks of relief prospect as 16 blocks
-  //     of solid iron, where the panel used to promise 5.
-  //   * seed rate times deposit size is ore per column, and it is easy to set that far above what the band
-  //     can hold. The engine warns about the same ratio at load (Initialize, "spawn rate is too high").
+  // So the lead number is the world one: ore per column over the share of columns that get any, held
+  // between one deposit's own median and the window height - or, past what the window can hold, the ore
+  // per column itself (what the window cannot take stacks outside it). Coverage is Poisson over the
+  // deposit's footprint; it runs 10-15% low where crowded deposits shove each other outward, which errs
+  // on the thick side. Within a block of the measurement in every row above.
   function veinNoteHtml(node) {
-    const e = veinExtent(node), dd = node.DepositDepthRange || node.DepthRange || { min: 0, max: 10 };
-    const dr = node.DepthRange || dd, bc = node.BlocksCountRange || { min: 1, max: 1 };
+    const e = veinExtent(node), win = growWindow(node);
+    const dr = node.DepthRange || win, bc = node.BlocksCountRange || { min: 1, max: 1 };
     const relief = Math.max(0, (surfHi | 0) - (surfLo | 0));
     const band = e.tall + relief;
     const seedsPerCol = Math.max(0, ((dr.max | 0) - (dr.min | 0) + 1)) * (node.SpawnPercentChance || 0);
     const perCol = seedsPerCol * (((bc.min | 0) + (bc.max | 0)) / 2);
     const perSeed = node.SpawnPercentChance ? Math.round(1 / node.SpawnPercentChance) : Infinity;
     const tooDense = (bc.max | 0) > perSeed;
-    // Lead with the number a drill returns. "5 blocks tall" is the deposit's own height somewhere in it;
-    // a flat sheet 5 tall spreads 3000 blocks over 971 columns and the MEDIAN one holds 3, while the same
-    // 3000 as blobs holds 5. Thickness is what you dig, and it is set by growth far more than by size.
-    let h = '<b>a drill through one passes about ' + e.thick + ' block' + (e.thick === 1 ? '' : 's') + '</b>'
-      + ' — it is ' + e.tall + ' tall and ' + e.wide + ' wide overall'
-      + ', ' + e.n + ' blocks' + (e.capped ? ' (shape sampled at ' + GROW_CAP + ')' : '')
-      + (e.shapes > 1 ? ', averaged over its ' + e.shapes + ' growth shapes' : '') + '.';
-    if (perCol > 0) { const pc = perCol < 1 ? perCol.toFixed(2) : Math.round(perCol);
-      h += ' At this seed rate that is roughly <b>' + pc + ' block' + (String(pc) === '1' ? '' : 's') + ' of ore per column</b>'
-        + (perCol >= band ? ', more than the band can hold — expect it solid.' : '.'); }
+    const cov = seedsPerCol > 0 ? 1 - Math.exp(-seedsPerCol * e.cols) : 0;   // share of columns under at least one deposit
+    const spill = perCol > 0.8 * e.tall;                                       // asked for more than the window can hold
+    const thick = seedsPerCol <= 0 ? e.thick
+      : spill ? Math.max(e.tall, Math.round(perCol))
+      : Math.max(e.thick, Math.min(e.tall, Math.round(perCol / cov)));
+    const blocks = v => v + ' block' + (v === 1 ? '' : 's');
+    const pc = perCol < 1 ? perCol.toFixed(2) : String(Math.round(perCol));
+    let h;
+    if (spill) h = '<b>a drill here passes about ' + blocks(thick) + ' of it, or more</b> — ' + pc + ' blocks of ore per column'
+      + ' into a window only ' + e.tall + ' tall: the deposits fill it, pile up and spill past it, under nearly every column.';
+    else if (seedsPerCol > 0) h = '<b>a drill that hits it passes about ' + blocks(thick) + '</b>, and it lies under roughly '
+      + Math.round(cov * 100) + '% of columns — ' + pc + ' block' + (pc === '1' ? '' : 's') + ' of ore per column.';
+    else h = '<b>it never seeds</b> — the seed rate is 0.';
+    // then the deposit itself: "5 tall" is its own height somewhere in it; a flat sheet 5 tall spreads
+    // 3000 blocks over 971 columns and the MEDIAN one holds 3, while the same 3000 as blobs holds 5.
+    h += ' One deposit is ' + e.tall + ' tall and ' + e.wide + ' wide overall, ' + e.n + ' blocks'
+      + (e.capped ? ' (shape sampled at ' + GROW_CAP + ')' : '')
+      + (e.shapes > 1 ? ', averaged over its ' + e.shapes + ' growth shapes' : '')
+      + '; a drill through one passes about ' + blocks(e.thick) + ' on its own.';
     if (tooDense) h += ' <b style="color:#c0705a">The engine will warn at load</b>: one seed per ' + perSeed
       + ' blocks with deposits up to ' + (bc.max | 0) + ' is too dense; it wants about 1 per ' + Math.round((bc.max | 0) * 1.2) + '.';
     // Last, and small: it answers "why is the ore at a different depth over there", never "how thick",
@@ -1401,27 +1417,34 @@ const OreVisual = (function () {
     const hs = [...col.values()].sort((a, b) => a - b);
     return { tall: yhi - ylo + 1, wide: Math.max(xhi - xlo, zhi - zlo) + 1, blocks: taken.size,
              thick: hs.length ? hs[hs.length >> 1] : 0,   // the MEDIAN column, not the deepest one
+             cols: col.size,                              // its footprint: the columns it puts ore under
              proj: [...proj].map(k => k.split(',').map(Number)) };
   }
+  /** The window a deposit grows in. The engine widens DepositDepthRange to include DepthRange at load
+   *  (Initialize: DepositDepthRange.Merge(DepthRange)), so a seed range outside the grow range grows
+   *  through both; the bar already drew it merged, but the ghost and its numbers read the raw field. */
+  function growWindow(node) {
+    const dd = node.DepositDepthRange || node.DepthRange || { min: 0, max: 10 }, dr = node.DepthRange || dd;
+    return { min: Math.min(dd.min | 0, dr.min | 0), max: Math.max(dd.max | 0, dr.max | 0) }; }
   /** The typical extent of the selected vein, at its mean size and each of its weight vectors. */
   function veinExtent(node) {
     const bc = node.BlocksCountRange || { min: 1, max: 1 };
-    const dd = node.DepositDepthRange || node.DepthRange || { min: 0, max: 10 };
+    const dd = growWindow(node);
     const ws = (node.DirectionWeights && node.DirectionWeights.length) ? node.DirectionWeights : [{ X: 1, Y: 1, Z: 1 }];
     const wv = node.WeightVariance || { X: 0, Y: 0, Z: 0 };
     const n = Math.round((((bc.min | 0) + (bc.max | 0)) / 2));
     const key = n + '|' + (dd.min | 0) + '|' + (dd.max | 0) + '|' + JSON.stringify(ws) + '|' + JSON.stringify(wv);
     const hit = extentMemo.get(key); if (hit) return hit;
-    let tall = 0, wide = 0, thick = 0; const runs = [];
+    let tall = 0, wide = 0, thick = 0, cols = 0; const runs = [];
     ws.forEach(w => { const r = growExtent(n, { X: w.X || 1, Y: w.Y || 1, Z: w.Z || 1 },
       { X: wv.X || 0, Y: wv.Y || 0, Z: wv.Z || 0 }, dd.min | 0, dd.max | 0);
-      tall += r.tall; wide += r.wide; thick += r.thick; runs.push(r); });
+      tall += r.tall; wide += r.wide; thick += r.thick; cols += r.cols; runs.push(r); });
     const mt = tall / ws.length, mw = wide / ws.length;
     // one shape has to stand for the list, so take the one nearest the average rather than the first
     let best = runs[0], bd = Infinity;
     runs.forEach(r => { const d = Math.abs(r.tall - mt) + Math.abs(r.wide - mw); if (d < bd) { bd = d; best = r; } });
-    const out = { tall: Math.round(mt), wide: Math.round(mw), thick: Math.round(thick / ws.length), capped: n > GROW_CAP, n: n, shapes: ws.length,
-                  proj: best.proj, projTall: best.tall, projWide: best.wide };
+    const out = { tall: Math.round(mt), wide: Math.round(mw), thick: Math.round(thick / ws.length), cols: cols / ws.length,
+                  capped: n > GROW_CAP, n: n, shapes: ws.length, proj: best.proj, projTall: best.tall, projWide: best.wide };
     extentMemo.set(key, out); return out; }
 
   /** A vein's spawn chance as the engine itself phrases it: one seed per N blocks. */
