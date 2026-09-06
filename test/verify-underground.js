@@ -229,6 +229,33 @@ check('the list still nests and shows liveness', el('ovList').innerHTML.indexOf(
     check('the drawing and the note agree on the size', !!m1 && !!m2 && m1[1] === m2[1] && m1[2] === m2[2],
       m1 && m2 ? m1[1] + 'x' + m1[2] + ' drawn vs ' + m2[1] + 'x' + m2[2] + ' written' : 'no match');
   }
+  // The height of ONE deposit is not what a column digs through: each deposit's window hangs under its own
+  // seed's surface, so across a biome's relief the windows slide past each other and the ore reaches across
+  // a much thicker band. Settings of 20-24 over Desert's 11 blocks of relief prospect as 16 blocks solid,
+  // where the panel used to promise 5.
+  {
+    const desert = terrain.Modules.find(m => m.BiomeName === 'Desert');
+    const layer = desert.Module.BlockDepthRanges.find(r => (r.SubModules || []).some(x => /Deposit/.test(x['$type'] || '')));
+    const v = layer.SubModules.find(x => /Deposit/.test(x['$type'] || ''));
+    v.SpawnPercentChance = 0.0015; v.DepthRange = { min: 20, max: 24 }; v.DepositDepthRange = { min: 20, max: 24 };
+    v.BlocksCountRange = { min: 1000, max: 5000 };
+    v.DirectionWeights = [{ X: 4, Y: 1, Z: 4 }]; v.WeightVariance = { X: 3, Y: 1, Z: 3 };
+    lifted2.OreVisual.build();
+    const gt2 = el2('ovLane').innerHTML.indexOf('|gt"');
+    const i2 = el2('ovLane').innerHTML.slice(el2('ovLane').innerHTML.lastIndexOf('data-drag="', gt2) + 11, gt2);
+    el2('ovSvg').handlers.pointerdown({ target: { dataset: { drag: i2 + '|move' } }, clientX: 0, clientY: 0, preventDefault() {} });
+    const note = el2('ovDetail').innerHTML;
+    const one = note.match(/about <b>([0-9]+) blocks tall<\/b>/);
+    const band = note.match(/band about <b>([0-9]+) blocks thick<\/b>/);
+    const relief = note.match(/rolls over ([0-9]+) blocks/);
+    check('the note separates one deposit from what a column digs through',
+      !!one && !!band && !!relief && +band[1] === +one[1] + +relief[1],
+      one && band && relief ? one[1] + ' tall + ' + relief[1] + ' relief = ' + band[1] + ' band' : 'no match');
+    check('a flat 20-24 sheet under Desert relief reads as the 16 blocks it prospects as',
+      !!band && band[1] === '16', band && band[1]);
+    check('it says the ore per column and that the engine will warn at this rate',
+      note.indexOf('blocks of ore per column') >= 0 && note.indexOf('engine will warn at load') >= 0);
+  }
   check('no strip is requested any more', el2('ovLane').innerHTML.indexOf('real columns') < 0);
 }
 
