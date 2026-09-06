@@ -38,9 +38,8 @@ if (s0 < 0 || s1 < 0) throw new Error('could not find the OreVisual slice in bui
 const slice = buildSrc.slice(s0, s1);
 
 // a DOM of plain objects: enough for render(), renderList(), renderDetail() and init()
-const els = {};
 const FORM = { cf_waterLevel: '60', cf_maxGenerationHeight: '120' };
-function el(id) {
+function elementsOf(els) { return function el(id) {
   if (els[id]) return els[id];
   const e = { id: id, innerHTML: '', value: FORM[id] || '', checked: false, style: {}, dataset: {}, onclick: null, handlers: {},
     addEventListener(ev, fn) { this.handlers[ev] = fn; },
@@ -57,8 +56,9 @@ function el(id) {
       return { top: 0, left: 0, width: w, height: h }; },
     get viewBox() { return { baseVal: { width: this.getBoundingClientRect().width } }; } };
   els[id] = e; return e;
-}
-const documentStub = { getElementById: el, handlers: {}, addEventListener(ev, fn) { this.handlers[ev] = fn; } };
+}; }
+const els = {}, el = elementsOf(els);
+const documentStub ={ getElementById: el, handlers: {}, addEventListener(ev, fn) { this.handlers[ev] = fn; } };
 const lifted = new Function('$', 'document', 'getComputedStyle', 'BlockChart', 'buildExportJson', 'setTimeout', 'clearTimeout',
   slice + '\nreturn { OreVisual, derefTerrain, setTerrain: t => { terrain = t; } };')(
   el, documentStub, () => ({ getPropertyValue: () => '#123456' }), { render() {} }, () => ({}), () => 0, () => {});
@@ -190,6 +190,74 @@ check('the list still nests and shows liveness', el('ovList').innerHTML.indexOf(
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
   const a = buildSrc.indexOf('const OreVisual = (function () {'), b = buildSrc.indexOf('const BlockChart = (function () {');
   check('OreVisual block is byte-identical in index.html', html.indexOf(buildSrc.slice(a, b)) >= 0);
+}
+
+// ---- the strip of real columns: its request/reply path through a fake worker, then the port it rides on ----
+{
+  // a second lane with a worker, a canvas and a form to read; setTimeout fires at once so the debounce is inert
+  const els2 = {}, el2 = elementsOf(els2);
+  const posted = []; const fakeWorker = { postMessage(m) { posted.push(m); }, onmessage: null };
+  const painted = []; const canvas = { width: 0, height: 0, getContext() { return { fillStyle: '', fillRect(x, y) { painted.push(x + ',' + y); } }; }, toDataURL() { return 'data:image/png;base64,FAKE'; } };
+  const doc2 = { getElementById: el2, handlers: {}, addEventListener(ev, fn) { this.handlers[ev] = fn; }, createElement() { return canvas; } };
+  const cfg = { worldWidth: 72, seed: 4242, waterLevel: 60, maxGenerationHeight: 120 };
+  const lifted2 = new Function('$', 'document', 'getComputedStyle', 'BlockChart', 'buildExportJson', 'setTimeout', 'clearTimeout', 'Worker', 'makeWorker', 'readForm', 'baseCfg', 'VT',
+    slice + '\nreturn { OreVisual, setTerrain: t => { terrain = t; } };')(
+    el2, doc2, () => ({ getPropertyValue: () => '#123456' }), { render() {} }, () => ({}), fn => { fn(); return 1; }, () => {}, function () {}, () => fakeWorker, () => cfg, cfg, [1, 2, 3]);
+  lifted2.setTerrain(terrain);
+  lifted2.OreVisual.init(); lifted2.OreVisual.build();
+  el2('ovBiomes').querySelectorAll('button')[desertIdx].onclick();
+  let svg2 = el2('ovLane').innerHTML;
+  const req = posted.filter(m => m.type === 'strip').slice(-1)[0];
+  check('the strip worker is initialised with the vector table first', posted[0] && posted[0].type === 'init' && posted[0].vt.length === 3);
+  check('a strip is requested for Desert at the current seed and mean surface', !!req && req.biome === 'Desert' && req.cfg.seed === 4242 && req.cfg.worldWidth === 72 && req.n === 48 && req.intHeight === 67, req && JSON.stringify([req.biome, req.cfg, req.n, req.intHeight]));
+  check('the lane says it is computing while the worker works', svg2.indexOf('computing real columns') >= 0 && svg2.indexOf('<image') < 0);
+  // the reply: 48 columns of 68 blocks, surface at the top of each
+  const rows = req.intHeight + 1, cols = [];
+  for (let i = 0; i < req.n; i++) { const c = new Array(rows); for (let y = 0; y < rows; y++) c[y] = y === 0 ? 'Eco.World.Blocks.ImpenetrableStoneBlock' : y > rows - 4 ? 'Eco.World.Blocks.DesertSandBlock' : 'Eco.World.Blocks.SandstoneBlock'; cols.push(c); }
+  fakeWorker.onmessage({ data: { type: 'strip-done', key: 'stale', cols: cols, x0: 1, z: 1, intHeight: req.intHeight } });
+  check('a reply for another key is dropped', el2('ovLane').innerHTML.indexOf('<image') < 0);
+  fakeWorker.onmessage({ data: { type: 'strip-done', key: req.key, cols: cols, x0: 360, z: 360, intHeight: req.intHeight } });
+  svg2 = el2('ovLane').innerHTML;
+  check('the reply paints one pixel per block', painted.length === req.n * rows && canvas.width === req.n && canvas.height === rows, painted.length + ' px');
+  const img = svg2.slice(svg2.indexOf('<image'), svg2.indexOf('/>', svg2.indexOf('<image')));
+  const SCd = 1000 / 120;
+  check('the strip image spans the same rows as the stack, at the stack scale', img.indexOf('height="' + (rows * SCd).toFixed(1) + '"') >= 0 && img.indexOf('preserveAspectRatio="none"') >= 0 && img.indexOf('pixelated') >= 0, img.slice(0, 90));
+  check('the strip is captioned with its slice and says veins are omitted', svg2.indexOf('48 real columns at z360, x360–407') >= 0 && svg2.indexOf('veins omitted') >= 0 && svg2.indexOf('data-stripnext') >= 0);
+  check('the world-Y edge sits to the right of the strip', svg2.indexOf('world Y under the mean surface (Y67)') >= 0 && svg2.indexOf('surface Y61–72') >= 0);
+  const before = posted.length;
+  el2('ovSvg').handlers.pointerdown({ target: { dataset: { stripnext: '1' } }, clientY: 0, clientX: 0, preventDefault() {} });
+  const req2 = posted.slice(-1)[0];
+  check('next slice asks for another offset and shows the old strip dimmed meanwhile', posted.length === before + 1 && req2.ofs === 1 && el2('ovLane').innerHTML.indexOf('opacity="0.4"') >= 0);
+  // an edit to ANOTHER biome must re-request: every later fill's seed moves with it
+  const grass = terrain.Modules.find(m => m.BiomeName === 'Grassland');
+  const b0 = posted.length; grass.Module.BlockDepthRanges[0].SubModules.push({ '$type': 'Eco.WorldGenerator.StandardTerrainModule, Eco.WorldGenerator', BlockType: { Type: 'Eco.World.Blocks.DirtBlock, Eco.World' }, DepthRange: { min: 0, max: 1 }, PercentChance: 0.1 });
+  fakeWorker.onmessage({ data: { type: 'strip-done', key: req2.key, cols: cols, x0: 0, z: 0, intHeight: req.intHeight } });   // settle the pending request first
+  el2('ovBiomes').querySelectorAll('button')[desertIdx].onclick();
+  check('a fill added to an earlier biome re-requests the strip', posted.length === b0 + 1 && posted.slice(-1)[0].type === 'strip');
+  grass.Module.BlockDepthRanges[0].SubModules.pop();
+}
+
+// ---- the port the strip rides on, with the real noise ----
+{
+  const core = require(path.join(ROOT, 'src', 'core.js')), voxel = require(path.join(ROOT, 'src', 'voxel.js'));
+  core.setVectorTable(fs.readFileSync(path.join(ROOT, 'src', 'vectortable.txt'), 'utf8').trim().split(',').map(Number));
+  const cfg = { worldWidth: 72, seed: 4242, waterLevel: 60, maxGenerationHeight: 120 };
+  const full = voxel.initTerrain(terrain, cfg); full.biomeAt = () => 'Desert';
+  const only = voxel.initTerrain(terrain, cfg, 'Desert'); only.biomeAt = () => 'Desert';
+  let same = true; for (let i = 0; i < 64 && same; i++) { const x = 100 + i * 7, z = 300 + i * 3;
+    const a = voxel.generateColumn(full, x, z, 67), b = voxel.generateColumn(only, x, z, 67); if (a.join() !== b.join()) same = false; }
+  check('calibrating one biome gives the same columns as calibrating all (seed order kept)', same);
+  const dS = full.biomes.Desert.ranges.flatMap(r => r.subs.filter(s => s.kind === 'scatter')), oS = only.biomes.Desert.ranges.flatMap(r => r.subs.filter(s => s.kind === 'scatter'));
+  check('the calibration memo returns the exact bands', dS.length > 0 && dS.every((s, i) => s._nMin === oS[i]._nMin && s._nMax === oS[i]._nMax && s._seed === oS[i]._seed), dS.length + ' fills');
+  const r = voxel.biomeStrip(terrain, cfg, 'Desert', 48, 0, 67), r2 = voxel.biomeStrip(terrain, cfg, 'Desert', 48, 0, 67);
+  check('biomeStrip: 48 columns of intHeight+1 blocks, world floor at the bottom', r.cols.length === 48 && r.cols.every(c => c.length === 68 && c[0] === voxel.IMPENETRABLE));
+  check('biomeStrip is deterministic', JSON.stringify(r) === JSON.stringify(r2));
+  const top = r.cols.filter(c => c[67].indexOf('DesertSand') >= 0).length;
+  check('Desert columns are Desert Sand at the surface (a 0-0 layer alive in 99% plus a fill)', top >= 44, top + '/48');
+  const other = voxel.biomeStrip(terrain, { worldWidth: 72, seed: 99, waterLevel: 60, maxGenerationHeight: 120 }, 'Desert', 48, 0, 67);
+  check('another seed digs different ground', JSON.stringify(other.cols) !== JSON.stringify(r.cols));
+  const slice1 = voxel.biomeStrip(terrain, cfg, 'Desert', 48, 1, 67);
+  check('another slice is elsewhere in the world', slice1.x0 !== r.x0 && slice1.z !== r.z);
 }
 
 console.log(fails ? '\n' + fails + ' check(s) failed' : '\nall checks passed');
