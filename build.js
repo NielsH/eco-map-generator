@@ -1170,13 +1170,14 @@ const OreVisual = (function () {
       if (relief > 0) { const bLo = yAtDepth((dd.min | 0)), bHi = yAtDepth((dd.max | 0) + 1 + relief);
         s += rect(cx - halfW - 3, bLo, halfW * 2 + 6, bHi - bLo, 'fill="' + selBarInfo.col + '" fill-opacity="0.10"');
         s += '<text x="' + f1(cx) + '" y="' + f1(bHi - 3) + '" text-anchor="middle" font-size="9" fill="' + cM + '" paint-order="stroke" stroke="' + cssv('--surf') + '" stroke-width="3">'
-          + 'a column digs ~' + (e.tall + relief) + ' blocks of it</text>'; }
+          + 'ore can sit anywhere in ~' + (e.tall + relief) + ' blocks</text>'; }
       s += rect(cx - halfW, wLo, halfW * 2, wHi - wLo, 'fill="none" stroke="' + cT + '" stroke-opacity="0.45" stroke-width="1" stroke-dasharray="3 3"');
       e.proj.forEach(pr => { const bx = cx + pr[0] * px - px / 2, by = yAtDepth(pr[1]);
         s += rect(bx, by, px + 0.4, px + 0.4, 'fill="' + selBarInfo.col + '"'); });
       const capY = Math.min(yAtDepth(maxD), wHi + 13);
       s += '<text x="' + f1(cx) + '" y="' + f1(capY) + '" text-anchor="middle" font-size="9.5" fill="' + cM + '" paint-order="stroke" stroke="' + cssv('--surf') + '" stroke-width="3">'
-        + 'one deposit Â· ' + e.tall + ' tall Ã— ' + e.wide + ' wide' + (e.shapes > 1 ? ' (1 of ' + e.shapes + ' shapes)' : '') + '</text>';
+        + 'one deposit, a drill passes ~' + e.thick + ' of its ' + e.tall + ' tall Ã— ' + e.wide + ' wide'
+        + (e.shapes > 1 ? ' (1 of ' + e.shapes + ' shapes)' : '') + '</text>';
       s += '<text x="' + f1(cx) + '" y="' + f1(wLo - 5) + '" text-anchor="middle" font-size="9" fill="' + cM + '" paint-order="stroke" stroke="' + cssv('--surf') + '" stroke-width="3">grows within</text>';
       s += '</g>';
     }
