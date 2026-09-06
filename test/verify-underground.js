@@ -225,7 +225,7 @@ check('the list still nests and shows liveness', el('ovList').innerHTML.indexOf(
       svg2.indexOf('stroke-dasharray="3 3"') >= 0 && svg2.indexOf('grows within') >= 0);
     // the drawing and the detail panel must not drift apart - they read the same veinExtent
     const m1 = svg2.match(/one deposit[\s\S]{0,4}([0-9]+) tall[\s\S]{0,4}([0-9]+) wide/);
-    const m2 = el2('ovDetail').innerHTML.match(/about <b>([0-9]+) blocks tall<\/b> and <b>([0-9]+) wide<\/b>/);
+    const m2 = el2('ovDetail').innerHTML.match(/it is ([0-9]+) tall and ([0-9]+) wide/);
     check('the drawing and the note agree on the size', !!m1 && !!m2 && m1[1] === m2[1] && m1[2] === m2[2],
       m1 && m2 ? m1[1] + 'x' + m1[2] + ' drawn vs ' + m2[1] + 'x' + m2[2] + ' written' : 'no match');
   }
@@ -245,16 +245,27 @@ check('the list still nests and shows liveness', el('ovList').innerHTML.indexOf(
     const i2 = el2('ovLane').innerHTML.slice(el2('ovLane').innerHTML.lastIndexOf('data-drag="', gt2) + 11, gt2);
     el2('ovSvg').handlers.pointerdown({ target: { dataset: { drag: i2 + '|move' } }, clientX: 0, clientY: 0, preventDefault() {} });
     const note = el2('ovDetail').innerHTML;
-    const one = note.match(/about <b>([0-9]+) blocks tall<\/b>/);
-    const band = note.match(/band about <b>([0-9]+) blocks thick<\/b>/);
+    const one = note.match(/it is ([0-9]+) tall/);
+    const band = note.match(/band about <b>([0-9]+) blocks<\/b> deep/);
     const relief = note.match(/rolls over ([0-9]+) blocks/);
     check('the note separates one deposit from what a column digs through',
       !!one && !!band && !!relief && +band[1] === +one[1] + +relief[1],
       one && band && relief ? one[1] + ' tall + ' + relief[1] + ' relief = ' + band[1] + ' band' : 'no match');
-    check('a flat 20-24 sheet under Desert relief reads as the 16 blocks it prospects as',
+    check('a flat 20-24 sheet under Desert relief can reach across the 16 blocks it prospects as',
       !!band && band[1] === '16', band && band[1]);
+      // The number people act on: a flat sheet spreads thin, so its median column holds far less than its
+    // own height. Blobs of the same size fill the window instead. This is the lever for "5 layers thick".
     check('it says the ore per column and that the engine will warn at this rate',
       note.indexOf('blocks of ore per column') >= 0 && note.indexOf('engine will warn at load') >= 0);
+    const drill = note.match(/drill through one passes about ([0-9]+) block/);
+    check('the note leads with what a drill passes through, and a sheet is thinner than it is tall',
+      !!drill && !!one && +drill[1] < +one[1], drill && one ? drill[1] + ' drilled vs ' + one[1] + ' tall' : 'no match');
+    v.DirectionWeights = [{ X: 1, Y: 1, Z: 1 }]; v.WeightVariance = { X: 1, Y: 1, Z: 1 };
+    v.BlocksCountRange = { min: 500, max: 500 };
+    lifted2.OreVisual.build();
+    el2('ovSvg').handlers.pointerdown({ target: { dataset: { drag: i2 + '|move' } }, clientX: 0, clientY: 0, preventDefault() {} });
+    const blobDrill = el2('ovDetail').innerHTML.match(/drill through one passes about ([0-9]+) block/);
+    check('the same window as blobs fills it instead of spreading', !!blobDrill && +blobDrill[1] >= 5, blobDrill && blobDrill[1]);
   }
   check('no strip is requested any more', el2('ovLane').innerHTML.indexOf('real columns') < 0);
 }
