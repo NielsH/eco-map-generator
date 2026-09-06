@@ -222,7 +222,11 @@ check('the list still nests and shows liveness', el('ovList').innerHTML.indexOf(
   const img = svg2.slice(svg2.indexOf('<image'), svg2.indexOf('/>', svg2.indexOf('<image')));
   const SCd = 1000 / 120;
   check('the strip image spans the same rows as the stack, at the stack scale', img.indexOf('height="' + (rows * SCd).toFixed(1) + '"') >= 0 && img.indexOf('preserveAspectRatio="none"') >= 0 && img.indexOf('pixelated') >= 0, img.slice(0, 90));
-  check('the strip is captioned with its slice and says veins are omitted', svg2.indexOf('48 real columns at z360, x360–407') >= 0 && svg2.indexOf('veins omitted') >= 0 && svg2.indexOf('data-stripnext') >= 0);
+  // The omission has to be stated where it is READ, not only in a footnote: the strip shows fills, so a
+  // grey line at the bottom saying veins are missing was taken for "there is no ore down here".
+  check('the strip is captioned with its slice, and says loudly that veins are missing',
+    svg2.indexOf('48 real columns at z360, x360–407') >= 0 && svg2.indexOf('data-stripnext') >= 0 &&
+    svg2.indexOf('no veins in this view') >= 0 && svg2.indexOf('world-wide pass') >= 0);
   check('the world-Y edge sits to the right of the strip', svg2.indexOf('world Y under the mean surface (Y67)') >= 0 && svg2.indexOf('surface Y61–72') >= 0);
   const before = posted.length;
   el2('ovSvg').handlers.pointerdown({ target: { dataset: { stripnext: '1' } }, clientY: 0, clientX: 0, preventDefault() {} });
