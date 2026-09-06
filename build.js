@@ -1310,6 +1310,99 @@ const OreVisual = (function () {
     'ends: the depth this layer stops at, drawn per column between Min and Max — this is the editable number'
     + (occ ? ' · is: the depths where it is the commonest rock' : ' · it is never the commonest rock at any depth')
     + (live == null ? '' : ' · it is the rock somewhere in ' + livePct(live) + ' of columns');
+  // The weights are a LIST - the engine picks one at random per deposit - so editing them as raw vectors is
+  // a poor fit for a panel. These three cover what the stock configs actually do: shallow desert iron is
+  // Y-dominant and grows as pipes, the deep sheets are X/Z-dominant. "mixed" is shown, not offered, when the
+  // config carries a list this cannot express - changing it away is one-way, so it says so.
+  const GROWTH = {
+    pipes:  { label: 'vertical pipes',  w: [{ X: 1, Y: 4, Z: 1 }], v: { X: 2, Y: 1, Z: 1 } },
+    blobs:  { label: 'even blobs',      w: [{ X: 1, Y: 1, Z: 1 }], v: { X: 1, Y: 1, Z: 1 } },
+    sheets: { label: 'flat sheets',     w: [{ X: 4, Y: 1, Z: 4 }], v: { X: 3, Y: 1, Z: 3 } },
+  };
+  function growthKindOf(node) {
+    const ws = node.DirectionWeights || [];
+    if (ws.length !== 1) return ws.length > 1 ? 'mixed' : 'blobs';
+    const w = ws[0], y = w.Y || 1, xz = Math.max(w.X || 1, w.Z || 1);
+    return y > xz ? 'pipes' : xz > y ? 'sheets' : 'blobs'; }
+  function growthSelect(node) {
+    const cur = growthKindOf(node);
+    const opts = Object.keys(GROWTH).map(k => '<option value="' + k + '"' + (k === cur ? ' selected' : '') + '>' + GROWTH[k].label + '</option>').join('')
+      + (cur === 'mixed' ? '<option value="mixed" selected>mixed (' + (node.DirectionWeights || []).length + ' shapes)</option>' : '');
+    return '<span class="kk"><label title="which way a deposit prefers to grow - the single biggest lever on what it looks like underground">growth</label>'
+      + '<select class="kv" data-f="growth">' + opts + '</select></span>'; }
+  function veinNoteHtml(node) {
+    const e = veinExtent(node), bc = node.BlocksCountRange || {};
+    const kind = growthKindOf(node);
+    return 'a deposit here grows about <b>' + e.tall + ' blocks tall</b> and <b>' + e.wide + ' wide</b>'
+      + ' — ' + e.n + ' blocks' + (e.capped ? ' (shape sampled at ' + GROW_CAP + ')' : '')
+      + (e.shapes > 1 ? ' averaged over its ' + e.shapes + ' growth shapes' : '')
+      + '. Vein size sets how much; growth sets which way it goes. The soft window is a 5x penalty, not a wall,'
+      + ' so a big deposit fills it and pushes past.'; }
+
+  // ---- how big a vein actually gets ------------------------------------------------------------------
+  // A vein is not a depth range with a density; it is a seed that GROWS. DepositSpawner keeps a priority
+  // queue of candidate blocks and always takes the cheapest, where a step costs 1/weight for its axis minus
+  // a random share of that axis's variance, and any vertical step leaving the soft window costs 5x. So the
+  // direction weights decide the SHAPE and the block count decides the size, and neither was visible: the
+  // panel drew a vein as an abundance over its depth range, which answers a different question. Stock
+  // Desert's shallow iron carries Y-dominant weights and reads as 13-block vertical pipes underground while
+  // the panel showed a thin ribbon. This is a port of that loop, run once per (size, weights, window).
+  function heapPush(h, e) { h.push(e); let i = h.length - 1;
+    while (i > 0) { const p = (i - 1) >> 1; if (h[p].pr <= h[i].pr) break; const t = h[p]; h[p] = h[i]; h[i] = t; i = p; } }
+  function heapPop(h) { const top = h[0], last = h.pop();
+    if (h.length) { h[0] = last; let i = 0;
+      for (;;) { const l = 2 * i + 1, r = l + 1; let m = i;
+        if (l < h.length && h[l].pr < h[m].pr) m = l;
+        if (r < h.length && h[r].pr < h[m].pr) m = r;
+        if (m === i) break; const t = h[m]; h[m] = h[i]; h[i] = t; i = m; } }
+    return top; }
+  const GROW_CAP = 1200;        // enough to settle the shape; a bigger deposit is the same shape, larger
+  const extentMemo = new Map();
+  /** Grow one deposit and report its bounding box. Deterministic: same settings, same answer. */
+  function growExtent(n, w, wv, winLo, winHi) {
+    n = Math.max(1, Math.min(GROW_CAP, n | 0));
+    const inv = { x: 1 / w.X, y: 1 / w.Y, z: 1 / w.Z };
+    const iv = { x: wv.X / ((wv.X + w.X) * w.X), y: wv.Y / ((wv.Y + w.Y) * w.Y), z: wv.Z / ((wv.Z + w.Z) * w.Z) };
+    let a = 0x51ed3c; const rnd = () => { a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    const seedY = Math.round((winLo + winHi) / 2), taken = new Set(), queued = new Set(), q = [];
+    const pri = (pr, i, v) => pr + i - rnd() * v;
+    let xlo = 0, xhi = 0, zlo = 0, zhi = 0, ylo = seedY, yhi = seedY;
+    // EnqueueUnique, as the engine has it: a point already taken or already queued is not queued again.
+    const offer = (x, y, z, pr) => { const k = x + ',' + y + ',' + z;
+      if (taken.has(k) || queued.has(k)) return; queued.add(k); heapPush(q, { x: x, y: y, z: z, pr: pr }); };
+    const spawn = (x, y, z, pr) => { const k = x + ',' + y + ',' + z;
+      if (taken.has(k)) return false; taken.add(k); queued.delete(k);
+      if (x < xlo) xlo = x; if (x > xhi) xhi = x; if (z < zlo) zlo = z; if (z > zhi) zhi = z;
+      if (y < ylo) ylo = y; if (y > yhi) yhi = y;
+      offer(x + 1, y, z, pri(pr, inv.x, iv.x));
+      offer(x - 1, y, z, pri(pr, inv.x, iv.x));
+      offer(x, y, z + 1, pri(pr, inv.z, iv.z));
+      offer(x, y, z - 1, pri(pr, inv.z, iv.z));
+      offer(x, y - 1, z, y - 1 >= winLo ? pri(pr, inv.y, iv.y) : pr + inv.y * 5);
+      offer(x, y + 1, z, y + 1 <= winHi ? pri(pr, inv.y, iv.y) : pr + inv.y * 5);
+      return true; };
+    spawn(0, seedY, 0, 0);
+    while (taken.size < n && q.length) { const e = heapPop(q); spawn(e.x, e.y, e.z, e.pr); }
+    return { tall: yhi - ylo + 1, wide: Math.max(xhi - xlo, zhi - zlo) + 1, blocks: taken.size };
+  }
+  /** The typical extent of the selected vein, at its mean size and each of its weight vectors. */
+  function veinExtent(node) {
+    const bc = node.BlocksCountRange || { min: 1, max: 1 };
+    const dd = node.DepositDepthRange || node.DepthRange || { min: 0, max: 10 };
+    const ws = (node.DirectionWeights && node.DirectionWeights.length) ? node.DirectionWeights : [{ X: 1, Y: 1, Z: 1 }];
+    const wv = node.WeightVariance || { X: 0, Y: 0, Z: 0 };
+    const n = Math.round((((bc.min | 0) + (bc.max | 0)) / 2));
+    const key = n + '|' + (dd.min | 0) + '|' + (dd.max | 0) + '|' + JSON.stringify(ws) + '|' + JSON.stringify(wv);
+    const hit = extentMemo.get(key); if (hit) return hit;
+    let tall = 0, wide = 0;
+    ws.forEach(w => { const r = growExtent(n, { X: w.X || 1, Y: w.Y || 1, Z: w.Z || 1 },
+      { X: wv.X || 0, Y: wv.Y || 0, Z: wv.Z || 0 }, dd.min | 0, dd.max | 0);
+      tall += r.tall; wide += r.wide; });
+    const out = { tall: Math.round(tall / ws.length), wide: Math.round(wide / ws.length),
+                  capped: n > GROW_CAP, n: n, shapes: ws.length };
+    extentMemo.set(key, out); return out; }
+
   /** A vein's spawn chance as the engine itself phrases it: one seed per N blocks. */
   const seedRate = v => !v ? '' : '1 per ' + (1 / v >= 1000 ? Math.round(1 / v / 100) * 100 : Math.round(1 / v));
   const METdesc = o => o.kind === 'dep'
@@ -1437,8 +1530,10 @@ const OreVisual = (function () {
     let h = '<div class="oreNode" style="border-top:none">' + dot + '<span class="tag">' + (dep ? 'vein' : 'fill') + '</span>' + blockSelect(btOf(o.node.BlockType), opts);
     h += dep ? (knob1('SpawnPercentChance', o.node.SpawnPercentChance, dep) + knobR('DepthRange', o.node.DepthRange, dep) + knobR('DepositDepthRange', o.node.DepositDepthRange, dep) + knobR('BlocksCountRange', o.node.BlocksCountRange, dep))
              : (knob1('PercentChance', o.node.PercentChance, dep) + knobR('DepthRange', o.node.DepthRange, dep) + knob1('NoiseFrequency', o.node.NoiseFrequency, dep));
-    if (!dep) h += noiseSelects(o.node);
-    h += moveBtns(true, true) + del + '</div>'; detailEl.innerHTML = h; wireDetail(o); wireMoveObj(o);
+    if (dep) h += growthSelect(o.node); else h += noiseSelects(o.node);
+    h += moveBtns(true, true) + del + '</div>';
+    if (dep) h += '<div id="ovVeinNote" style="font-size:11.5px;color:var(--muted);margin-top:5px">' + veinNoteHtml(o.node) + '</div>';
+    detailEl.innerHTML = h; wireDetail(o); wireMoveObj(o);
   }
   // StandardTerrainModule.Initialize sorts its noise samples and takes a band of the requested width:
   // Bands takes it around the MEDIAN (contiguous sheets following an isosurface), Blobs takes the low
@@ -1454,11 +1549,15 @@ const OreVisual = (function () {
   function wireDetail(o) { const node = o.node;
     detailEl.querySelectorAll('input,select').forEach(inp => inp.addEventListener('input', () => {
       const f = inp.dataset.f; if (!f) return;
+      if (f === 'growth') { const g = GROWTH[inp.value]; if (!g) return;
+        node.DirectionWeights = g.w.map(v => ({ X: v.X, Y: v.Y, Z: v.Z })); node.WeightVariance = { X: g.v.X, Y: g.v.Y, Z: g.v.Z };
+        render(); renderDetail(); renderList(); scheduleOreRender(); return; }
       if (f === 'NoiseDistributionType' || f === 'NoiseType') { node[f] = inp.value; render(); scheduleOreRender(); return; }
       if (f === 'block') { node.BlockType = node.BlockType || {}; node.BlockType.Type = inp.value; o.mat = oreMaterial(inp.value) || o.mat; render(); renderList(); scheduleOreRender(); return; }
       const val = parseFloat(inp.value); if (!isFinite(val)) return;
       if (f.endsWith('_min') || f.endsWith('_max')) { const key = f.slice(0, -4), mm = f.slice(-3); node[key] = node[key] || {}; node[key][mm] = val; } else node[f] = val;
       detailEl.querySelectorAll('input[data-f="' + f + '"]').forEach(sib => { if (sib === inp) return; if (sib.type === 'range' && val > +sib.max) sib.max = val; sib.value = val; });
+      const vn = document.getElementById('ovVeinNote'); if (vn) vn.innerHTML = veinNoteHtml(node);
       render(); scheduleOreRender();
     }));
     const d = detailEl.querySelector('.ndel'); if (d) d.onclick = () => { const idx = o.sub.indexOf(o.node); if (idx >= 0) o.sub.splice(idx, 1); sel = null; render(); renderDetail(); renderList(); scheduleOreRender(); };
