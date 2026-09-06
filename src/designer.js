@@ -89,9 +89,16 @@
   // dashes on screen, even though the generated world has it intact. Keep a preview at export resolution
   // and show that until the user paints — at which point the coarse grid IS what gets exported, and the
   // display switches back to it.
-  let importPreview = null;      // Uint8Array(IMPORT_RES^2) class per cell, generation orientation
+  let importPreview = null;      // Uint8Array(importPreviewRes^2) class per cell, generation orientation
+  let importPreviewRes = 0;      // its side length, set wherever importPreview is: IMPORT_RES for an image, the bundle's own for a .zip
   let importLegendIdxHi = null;  // legend index per hi-res cell, so remapping a colour rebuilds instantly
   let paintedSinceImport = false; // once the user hand-edits an import, export falls back to the G² paint grid
+  // The maps a re-imported design .zip carries, kept so re-exporting it does not COARSEN it. design.json
+  // holds the G² paint grid and nothing else, so a bundle whose maps came from an image import (up to
+  // IMPORT_RES_MAX) used to lose that detail the moment it was taken back in and generated again: the
+  // export fell through to sampleG and quantised every biome edge to 128 cells. The .bin files ARE the
+  // detail, so they are handed straight back out until a paint stroke makes the paint grid the truth again.
+  let importedBundle = null;     // { res, biome, height, water, anyWater } from a design .zip, or null
   const IMPORT_RES = 448;        // biome/height resolution exported for a pure image import (finer = steeper, less-terraced terrain)
   // ...and the resolution it is EXPORTED at, which is not the same thing once the world is not 120 chunks.
   // The export grid was this constant at every world size, so a bigger world simply stretched each cell
@@ -422,12 +429,12 @@
     if (importedImg && importMode === 'colors') {
       if (!importLegendIdxHi) importLegendIdxHi = assignLegendIdx(decodeAt(importedImg, IMPORT_RES), IMPORT_RES);
       const N = IMPORT_RES;
-      importPreview = new Uint8Array(N * N);
+      importPreview = new Uint8Array(N * N); importPreviewRes = N;
       for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
         const li = importLegendIdxHi[y * N + x];
         importPreview[(N - 1 - y) * N + x] = li < 0 ? SC.Ocean : legend[li].cls;   // flipped like `target`
       }
-    } else importPreview = null;
+    } else { importPreview = null; importPreviewRes = 0; }
     renderPaint();
     const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target);
     return count;
@@ -471,7 +478,7 @@
     });
     $('lgAuto').onclick = () => { pushUndo(); legend.forEach(e => e.cls = e.def); renderLegend(); flashMix(applyLegend()); };
   }
-  function hideLegend() { legend = []; imgLegendIdx = null; lastImgData = null; importedImg = null; paintedSinceImport = false; importPreview = null; importLegendIdxHi = null; const w = $('dsnLegendWrap'); if (w) { w.style.display = 'none'; w.innerHTML = ''; } }
+  function hideLegend() { legend = []; imgLegendIdx = null; lastImgData = null; importedImg = null; paintedSinceImport = false; importPreview = null; importPreviewRes = 0; importedBundle = null; importLegendIdxHi = null; const w = $('dsnLegendWrap'); if (w) { w.style.display = 'none'; w.innerHTML = ''; } }
   // toroidal separable box blur (in place); spreads biome-edge height steps into gentle slopes
   // ---- water surface solver -------------------------------------------------------------------
   //
@@ -1924,7 +1931,7 @@
       pushUndo();
       const d = decodeToGrid(img);
       lastImgData = d; importedImg = img; paintedSinceImport = false;
-      importLegendIdxHi = null; importPreview = null;
+      importLegendIdxHi = null; importPreview = null; importPreviewRes = 0; importedBundle = null;
       mapImage(d);
       paintMode = 'biome'; markPaintMode();
       const count = applyLegend();
@@ -1965,7 +1972,7 @@
   function renderPaint() {
     if (paintMode === 'elevation') drawHeight($('dsnCanvas'));
     else if (paintMode === 'water') drawWaterView($('dsnCanvas'));
-    else if (importPreview && !paintedSinceImport) drawGrid($('dsnCanvas'), importPreview, IMPORT_RES);
+    else if (importPreview && !paintedSinceImport) drawGrid($('dsnCanvas'), importPreview, importPreviewRes);
     else drawGrid($('dsnCanvas'), target);
     drawWrapPreview();
   }
@@ -2188,6 +2195,10 @@
     if (!classgridBound) {
       worker.addEventListener('message', ev => {
         if (!(ev.data && ev.data.type === 'classgrid' && ev.data.grid)) return;
+        // The seeded grid REPLACES the design, so any import it replaces has to go with it. Left standing,
+        // buildExportMaps would still hand back the image's (or the re-imported bundle's) own maps and
+        // export a world that has nothing to do with what was just seeded.
+        hideLegend();
         target = new Uint8Array(ev.data.grid);
         // The map's lakes and rivers come across too. Without them the design exports no water at all and
         // the generated world has none - no rivers, no lakes, and no river sand along either. Only WHERE
@@ -2710,11 +2721,30 @@
   }
 
   /**
+   * The maps to re-emit unchanged, or null when the paint grid is the source of truth. A re-imported
+   * bundle wins only while nothing has superseded it: a newly imported image owns the export (its own
+   * hi-res branch below), and one paint stroke retires both, exactly as it already did for an image.
+   */
+  function passthroughMaps() {
+    if (!importedBundle || importedImg || paintedSinceImport) return null;
+    const b = importedBundle;
+    return { res: b.res, hiRes: b.res, biome: b.biome, height: b.height, water: b.water,
+             anyWater: b.anyWater, paintHeight: b.height };
+  }
+
+  /**
    * The three maps the service is handed: biome class, height byte and water surface, on the export
    * lattice. Split out of buildBundleFiles because the 3D preview has to show THESE - it used to build
    * its own from the paint grid, which meant it previewed a different world from the one you get.
    */
   function buildExportMaps() {
+    // A design taken back in from a .zip already HAS its maps, at whatever resolution they were exported
+    // at. Rebuilding them from design.json would run them through sampleG, which is a nearest-cell lookup
+    // from the G² paint grid - the file would still be N² bytes, but every biome edge in it would be
+    // quantised to 128 cells. So hand back exactly what came in, until a paint stroke (or a new image, or
+    // a re-seed) makes the paint grid the source of truth again.
+    const kept = passthroughMaps();
+    if (kept) return kept;
     // Raw maps (what the mod actually reads — unambiguous, no PNG decode). Generation orientation, row-major.
     const worldBlocks = ((typeof readForm === 'function' ? (readForm().worldWidth | 0) : 0) || 72) * 10;
     const N = exportRes(worldBlocks);
@@ -2904,6 +2934,24 @@
   }
   function findWorldWidth(j) { let r = null; (function w(o) { if (!o || typeof o !== 'object' || r) return; if (Object.prototype.hasOwnProperty.call(o, 'WorldWidth')) { r = o.WorldWidth; return; } for (const k in o) w(o[k]); })(j); return r; }
 
+  /**
+   * The maps a design .zip carries, or null if it does not carry a usable set. One byte per cell in every
+   * one of them, square and all the same size, so the side length is just the square root of the length -
+   * the same shape the mod's LoadBiomesBin/LoadHeightBin derive it from. A bundle missing water.bin is a
+   * design with no fresh water, which is legal; a bundle whose maps disagree in size is not, and falls
+   * back to rebuilding from the paint grid rather than exporting a mismatched set.
+   */
+  function bundleMaps(zf) {
+    const b = zf['biome.bin'], h = zf['height.bin'], w = zf['water.bin'];
+    if (!b || !h || !b.length) return null;
+    const res = Math.round(Math.sqrt(b.length));
+    if (res * res !== b.length || h.length !== b.length) return null;
+    if (w && w.length !== b.length) return null;
+    let anyWater = false;
+    if (w) for (let i = 0; i < w.length; i++) if (w[i]) { anyWater = true; break; }
+    return { res: res, biome: b, height: h, water: w || new Uint8Array(b.length), anyWater: anyWater };
+  }
+
   // Re-import a previously exported design .zip: restore the editable layers (design.json) + the world
   // config (WorldGenerator.eco), so you can keep tuning and re-export/regenerate.
   function importDesignZip(file) {
@@ -2923,6 +2971,9 @@
         rough = new Float32Array(b64ToU8(d.rough).buffer);
         water = b64ToU8(d.water);
         hideLegend();                                   // clears any stale image-import state
+        // ...and only THEN take the bundle's own maps, so hideLegend cannot wipe them again.
+        importedBundle = bundleMaps(zf);
+        if (importedBundle) { importPreview = importedBundle.biome; importPreviewRes = importedBundle.res; }
         importMode = d.importMode || 'colors';
         if (d.paintRoughness != null) { paintRoughness = d.paintRoughness; const rg = $('dsnRough'); if (rg) rg.value = Math.round(paintRoughness / 0.16 * 100); const rv = $('dsnRoughV'); if (rv) rv.textContent = roughLabel(paintRoughness); }
         if (d.elevValue != null) { elevValue = d.elevValue; const el = $('dsnElev'); if (el) el.value = Math.round(elevValue * 100); const ev = $('dsnElevV'); if (ev) ev.textContent = elevLabel(elevValue); }
@@ -2937,7 +2988,9 @@
         }
         paintMode = 'biome'; markPaintMode(); renderPaint();
         const ref = $('dsnTargetRef'); if (ref) drawGrid(ref, target);
-        setStatus('Imported design — tune it, then re-generate or preview.');
+        setStatus(importedBundle
+          ? 'Imported design — its ' + importedBundle.res + '² maps are kept as they were; painting drops back to the ' + G + '² grid.'
+          : 'Imported design — tune it, then re-generate or preview.');
       } catch (e) { setStatus('Could not read that design .zip: ' + e.message); }
     };
     reader.readAsArrayBuffer(file);
