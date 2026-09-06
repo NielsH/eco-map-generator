@@ -219,12 +219,16 @@ check('the list still nests and shows liveness', el('ovList').innerHTML.indexOf(
     el2('ovSvg').handlers.pointerdown({ target: { dataset: { drag: idx + '|move' } }, clientX: 0, clientY: 0, preventDefault() {} });
     doc2.handlers.pointerup && doc2.handlers.pointerup();
     const svg2 = el2('ovLane').innerHTML;
-    check('selecting a vein draws one deposit with its size on it',
-      /one deposit[\s\S]{0,4}[0-9]+ tall[\s\S]{0,4}[0-9]+ wide/.test(svg2), svg2.slice(Math.max(0, svg2.indexOf('one deposit') - 8), svg2.indexOf('one deposit') + 52));
+    check('selecting a vein draws one deposit with what a drill gets from it',
+      /one deposit, a drill passes ~[0-9]+ of its [0-9]+ tall/.test(svg2), svg2.slice(Math.max(0, svg2.indexOf('one deposit') - 8), svg2.indexOf('one deposit') + 52));
+    // The lane once captioned the reach band "a column digs ~16 blocks of it" while the note said a drill
+    // passes 5. Both were on screen at once and only one was right; the picture is the one people read.
+    check('the lane never claims a column digs the whole reach band',
+      svg2.indexOf('a column digs') < 0, 'stale caption still present');
     check('the soft grow window is drawn around it, dashed',
       svg2.indexOf('stroke-dasharray="3 3"') >= 0 && svg2.indexOf('grows within') >= 0);
     // the drawing and the detail panel must not drift apart - they read the same veinExtent
-    const m1 = svg2.match(/one deposit[\s\S]{0,4}([0-9]+) tall[\s\S]{0,4}([0-9]+) wide/);
+    const m1 = svg2.match(/a drill passes ~[0-9]+ of its ([0-9]+) tall[\s\S]{0,4}([0-9]+) wide/);
     const m2 = el2('ovDetail').innerHTML.match(/it is ([0-9]+) tall and ([0-9]+) wide/);
     check('the drawing and the note agree on the size', !!m1 && !!m2 && m1[1] === m2[1] && m1[2] === m2[2],
       m1 && m2 ? m1[1] + 'x' + m1[2] + ' drawn vs ' + m2[1] + 'x' + m2[2] + ' written' : 'no match');
