@@ -223,8 +223,9 @@ check('the list still nests and shows liveness', el('ovList').innerHTML.indexOf(
       /one deposit, a drill passes ~[0-9]+ of its [0-9]+ tall/.test(svg2), svg2.slice(Math.max(0, svg2.indexOf('one deposit') - 8), svg2.indexOf('one deposit') + 52));
     // The lane once captioned the reach band "a column digs ~16 blocks of it" while the note said a drill
     // passes 5. Both were on screen at once and only one was right; the picture is the one people read.
-    check('the lane never claims a column digs the whole reach band',
-      svg2.indexOf('a column digs') < 0, 'stale caption still present');
+    check('the lane shows no reach band at all - it was read as thickness every time',
+      svg2.indexOf('a column digs') < 0 && svg2.indexOf('ore can sit anywhere') < 0,
+      'a reach caption is back on the drawing');
     check('the soft grow window is drawn around it, dashed',
       svg2.indexOf('stroke-dasharray="3 3"') >= 0 && svg2.indexOf('grows within') >= 0);
     // the drawing and the detail panel must not drift apart - they read the same veinExtent
@@ -250,12 +251,12 @@ check('the list still nests and shows liveness', el('ovList').innerHTML.indexOf(
     el2('ovSvg').handlers.pointerdown({ target: { dataset: { drag: i2 + '|move' } }, clientX: 0, clientY: 0, preventDefault() {} });
     const note = el2('ovDetail').innerHTML;
     const one = note.match(/it is ([0-9]+) tall/);
-    const band = note.match(/band about <b>([0-9]+) blocks<\/b> deep/);
+    const band = note.match(/within about ([0-9]+) blocks of depth/);
     const relief = note.match(/rolls over ([0-9]+) blocks/);
     check('the note separates one deposit from what a column digs through',
       !!one && !!band && !!relief && +band[1] === +one[1] + +relief[1],
       one && band && relief ? one[1] + ' tall + ' + relief[1] + ' relief = ' + band[1] + ' band' : 'no match');
-    check('a flat 20-24 sheet under Desert relief can reach across the 16 blocks it prospects as',
+    check('the depth it turns up at still spans the 16 blocks the relief gives it',
       !!band && band[1] === '16', band && band[1]);
       // The number people act on: a flat sheet spreads thin, so its median column holds far less than its
     // own height. Blobs of the same size fill the window instead. This is the lever for "5 layers thick".

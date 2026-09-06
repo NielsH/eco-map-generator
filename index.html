@@ -8794,13 +8794,6 @@ const OreVisual = (function () {
       cx = Math.max(CX + halfW, Math.min(EX - halfW, cx));
       const wLo = yAtDepth(dd.min | 0), wHi = yAtDepth((dd.max | 0) + 1);
       s += '<g pointer-events="none">';
-      // the crisp box is ONE deposit's window; the faint one behind it is where the ore actually reaches,
-      // because every deposit hangs under its own seed's surface and the ground rolls over a range
-      const relief = Math.max(0, (surfHi | 0) - (surfLo | 0));
-      if (relief > 0) { const bLo = yAtDepth((dd.min | 0)), bHi = yAtDepth((dd.max | 0) + 1 + relief);
-        s += rect(cx - halfW - 3, bLo, halfW * 2 + 6, bHi - bLo, 'fill="' + selBarInfo.col + '" fill-opacity="0.10"');
-        s += '<text x="' + f1(cx) + '" y="' + f1(bHi - 3) + '" text-anchor="middle" font-size="9" fill="' + cM + '" paint-order="stroke" stroke="' + cssv('--surf') + '" stroke-width="3">'
-          + 'ore can sit anywhere in ~' + (e.tall + relief) + ' blocks</text>'; }
       s += rect(cx - halfW, wLo, halfW * 2, wHi - wLo, 'fill="none" stroke="' + cT + '" stroke-opacity="0.45" stroke-width="1" stroke-dasharray="3 3"');
       e.proj.forEach(pr => { const bx = cx + pr[0] * px - px / 2, by = yAtDepth(pr[1]);
         s += rect(bx, by, px + 0.4, px + 0.4, 'fill="' + selBarInfo.col + '"'); });
@@ -8971,13 +8964,16 @@ const OreVisual = (function () {
       + ' — it is ' + e.tall + ' tall and ' + e.wide + ' wide overall'
       + ', ' + e.n + ' blocks' + (e.capped ? ' (shape sampled at ' + GROW_CAP + ')' : '')
       + (e.shapes > 1 ? ', averaged over its ' + e.shapes + ' growth shapes' : '') + '.';
-    if (relief > 0) h += ' Each one hangs under the surface of <b>its own</b> seed, and the ground here rolls over '
-      + relief + ' blocks, so across the biome the ore can sit anywhere in a band about <b>' + band + ' blocks</b> deep — that is its reach, not its thickness.';
     if (perCol > 0) { const pc = perCol < 1 ? perCol.toFixed(2) : Math.round(perCol);
       h += ' At this seed rate that is roughly <b>' + pc + ' block' + (String(pc) === '1' ? '' : 's') + ' of ore per column</b>'
         + (perCol >= band ? ', more than the band can hold — expect it solid.' : '.'); }
     if (tooDense) h += ' <b style="color:#c0705a">The engine will warn at load</b>: one seed per ' + perSeed
       + ' blocks with deposits up to ' + (bc.max | 0) + ' is too dense; it wants about 1 per ' + Math.round((bc.max | 0) * 1.2) + '.';
+    // Last, and small: it answers "why is the ore at a different depth over there", never "how thick",
+    // and it does not move with any setting - read first it has been taken for the thickness every time.
+    if (relief > 0) h += '<span style="opacity:.7"> Depth varies: each deposit hangs under the surface of its own seed'
+      + ' and the ground rolls over ' + relief + ' blocks, so the same layer turns up anywhere within about '
+      + band + ' blocks of depth across the biome.</span>';
     return h; }
 
   // ---- how big a vein actually gets ------------------------------------------------------------------
@@ -9213,7 +9209,7 @@ const OreVisual = (function () {
       if (f.endsWith('_min') || f.endsWith('_max')) { const key = f.slice(0, -4), mm = f.slice(-3); node[key] = node[key] || {}; node[key][mm] = val; } else node[f] = val;
       detailEl.querySelectorAll('input[data-f="' + f + '"]').forEach(sib => { if (sib === inp) return; if (sib.type === 'range' && val > +sib.max) sib.max = val; sib.value = val; });
       const vn = document.getElementById('ovVeinNote'); if (vn) vn.innerHTML = veinNoteHtml(node);
-      render(); scheduleOreRender();
+      render(); renderList(); scheduleOreRender();
     }));
     const d = detailEl.querySelector('.ndel'); if (d) d.onclick = () => { const idx = o.sub.indexOf(o.node); if (idx >= 0) o.sub.splice(idx, 1); sel = null; render(); renderDetail(); renderList(); scheduleOreRender(); };
   }
