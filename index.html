@@ -8804,8 +8804,9 @@ const OreVisual = (function () {
       s += handles + labels;
     }
     // ---- one bar per vein/fill: the depth setting itself, clipped to where it can act ----
-    let k = 0;
+    let k = 0, selBarX = null, selBarInfo = null;
     cells.forEach(c => { if (c.t !== 'ore') return; const info = oi[c.oiIdx], x = GX + (k++) * (BW + BGAP), seld = sel && sel.kind !== 'strat' && sel.node === c.node;
+      if (seld) { selBarX = x; selBarInfo = info; }
       const pi = stratIdxOf.get(info.o.parent), pp = (hasBase && pi != null) ? baseProb[pi] : null;
       const hTop = info.sa != null ? info.sa : info.mn, hBot = info.sb != null ? info.sb : info.mx;
       s += '<g><title>' + oreLabel(info.o) + ' · ' + metaOf(info.o) + '</title>';
@@ -8836,6 +8837,28 @@ const OreVisual = (function () {
       s += '<text x="' + (SX + SW) + '" y="' + (TOPY - 6) + '" text-anchor="end" font-size="9" fill="' + cAcc + '" data-stripnext="1" style="cursor:pointer">next slice ›</text>';
       s += rect(SX, sTop, SW, yAtDepth(rows) - sTop, 'fill="none" stroke="' + cB + '"');
       s += '<text x="' + SX + '" y="' + f1(yAtDepth(rows) + 11) + '" font-size="9" fill="' + cM + '" pointer-events="none">veins omitted — they are a world-wide pass</text>';
+    }
+    // ---- the selected vein, drawn as one deposit at true scale ------------------------------------
+    // The bar beside it is the SETTING - the depths a seed may land in. It says nothing about how big the
+    // thing that grows from it is, and that is the question you ask when a prospect comes back 17 blocks
+    // deep. So draw one, same scale as the depth axis, against the soft window it is allowed to grow in.
+    if (selBarInfo && selBarInfo.shape) {
+      const node = selBarInfo.o.node, e = veinExtent(node);
+      const dd = node.DepositDepthRange || node.DepthRange || { min: 0, max: 10 };
+      const px = SCd;                                  // one block, both ways, so the shape is not distorted
+      let cx = (selBarX != null ? selBarX + BW / 2 : GX + GW / 2);
+      const halfW = (e.projWide * px) / 2 + 4;
+      cx = Math.max(CX + halfW, Math.min(EX - halfW, cx));
+      const wLo = yAtDepth(dd.min | 0), wHi = yAtDepth((dd.max | 0) + 1);
+      s += '<g pointer-events="none">';
+      s += rect(cx - halfW, wLo, halfW * 2, wHi - wLo, 'fill="none" stroke="' + cT + '" stroke-opacity="0.45" stroke-width="1" stroke-dasharray="3 3"');
+      e.proj.forEach(pr => { const bx = cx + pr[0] * px - px / 2, by = yAtDepth(pr[1]);
+        s += rect(bx, by, px + 0.4, px + 0.4, 'fill="' + selBarInfo.col + '"'); });
+      const capY = Math.min(yAtDepth(maxD), wHi + 13);
+      s += '<text x="' + f1(cx) + '" y="' + f1(capY) + '" text-anchor="middle" font-size="9.5" fill="' + cM + '" paint-order="stroke" stroke="' + cssv('--surf') + '" stroke-width="3">'
+        + 'one deposit · ' + e.tall + ' tall × ' + e.wide + ' wide' + (e.shapes > 1 ? ' (1 of ' + e.shapes + ' shapes)' : '') + '</text>';
+      s += '<text x="' + f1(cx) + '" y="' + f1(wLo - 5) + '" text-anchor="middle" font-size="9" fill="' + cM + '" paint-order="stroke" stroke="' + cssv('--surf') + '" stroke-width="3">grows within</text>';
+      s += '</g>';
     }
     // ---- world-Y edge: depth read back through this biome's mean surface, plus the water line and the floor ----
     const floorD = surfY;   // Y0 sits this deep under the mean surface; higher ground digs deeper
@@ -9010,11 +9033,12 @@ const OreVisual = (function () {
     const seedY = Math.round((winLo + winHi) / 2), taken = new Set(), queued = new Set(), q = [];
     const pri = (pr, i, v) => pr + i - rnd() * v;
     let xlo = 0, xhi = 0, zlo = 0, zhi = 0, ylo = seedY, yhi = seedY;
+    const proj = new Set();   // (x, depth) - the deposit as a cut face would show it
     // EnqueueUnique, as the engine has it: a point already taken or already queued is not queued again.
     const offer = (x, y, z, pr) => { const k = x + ',' + y + ',' + z;
       if (taken.has(k) || queued.has(k)) return; queued.add(k); heapPush(q, { x: x, y: y, z: z, pr: pr }); };
     const spawn = (x, y, z, pr) => { const k = x + ',' + y + ',' + z;
-      if (taken.has(k)) return false; taken.add(k); queued.delete(k);
+      if (taken.has(k)) return false; taken.add(k); queued.delete(k); proj.add(x + ',' + y);
       if (x < xlo) xlo = x; if (x > xhi) xhi = x; if (z < zlo) zlo = z; if (z > zhi) zhi = z;
       if (y < ylo) ylo = y; if (y > yhi) yhi = y;
       offer(x + 1, y, z, pri(pr, inv.x, iv.x));
@@ -9026,7 +9050,8 @@ const OreVisual = (function () {
       return true; };
     spawn(0, seedY, 0, 0);
     while (taken.size < n && q.length) { const e = heapPop(q); spawn(e.x, e.y, e.z, e.pr); }
-    return { tall: yhi - ylo + 1, wide: Math.max(xhi - xlo, zhi - zlo) + 1, blocks: taken.size };
+    return { tall: yhi - ylo + 1, wide: Math.max(xhi - xlo, zhi - zlo) + 1, blocks: taken.size,
+             proj: [...proj].map(k => k.split(',').map(Number)) };
   }
   /** The typical extent of the selected vein, at its mean size and each of its weight vectors. */
   function veinExtent(node) {
@@ -9037,12 +9062,16 @@ const OreVisual = (function () {
     const n = Math.round((((bc.min | 0) + (bc.max | 0)) / 2));
     const key = n + '|' + (dd.min | 0) + '|' + (dd.max | 0) + '|' + JSON.stringify(ws) + '|' + JSON.stringify(wv);
     const hit = extentMemo.get(key); if (hit) return hit;
-    let tall = 0, wide = 0;
+    let tall = 0, wide = 0; const runs = [];
     ws.forEach(w => { const r = growExtent(n, { X: w.X || 1, Y: w.Y || 1, Z: w.Z || 1 },
       { X: wv.X || 0, Y: wv.Y || 0, Z: wv.Z || 0 }, dd.min | 0, dd.max | 0);
-      tall += r.tall; wide += r.wide; });
-    const out = { tall: Math.round(tall / ws.length), wide: Math.round(wide / ws.length),
-                  capped: n > GROW_CAP, n: n, shapes: ws.length };
+      tall += r.tall; wide += r.wide; runs.push(r); });
+    const mt = tall / ws.length, mw = wide / ws.length;
+    // one shape has to stand for the list, so take the one nearest the average rather than the first
+    let best = runs[0], bd = Infinity;
+    runs.forEach(r => { const d = Math.abs(r.tall - mt) + Math.abs(r.wide - mw); if (d < bd) { bd = d; best = r; } });
+    const out = { tall: Math.round(mt), wide: Math.round(mw), capped: n > GROW_CAP, n: n, shapes: ws.length,
+                  proj: best.proj, projTall: best.tall, projWide: best.wide };
     extentMemo.set(key, out); return out; }
 
   /** A vein's spawn chance as the engine itself phrases it: one seed per N blocks. */
