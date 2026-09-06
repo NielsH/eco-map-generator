@@ -13,6 +13,8 @@
 //     headers, so a round trip through it alone would not notice a wrong central directory at all
 //   * base64 is exercised across the 0x8000-byte chunk boundary its encoder splits on
 //   * a design round-trips through the same encode/decode pair `buildBundleFiles` and `importDesignZip` use
+//   * a re-imported design keeps the MAPS it came in with — design.json carries only the 128² paint grid,
+//     so rebuilding the export from it silently coarsens a bundle whose maps were finer
 //
 // `gridToPng` is NOT covered: it is `canvas.toBlob`, which is the browser's PNG encoder rather than the
 // designer's code, and the PNGs it writes are for human inspection — the mod reads the .bin files.
@@ -28,6 +30,12 @@
 //   base64 round-trips across its chunk          each chunk is encoded one byte short
 //   a design survives the trip and back          the decoder masks the high bit off every byte
 //   the world size is found wherever it sits     findWorldWidth looks for 'worldWidth'
+//   a bundle's maps keep their resolution        bundleMaps reports the paint grid's 128 instead
+//   ...and their bytes                           bundleMaps hands back copies, not the buffers it read
+//   ...and whether it had any water              the anyWater scan stops before it starts
+//   maps that disagree are not used at all       bundleMaps stops comparing height.bin's length
+//   painting takes the export off the bundle     passthroughMaps drops its paintedSinceImport guard
+//   the export asks before it rebuilds           the passthrough call is deleted from buildExportMaps
 //
 //   node test/verify-export.js
 'use strict';
@@ -225,6 +233,87 @@ const zip = run(PARTS, { FILES }, `
   check('the world size is found wherever the config keeps it',
     r.nested === 144 && r.top === 96 && r.absent === null && r.shallowFirst === 12 && r.empty === null && r.nul === null,
     'nested ' + r.nested + ', top-level ' + r.top + ', absent ' + r.absent + ', null config ' + r.nul);
+}
+
+// ------------------------------------------------- the hi-res maps a re-imported bundle carries
+//
+// design.json holds the G² paint grid and nothing finer. For a while that meant re-importing a bundle and
+// generating from it COARSENED the design: the export fell through to `sampleG`, a nearest-cell lookup from
+// the 128² grid, so every biome edge was quantised to 128 cells while the file it wrote was still N² bytes
+// and looked the right size. The .bin files in the bundle ARE that detail; `bundleMaps` reads them back and
+// `passthroughMaps` decides when they still stand.
+
+// The maps are one byte per cell, square, and all the same length — the shape the mod's LoadBiomesBin
+// derives the resolution from. Anything else came from a build this one does not know, and handing the mod
+// a biome map and a height map of different sizes is worse than rebuilding from the paint grid.
+{
+  const RES = 16, n = RES * RES;
+  const wet = { 'biome.bin': new Uint8Array(n), 'height.bin': new Uint8Array(n), 'water.bin': new Uint8Array(n) };
+  wet['water.bin'][7] = 200;
+  const dry = { 'biome.bin': new Uint8Array(n), 'height.bin': new Uint8Array(n) };
+  const r = run(['fn:bundleMaps'], { wet, dry, n }, `
+    const a = bundleMaps(wet), b = bundleMaps(dry);
+    return {
+      res: a.res, wet: a.anyWater,
+      sameBiome: a.biome === wet['biome.bin'], sameHeight: a.height === wet['height.bin'], sameWater: a.water === wet['water.bin'],
+      dryRes: b.res, dryWater: b.anyWater, dryWaterLen: b.water.length,
+      shortHeight: bundleMaps({ 'biome.bin': new Uint8Array(n), 'height.bin': new Uint8Array(n - 1) }),
+      oblong:      bundleMaps({ 'biome.bin': new Uint8Array(n + 1), 'height.bin': new Uint8Array(n + 1) }),
+      shortWater:  bundleMaps({ 'biome.bin': new Uint8Array(n), 'height.bin': new Uint8Array(n), 'water.bin': new Uint8Array(4) }),
+      noBiome:     bundleMaps({ 'height.bin': new Uint8Array(n) }),
+      empty:       bundleMaps({}),
+    };`);
+  check('a bundle\'s maps are read back at their own resolution',
+    r.res === RES && r.sameBiome && r.sameHeight && r.sameWater && r.wet === true &&
+    r.dryRes === RES && r.dryWater === false && r.dryWaterLen === n,
+    'read ' + r.res + '² (expected ' + RES + '²), water seen ' + r.wet + ', a waterless bundle gave ' +
+    r.dryWaterLen + ' zero bytes and anyWater ' + r.dryWater);
+  check('a bundle whose maps disagree is not used at all',
+    r.shortHeight === null && r.oblong === null && r.shortWater === null && r.noBiome === null && r.empty === null,
+    'short height ' + r.shortHeight + ', non-square ' + r.oblong + ', short water ' + r.shortWater +
+    ', no biome map ' + r.noBiome + ', empty zip ' + r.empty);
+}
+
+// Whose maps win. A re-imported bundle holds the export until something supersedes it — a newly imported
+// image owns the export through its own branch, and one paint stroke retires both and hands it back to the
+// paint grid, exactly as it already did for an image. Getting this backwards is the silent kind of wrong:
+// the world still generates, from maps that are not the design on screen.
+{
+  const RES = 8, n = RES * RES;
+  const bundle = { res: RES, biome: new Uint8Array(n), height: new Uint8Array(n), water: new Uint8Array(n), anyWater: true };
+  const r = run(['fn:passthroughMaps'], { bundle }, `
+    let importedBundle = null, importedImg = null, paintedSinceImport = false;
+    const none = passthroughMaps();
+    importedBundle = bundle;
+    const kept = passthroughMaps();
+    paintedSinceImport = true;  const painted = passthroughMaps();
+    paintedSinceImport = false; importedImg = {}; const reimaged = passthroughMaps();
+    return { none: none, kept: kept, painted: painted, reimaged: reimaged,
+             sameBiome: kept && kept.biome === bundle.biome, sameHeight: kept && kept.height === bundle.height,
+             sameWater: kept && kept.water === bundle.water,
+             res: kept && kept.res, hiRes: kept && kept.hiRes, anyWater: kept && kept.anyWater };`);
+  check('a re-imported bundle is re-exported byte for byte',
+    r.kept !== null && r.sameBiome && r.sameHeight && r.sameWater &&
+    r.res === RES && r.hiRes === RES && r.anyWater === true,
+    r.kept === null ? 'the maps were dropped entirely' :
+      'gave back the same three buffers at ' + r.res + '² (hiRes ' + r.hiRes + ')');
+  check('painting, or a new image, takes the export back off it',
+    r.none === null && r.painted === null && r.reimaged === null,
+    'with no bundle ' + r.none + ', after a paint stroke ' + r.painted + ', with an image imported ' + r.reimaged);
+}
+
+// ...and the export has to actually ASK. The two functions above can be perfect and the bug still be back
+// if buildExportMaps rebuilds first and consults them afterwards, so pin the order in the source: the
+// passthrough is read before the first sampleG that would coarsen the design.
+{
+  const fs = require('fs'), path = require('path');
+  const src = fs.readFileSync(process.env.DESIGNER || path.join(__dirname, '..', 'src', 'designer.js'), 'utf8');
+  const i = src.indexOf('function buildExportMaps(');
+  const body = i < 0 ? '' : src.slice(i, i + 6000);
+  const pass = body.indexOf('passthroughMaps('), coarsen = body.indexOf('sampleG(');
+  check('the export consults the kept maps before it rebuilds one',
+    i >= 0 && pass >= 0 && coarsen >= 0 && pass < coarsen,
+    i < 0 ? 'buildExportMaps not found' : 'passthroughMaps at +' + pass + ', sampleG at +' + coarsen);
 }
 
 done();

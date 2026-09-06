@@ -219,7 +219,16 @@ removed (the CLI isn't public). The same bundle-building code below still runs �
   also includes **`design.json`** — the raw editable layers (target/elev/elevPainted/rough/water, base64
   typed arrays, + importMode/roughness/etc.) so the design can be re-imported for tuning ("📂 Import
   design" → `importDesignZip`: `unzipStore` the STORE zip, restore the layers + `loadConfigText` the
-  bundled config). The `.bin` files are computed output; `design.json` is the source of truth for editing.
+  bundled config). `design.json` is the source of truth for **editing** — but only for the G² paint grid,
+  which is all it holds, so it is NOT the source of truth for the maps. A bundle whose `.bin` files came
+  from an image import carries up to `IMPORT_RES_MAX`² of detail that `design.json` cannot express, and
+  rebuilding the export from the paint grid runs it through `sampleG` and quantises every biome edge to
+  128 cells — an N²-byte file that looks the right size and is not. So `importDesignZip` keeps the
+  bundle's own maps (`bundleMaps` → `importedBundle`) and `buildExportMaps` hands them straight back
+  (`passthroughMaps`, checked before anything is rebuilt), until a paint stroke, a new image, a re-seed or
+  Clear retires them — the same `paintedSinceImport` rule an image import already followed. The canvas
+  previews them at their own resolution too (`importPreviewRes`), so what is on screen is what will
+  generate. Guarded by `test/verify-export.js`.
 - **Image-import terrain** (`imageToMaps`, hi-res `IMPORT_RES`² (448²) export from a pure image import):
   elevation MIRRORS `VoronoiWorldGenerator` — a **ridged-noise field SHAPED by distance to the sea**
   (`maxE = (distToSea/D)^2` so coasts stay low/beaches, interiors rise into sharp, tall mountains near the
